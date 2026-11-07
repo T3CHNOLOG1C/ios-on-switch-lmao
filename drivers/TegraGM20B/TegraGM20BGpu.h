@@ -218,12 +218,27 @@ struct tgm_coh *tgm_coherency_add(uint64_t pa, uint32_t surface_id, const uint64
 void tgm_coherency_gpu_writes(uint32_t surface_id);
 void tgm_coherency_cleaned(struct tgm_coh *c);
 void tgm_coherency_put(struct tgm_coh *c);
-/* always: mark it even if the GPU only samples it (TegraGM20BPushImportsWritten). */
-void tgm_coherency_wrote(struct tgm_coh *c, int always);
-void tgm_coherency_take_stats(uint64_t out[4]);
+/* always: mark it even if the GPU only samples it (TegraGM20BPushImportsWritten). uid, seqno: the submission (channel
+ * tgm_chan_uid, its fence seqno) that may have written it, which a CPU lock waits for. */
+void tgm_coherency_wrote(struct tgm_coh *c, int always, uint32_t uid, uint32_t seqno);
+/* Also the locks that waited for GPU writes and the AvoidSync locks refused (count each). */
+void tgm_coherency_take_stats(uint64_t out[6]);
 /* XNU's iokit_user_client_trap, after an IOSurfaceRootUserClient trap ran: index 2 lock, 3 unlock (IOConnectTrap3 p1 the
  * surface ID, p2 the lock options). */
 void tegra_gm20b_iosurface_trap(uint32_t index, uint32_t surface_id, uint32_t options);
+/* Before an IOSurfaceLock trap (surface ID, lock options): returns after the GPU submissions that may write the surface
+ * have completed; nonzero, at once, when kIOSurfaceLockAvoidSync is set and one has not (the lock fails with
+ * kIOReturnCannotLock). */
+int tegra_gm20b_iosurface_lock_will(uint32_t surface_id, uint32_t options);
+/* A channel's submissions as the coherency registry names them (gpu.c): uid, a 32-bit channel id never reused while the
+ * channel lives; done, whether submission seqno completed (a channel that is gone or was killed counts as done); wait,
+ * until it is done, on the fence interrupt (a wait that runs long recovers what the GPU is stuck on, as
+ * tegra_gm20b_sync_for_cpu's does); all, every live channel's submissions so far. */
+uint32_t tgm_chan_uid(struct tgm_chan *chan);
+int tgm_writer_done(uint32_t uid, uint32_t seqno);
+void tgm_writer_wait(uint32_t uid, uint32_t seqno);
+int tgm_writers_all_done(void);
+void tgm_writers_wait_all(void);
 /* A GPU client made (add 1) or removed (add -1) a bind of the whole surface holding `c` with TEGRA_SCANOUT_TILED_KIND:
  * the surface is tiled while any such bind lives, whatever other binds of it say (tegra_gm20b_surface_tiled). */
 void tgm_coherency_tiled_bind(struct tgm_coh *c, int add);

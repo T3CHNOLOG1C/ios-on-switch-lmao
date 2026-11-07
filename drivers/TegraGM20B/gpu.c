@@ -2298,12 +2298,14 @@ static void stats_tick(void)
 	/* The IOSurface lock/unlock traps' cache maintenance this window (TegraGM20BCoherency.cpp): GPU-written imports
 	 * invalidated at a CPU lock, CPU-written imports cleaned at an unlock. */
 	{
-		uint64_t coh[4];
+		uint64_t coh[6];
 		tgm_coherency_take_stats(coh);
-		if (coh[0] || coh[2])
-			nvxnu_log("tegra-gm20b: coherency %llu lock invalidations (%llu KiB), "
-				  "%llu unlock cleans (%llu KiB)\n",
-				  coh[0], coh[1] >> 10, coh[2], coh[3] >> 10);
+		if (coh[0] || coh[2] || coh[4] || coh[5])
+			nvxnu_log(
+				"tegra-gm20b: coherency %llu lock invalidations (%llu KiB), "
+				"%llu unlock cleans (%llu KiB), %llu locks waited for GPU writes, "
+				"%llu AvoidSync locks refused\n",
+				coh[0], coh[1] >> 10, coh[2], coh[3] >> 10, coh[4], coh[5]);
 	}
 #undef PT_NS
 }
@@ -3308,6 +3310,96 @@ int tegra_gm20b_sync_for_cpu(const void *va, uint64_t bytes, uint64_t timeout_ns
 	mutex_unlock(&sync_lock);
 	nvxnu_dcache_clean_inval(va, bytes);
 	return ret;
+}
+
+/* The IOSurface lock's wait for the submissions that may write a surface (TegraGM20BCoherency.cpp) */
+#define TGM_WRITER_HANG_NS (1000 * NSEC_PER_MSEC)
+
+uint32_t tgm_chan_uid(struct tgm_chan *chan)
+{
+	return (u32)chan->id;
+}
+
+/* live_lock held */
+static struct tgm_chan *live_by_uid(u32 uid)
+{
+	struct tgm_chan *chan;
+
+	list_for_each_entry(chan, &live_chans, live)
+	{
+		if ((u32)chan->id == uid)
+			return chan;
+	}
+	return NULL;
+}
+
+int tgm_writer_done(uint32_t uid, uint32_t seqno)
+{
+	struct tgm_chan *chan;
+	int done;
+
+	mutex_lock(&live_lock);
+	chan = live_by_uid(uid);
+	done = !chan || chan->error || (s32)(tgm_chan_completed(chan) - seqno) >= 0;
+	mutex_unlock(&live_lock);
+	return done;
+}
+
+/* No bound of its own: a writer that stops progressing is recovered (killed, its fence released) as
+ * tegra_gm20b_sync_for_cpu's is, which ends the wait; a lost interrupt is nvxnu_wake_due's panic. */
+void tgm_writer_wait(uint32_t uid, uint32_t seqno)
+{
+	struct tgm_chan *chan;
+	enum tgm_hang verdict;
+
+	for (;;) {
+		const u64 end = nvxnu_nanotime() + TGM_WRITER_HANG_NS;
+
+		for (;;) {
+			const u32 seq = nvxnu_wake_seq();
+
+			if (tgm_writer_done(uid, seqno))
+				return;
+			if (nvxnu_nanotime() >= end)
+				break;
+			if (!nvxnu_idle(seq, end) && tgm_writer_done(uid, seqno))
+				nvxnu_wake_due(seq, "fence", seqno);
+		}
+		if (gpu.stage < 3)
+			continue;
+		verdict = TGM_HANG_PROGRESSING;
+		mutex_lock(&live_lock);
+		chan = live_by_uid(uid);
+		if (chan)
+			verdict = hang_recover(chan, "IOSurface lock", seqno, TGM_WRITER_HANG_NS);
+		if (verdict == TGM_HANG_STUCK)
+			tgm_chan_hung(chan, "IOSurface lock", seqno, TGM_WRITER_HANG_NS);
+		mutex_unlock(&live_lock);
+	}
+}
+
+int tgm_writers_all_done(void)
+{
+	struct tgm_chan *chan;
+	int done = 1;
+
+	mutex_lock(&live_lock);
+	list_for_each_entry(chan, &live_chans, live)
+	{
+		if (!chan->error &&
+		    (s32)(tgm_chan_completed(chan) - READ_ONCE(chan->submitted)) < 0) {
+			done = 0;
+			break;
+		}
+	}
+	mutex_unlock(&live_lock);
+	return done;
+}
+
+void tgm_writers_wait_all(void)
+{
+	while (tegra_gm20b_sync_for_cpu(NULL, 0, TGM_WRITER_HANG_NS) == -ETIMEDOUT) {
+	}
 }
 
 void tgm_cpu_clean_pages(const uint64_t *pas, uint32_t npages)

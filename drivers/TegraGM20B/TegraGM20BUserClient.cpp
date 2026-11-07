@@ -1680,13 +1680,6 @@ IOReturn AGXDeviceUserClient::exec(const TegraGM20BAbiExec *in, uint32_t count,
 			importsWritten_ = true;
 		pushes[i].no_prefetch = (p.flags & TegraGM20BPushNoPrefetch) ? 1u : 0u;
 	}
-	if (count) {
-		// Mark every writable host import this submission may have written GPU-dirty (cheap flag stores, no cache
-		// maintenance): the reader's next IOSurface read lock invalidates it then (tgm_coherency_*, the XNU hook). A read
-		// lock between now and the fence completing would clear the mark early, but a CPU readback waits for completion.
-		for (Bo *bo = cohBos_; bo; bo = bo->cohNext)
-			tgm_coherency_wrote(bo->coh, importsWritten_);
-	}
 	tgm_prof prof;
 	bool profiled = false;
 	if (count && pushScanOn() && pushSubmits_++ % kScanEvery == 0) {
@@ -1699,6 +1692,13 @@ IOReturn AGXDeviceUserClient::exec(const TegraGM20BAbiExec *in, uint32_t count,
 	reap(false);
 	if (ret)
 		return ret;
+	if (count) {
+		// Every writable host import this submission may have written, marked GPU-dirty with the submission as its
+		// writer (atomic stores, no cache maintenance): a CPU IOSurfaceLock of it waits for this seqno, then
+		// invalidates (tgm_coherency_*, the XNU hooks).
+		for (Bo *bo = cohBos_; bo; bo = bo->cohNext)
+			tgm_coherency_wrote(bo->coh, importsWritten_, tgm_chan_uid(chan), seqno);
+	}
 	out->seqno = seqno;
 	out->reserved = 0;
 	return kIOReturnSuccess;

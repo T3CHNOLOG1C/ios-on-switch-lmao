@@ -2,6 +2,8 @@
 // TegraGM20BCoherency.cpp on the host: which IOSurface lock/unlock traps clean or invalidate an import, with how many
 // pages, across imports of the same surface and their release.
 #include <atomic>
+#include <map>
+#include <set>
 #include <thread>
 #include <vector>
 #include <gtest/gtest.h>
@@ -22,9 +24,46 @@ extern "C" void tgm_cpu_clean_pages(const uint64_t *pas, uint32_t npages)
 	cleanCalls().emplace_back(pas, pas + npages);
 }
 
+// The GPU's fences as the registry asks after them: each channel's last completed seqno; a channel not listed is gone.
+// A wait is the fence interrupt arriving: the channel completes what the wait was for.
+struct FakeGpu {
+	std::map<uint32_t, uint32_t> completed;
+	std::set<uint32_t> killed;
+	std::vector<std::pair<uint32_t, uint32_t>> waits;
+	bool allDone = true;
+	int waitAll = 0;
+};
+
+static FakeGpu gGpu;
+
+extern "C" int tgm_writer_done(uint32_t uid, uint32_t seqno)
+{
+	const auto it = gGpu.completed.find(uid);
+	return gGpu.killed.count(uid) || it == gGpu.completed.end() ||
+	       int32_t(it->second - seqno) >= 0;
+}
+
+extern "C" void tgm_writer_wait(uint32_t uid, uint32_t seqno)
+{
+	gGpu.waits.emplace_back(uid, seqno);
+	gGpu.completed[uid] = seqno;
+}
+
+extern "C" int tgm_writers_all_done(void)
+{
+	return gGpu.allDone;
+}
+
+extern "C" void tgm_writers_wait_all(void)
+{
+	gGpu.waitAll++;
+	gGpu.allDone = true;
+}
+
 namespace
 {
-constexpr uint32_t kLock = 2, kUnlock = 3, kReadOnly = 1;
+constexpr uint32_t kLock = 2, kUnlock = 3, kReadOnly = 1, kAvoidSync = 2;
+constexpr uint32_t kDone = 1;  // a channel whose submissions all completed (FakeGpu: not listed)
 
 std::vector<uint64_t> pages(uint64_t first, uint32_t n)
 {
@@ -55,6 +94,7 @@ protected:
 	{
 		ASSERT_EQ(tgm_coherency_init(), 0);
 		cleanCalls().clear();
+		gGpu = FakeGpu{};
 	}
 };
 
@@ -65,7 +105,7 @@ TEST_F(Coherency, LockInvalidatesOnlyAfterGpuWrites)
 	ASSERT_NE(c, nullptr);
 	tegra_gm20b_iosurface_trap(kLock, 7, 0);
 	EXPECT_TRUE(cleanCalls().empty());
-	tgm_coherency_wrote(c, 0);
+	tgm_coherency_wrote(c, 0, kDone, 1);
 	tegra_gm20b_iosurface_trap(kLock, 7, kReadOnly);
 	ASSERT_EQ(cleanCalls().size(), 1u);
 	EXPECT_EQ(cleanCalls()[0], p);
@@ -78,11 +118,11 @@ TEST_F(Coherency, ASurfaceTheGpuOnlySamplesIsNeverInvalidatedOnLock)
 {
 	const auto p = pages(0x8a000000, 4);
 	tgm_coh *c = sampled(p[0], 61, p.data(), 4);
-	tgm_coherency_wrote(c, 0);
+	tgm_coherency_wrote(c, 0, kDone, 1);
 	tegra_gm20b_iosurface_trap(kLock, 61, 0);
 	EXPECT_TRUE(cleanCalls().empty());
 	tgm_coherency_gpu_writes(61);
-	tgm_coherency_wrote(c, 0);
+	tgm_coherency_wrote(c, 0, kDone, 1);
 	tegra_gm20b_iosurface_trap(kLock, 61, 0);
 	ASSERT_EQ(cleanCalls().size(), 1u);
 	EXPECT_EQ(cleanCalls()[0], p);
@@ -95,7 +135,7 @@ TEST_F(Coherency, AnUndeclaredWriteStillInvalidatesOnLockOnceTheClientFallsBack)
 {
 	const auto p = pages(0x8d000000, 3);
 	tgm_coh *c = sampled(p[0], 63, p.data(), 3);
-	tgm_coherency_wrote(c, 1);
+	tgm_coherency_wrote(c, 1, kDone, 1);
 	tegra_gm20b_iosurface_trap(kLock, 63, kReadOnly);
 	ASSERT_EQ(cleanCalls().size(), 1u);
 	EXPECT_EQ(cleanCalls()[0], p);
@@ -108,7 +148,7 @@ TEST_F(Coherency, ARenderedToImportMakesTheSurfaceGpuWrittenForEveryImporter)
 	tgm_coh *reader = sampled(p[0], 62, p.data(), 2);
 	tgm_coh *renderer = add(p[0], 62, p.data(), 2, 1);
 	ASSERT_EQ(reader, renderer);
-	tgm_coherency_wrote(reader, 0);
+	tgm_coherency_wrote(reader, 0, kDone, 1);
 	tegra_gm20b_iosurface_trap(kLock, 62, kReadOnly);
 	EXPECT_EQ(cleanCalls().size(), 1u);
 	tgm_coherency_put(renderer);
@@ -122,7 +162,7 @@ TEST_F(Coherency, TrapsReachEveryEntryOfASurface)
 	for (uint64_t i = 0; i < 6; i++) {
 		lists.push_back(pages(0x8c000000 + (i << 24), 2));
 		entries.push_back(add(lists.back()[0], 71, lists.back().data(), 2, 1));
-		tgm_coherency_wrote(entries.back(), 0);
+		tgm_coherency_wrote(entries.back(), 0, kDone, 1);
 	}
 	tegra_gm20b_iosurface_trap(kUnlock, 71, 0);
 	EXPECT_EQ(cleanCalls().size(), 6u);
@@ -149,8 +189,8 @@ TEST_F(Coherency, OtherSurfacesAndUntaggedImportsAreLeftAlone)
 	const auto p = pages(0x82000000, 2), q = pages(0x83000000, 2);
 	tgm_coh *tagged = add(p[0], 11, p.data(), 2, 1);
 	tgm_coh *untagged = add(q[0], 0, q.data(), 2, 1);
-	tgm_coherency_wrote(tagged, 0);
-	tgm_coherency_wrote(untagged, 0);
+	tgm_coherency_wrote(tagged, 0, kDone, 1);
+	tgm_coherency_wrote(untagged, 0, kDone, 1);
 	tegra_gm20b_iosurface_trap(kUnlock, 12, 0);
 	tegra_gm20b_iosurface_trap(kLock, 12, 0);
 	tegra_gm20b_iosurface_trap(kLock, 0, 0);
@@ -233,10 +273,90 @@ TEST_F(Coherency, TrapsRaceReleaseWithoutUseAfterFree)
 	for (int i = 0; i < 2000; i++) {
 		const auto p = pages(0x86000000 + (uint64_t(i % 8) << 24), 8);
 		tgm_coh *c = add(p[0], 41, p.data(), 8, 1);
-		tgm_coherency_wrote(c, 0);
+		tgm_coherency_wrote(c, 0, kDone, 1);
 		tgm_coherency_put(c);
 	}
 	stop.store(true);
 	trapper.join();
 }
 }  // namespace
+
+// Apple's IOSurfaceLock synchronises with the GPU: a lock of a surface whose writer is still running sleeps until it
+// completed, then the trap invalidates what it wrote.
+TEST_F(Coherency, ALockBeforeTheWriterCompletesWaitsForIt)
+{
+	const auto p = pages(0x9a000000, 2);
+	tgm_coh *c = add(p[0], 71, p.data(), 2, 1);
+	gGpu.completed[5] = 9;
+	tgm_coherency_wrote(c, 0, 5, 10);
+	EXPECT_EQ(tegra_gm20b_iosurface_lock_will(71, kReadOnly), 0);
+	ASSERT_EQ(gGpu.waits.size(), 1u);
+	EXPECT_EQ(gGpu.waits[0], std::make_pair(5u, 10u));
+	tegra_gm20b_iosurface_trap(kLock, 71, kReadOnly);
+	ASSERT_EQ(cleanCalls().size(), 1u);
+	EXPECT_EQ(tegra_gm20b_iosurface_lock_will(71, 0), 0);
+	EXPECT_EQ(gGpu.waits.size(), 1u);
+	tgm_coherency_put(c);
+}
+
+TEST_F(Coherency, ALockAfterTheWriterCompletedDoesNotWait)
+{
+	const auto p = pages(0x9b000000, 2);
+	tgm_coh *c = add(p[0], 72, p.data(), 2, 1);
+	gGpu.completed[5] = 9;
+	tgm_coherency_wrote(c, 0, 5, 9);
+	EXPECT_EQ(tegra_gm20b_iosurface_lock_will(72, 0), 0);
+	EXPECT_TRUE(gGpu.waits.empty());
+	tegra_gm20b_iosurface_trap(kLock, 72, 0);
+	EXPECT_EQ(cleanCalls().size(), 1u);
+	tgm_coherency_put(c);
+}
+
+// kIOSurfaceLockAvoidSync: a lock that would have to wait fails (kIOReturnCannotLock) without waiting.
+TEST_F(Coherency, AnAvoidSyncLockWithWritesPendingCannotLock)
+{
+	const auto p = pages(0x9c000000, 2);
+	tgm_coh *c = add(p[0], 73, p.data(), 2, 1);
+	gGpu.completed[6] = 1;
+	tgm_coherency_wrote(c, 0, 6, 2);
+	EXPECT_NE(tegra_gm20b_iosurface_lock_will(73, kAvoidSync | kReadOnly), 0);
+	EXPECT_TRUE(gGpu.waits.empty());
+	gGpu.completed[6] = 2;
+	EXPECT_EQ(tegra_gm20b_iosurface_lock_will(73, kAvoidSync | kReadOnly), 0);
+	tgm_coherency_put(c);
+}
+
+// A killed channel's fence is released: its writes count as complete.
+TEST_F(Coherency, AKilledWritersChannelCountsAsComplete)
+{
+	const auto p = pages(0x9d000000, 2);
+	tgm_coh *c = add(p[0], 74, p.data(), 2, 1);
+	gGpu.completed[8] = 0;
+	tgm_coherency_wrote(c, 0, 8, 4);
+	gGpu.killed.insert(8);
+	EXPECT_EQ(tegra_gm20b_iosurface_lock_will(74, 0), 0);
+	EXPECT_TRUE(gGpu.waits.empty());
+	tgm_coherency_put(c);
+}
+
+// A later submission of the same channel takes its writer's slot; more channels than slots make a lock wait for all.
+TEST_F(Coherency, WritersPerChannelAndTooManyChannels)
+{
+	const auto p = pages(0x9e000000, 2);
+	tgm_coh *c = add(p[0], 75, p.data(), 2, 1);
+	gGpu.completed[2] = 0;
+	tgm_coherency_wrote(c, 0, 2, 1);
+	tgm_coherency_wrote(c, 0, 2, 3);
+	EXPECT_EQ(tegra_gm20b_iosurface_lock_will(75, 0), 0);
+	ASSERT_EQ(gGpu.waits.size(), 1u);
+	EXPECT_EQ(gGpu.waits[0].second, 3u);
+	for (uint32_t uid = 10; uid < 16; uid++) {
+		gGpu.completed[uid] = 0;
+		tgm_coherency_wrote(c, 0, uid, 1);
+	}
+	gGpu.allDone = false;
+	EXPECT_NE(tegra_gm20b_iosurface_lock_will(75, kAvoidSync), 0);
+	EXPECT_EQ(tegra_gm20b_iosurface_lock_will(75, 0), 0);
+	EXPECT_EQ(gGpu.waitAll, 1);
+	tgm_coherency_put(c);
+}

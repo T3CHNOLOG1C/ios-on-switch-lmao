@@ -414,6 +414,14 @@ TEST(GM20BL2Source, InvalidateOnTheGpu)
 		     "pushes[i].no_prefetch || ((l2_on() || tlb) && !i));");
 }
 
+// A CPU IOSurfaceLock waits for the submissions that may write the surface: Exec names each one once it has its seqno.
+TEST(GM20BCoherencySource, ExecNamesTheWriterOnceTheSubmissionHasItsSeqno)
+{
+	const std::string exec = flat(definition(client(), "IOReturn AGXDeviceUserClient::exec("));
+	expectBefore(exec, "ioreturn(tgm_chan_exec(chan, pushes, count, &seqno,",
+		     "tgm_coherency_wrote(bo->coh, importsWritten_, tgm_chan_uid(chan), seqno);");
+}
+
 // A SurfaceWrites a client could not deliver never leaves a GPU write unmarked: the client stops saying its imports are
 // only sampled and flags every submission TegraGM20BPushImportsWritten, which makes the connection mark every writable
 // import at every Exec.
@@ -421,7 +429,7 @@ TEST(GM20BCoherencySource, AFailedSurfaceWritesFallsBackToMarkingEveryImport)
 {
 	const std::string exec = flat(definition(client(), "IOReturn AGXDeviceUserClient::exec("));
 	expectBefore(exec, "importsWritten_ = true;",
-		     "tgm_coherency_wrote(bo->coh, importsWritten_);");
+		     "tgm_coherency_wrote(bo->coh, importsWritten_, tgm_chan_uid(chan), seqno);");
 	const std::string raw = SourceText("../../TegraGM20BMetal/raw/runtime/raw_kernel.cpp");
 	const std::string declare = flat(definition(raw, "bool Kernel::surfaceGpuWrites("));
 	EXPECT_THAT(declare, HasSubstr("importsWritten_.store(true"));
