@@ -258,6 +258,7 @@ def _capabilities(tree: list) -> None:
         ('disable-globe-map', b''),
         ('sandman-support', u32(1)),
         ('supports-avatars', b''),
+        ('wifi-chipset', b'4355\0'),
     ):
         put(product, key, value)
     maps = child(product, 'maps')

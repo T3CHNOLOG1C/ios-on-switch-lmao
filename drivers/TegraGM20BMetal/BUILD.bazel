@@ -60,6 +60,7 @@ ios_binary(
         "raw/runtime/raw_gpu.cpp",
         "raw/runtime/raw_kernel.cpp",
         "raw/runtime/raw_pack.cpp",
+        "raw/runtime/raw_zeta.cpp",
         "raw/test/fetchform.cpp",
     ],
     out = "build/switch-gpu/fetchform",

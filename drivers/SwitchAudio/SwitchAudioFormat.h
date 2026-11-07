@@ -89,6 +89,29 @@ SWITCH_AUDIO_FN uint32_t switch_audio_i2s_divider(uint32_t pllaout0_per_fs)
     return 2 * (pllaout0_per_fs / SWITCH_AUDIO_BCLK_FS) - 2;
 }
 
+/* One sample-rate family's clocks from the 38.4 MHz oscillator: PLLA = ref * n_eff / (8192 m p) with n_eff = 8192 n +
+ * 4096 + (int16_t)sdm (CTCaer switch-l4t-kernel-4.9 clk-tegra210b01.c pll_a_freq_table: 368.64 and 282.24 MHz), and
+ * PLLA_OUT0 = PLLA * 2 / out0_x2, which is out0_per_fs times fs. The bit clock (64 fs) and MCLK (extern1, 256 fs)
+ * divide PLLA_OUT0. 282.24 MHz is 6400 fs, and 1024 fs would need a ratio of 6.25, which a 7.1 divider can't make, so
+ * the 44.1 kHz family's PLLA_OUT0 is 1280 fs (/5). */
+typedef struct {
+    uint32_t rate, m, n, p, sdm, out0_x2, out0_per_fs;
+} switch_audio_clock;
+
+#define SWITCH_AUDIO_CLOCK_48000 {48000u, 2u, 38u, 2u, 0xfcccu, 15u, 1024u}
+#define SWITCH_AUDIO_CLOCK_44100 {44100u, 2u, 29u, 2u, 0xfcccu, 10u, 1280u}
+
+SWITCH_AUDIO_FN uint64_t switch_audio_clock_n_eff(switch_audio_clock c)
+{
+    return (uint64_t)(8192 * (int64_t)c.n + 4096 + (int16_t)(uint16_t)c.sdm);
+}
+
+/* CAR CLK_SOURCE_EXTERN1 divider (7.1) for MCLK = 256 fs from PLLA_OUT0. */
+SWITCH_AUDIO_FN uint32_t switch_audio_extern1_divider(uint32_t pllaout0_per_fs)
+{
+    return 2 * (pllaout0_per_fs / 256) - 2;
+}
+
 /* RT5639 (rt5640.h): I2S1_SDP master/slave 15 (1 = slave), BCLK polarity 7 (0 = normal), data length 3:2 (2 = 24
  * bits), format 1:0 (0 = I2S); ADDA_CLK1 BCLK/LRCK 15 (1 = 64), I2S1 pre-divider 14:12 (0 = /1). */
 #define SWITCH_AUDIO_RT5640_SDP_MASK  ((1u << 15) | (1u << 7) | (3u << 2) | 3u)
@@ -111,11 +134,22 @@ SWITCH_AUDIO_FN uint64_t switch_audio_ticks_per_frame_q32(uint64_t host_hz, uint
                                                   2 * ref_hz * n_eff);
 }
 
+SWITCH_AUDIO_FN uint64_t switch_audio_clock_ticks_per_frame_q32(uint64_t host_hz, uint64_t ref_hz, switch_audio_clock c)
+{
+    return switch_audio_ticks_per_frame_q32(host_hz, ref_hz, c.m, c.p, switch_audio_clock_n_eff(c), c.out0_x2,
+                                            c.out0_per_fs);
+}
+
 /* The same frame rate in mHz (for the log): 2 ref n_eff / (8192 m p out0_x2 pllaout0_per_fs), rounded down. */
 SWITCH_AUDIO_FN uint64_t switch_audio_rate_millihz(uint64_t ref_hz, uint64_t m, uint64_t p, uint64_t n_eff,
                                                    uint64_t out0_x2, uint64_t pllaout0_per_fs)
 {
     return 2 * ref_hz * n_eff * 1000 / (8192 * m * p * out0_x2 * pllaout0_per_fs);
+}
+
+SWITCH_AUDIO_FN uint64_t switch_audio_clock_millihz(uint64_t ref_hz, switch_audio_clock c)
+{
+    return switch_audio_rate_millihz(ref_hz, c.m, c.p, switch_audio_clock_n_eff(c), c.out0_x2, c.out0_per_fs);
 }
 
 #undef SWITCH_AUDIO_FN

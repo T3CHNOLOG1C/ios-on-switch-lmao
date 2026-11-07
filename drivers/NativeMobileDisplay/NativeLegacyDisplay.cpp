@@ -21,7 +21,6 @@
 #include <libkern/c++/OSData.h>
 #include <pexpert/pexpert.h>
 #include "../ArmGIC/SwitchInterrupts.h"
-#include "../TegraDisplayFlip/TegraBlockSwizzle.h"
 #include "../TegraDisplayFlip/TegraScanoutCopy.h"
 #include "../TegraDisplayFlip/TegraScanoutRing.h"
 #include "../TegraDisplayFlip/SwitchFrameTimeline.h"
@@ -117,6 +116,12 @@ extern "C" __attribute__((weak)) void tegra_gm20b_frame_take(struct SwitchFrameG
 {
     *out = {};
 }
+
+extern "C" __attribute__((weak)) void switch_sched_render_vsync(uint64_t, uint64_t)
+{}
+
+extern "C" __attribute__((weak)) void switch_sched_render_swapped(void)
+{}
 
 // XNU osfmk/kern/switch_stall.c, debug kernels: base and current priority, mode and effective QoS of a thread.
 extern "C" __attribute__((weak)) void switch_thread_sched(thread_t, int *base, int *sched, int *mode, int *qos)
@@ -786,7 +791,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     IOMemoryMap *scanMappings[kScanBuffers] = {};  // their write-combined views
     uint64_t scanAddresses[kScanBuffers] = {};     // their physical addresses
     TegraScanoutRing ring;                         // which surface is scanned, asked for, replaced, drawn
-    // The direct-scanout gate's probe (DisplaySmmuProbe.h; DESIGN-direct-scanout.md D1-D2): once, kProbeAfterFrames frame ends
+    // The direct-scanout gate's probe (DisplaySmmuProbe.h): once, kProbeAfterFrames frame ends
     // after window A first scanned a client frame, with nothing in flight, DC A's CRC unit and the display's SMMU domain (ASID
     // TEGRA_SMMU_ASID_DISPLAY on the "dc" swgroup) prove window A reads the scanned buffer through an IOVA slot; then all of
     // it is undone and one line says what was found. Swaps wait meanwhile (about 12 frames). Nothing scans through the SMMU
@@ -808,7 +813,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     int probeSurface = kNoBuffer;
     uint32_t probePixel = 0, probeSwgroupWas = 0;
     char probeLine[160] = {};
-    // Direct scanout (r14-direct; DESIGN-direct-scanout.md Phase 1), on once this boot's SMMU probe passed: the probe's domain
+    // Direct scanout (r14-direct), on once this boot's SMMU probe passed: the probe's domain
     // stays attached, and a full-frame BGRA swap whose rows window A can fetch (stride a multiple of 64, one 4 MiB slot) is
     // scanned in place from an SMMU slot (ring entries kSlot0..): a fence-only GPU present waits for the compositor's rendering
     // of it, then window A flips to the slot in pitch layout. Core Animation recycles a framebuffer when a later swap completes
@@ -960,7 +965,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     uint32_t stSwaps = 0, stVsyncs = 0, stGpuTimeouts = 0, stNewMaps = 0, stSourceAttr = 0x100;
     uint32_t stUnderflows = 0;  // DC A frame ends with WIN_A_UF_INT latched (window A ran dry during a line)
     uint32_t stFast = 0,
-             stByte = 0;  // block-linear copies by TegraBlockSwizzle.h, and by the byte loop
+             stByte = 0;  // block-linear copies: of a tiled source as it is, and by the byte loop
     uint32_t stGpuCopies = 0, stGpuDeclined = 0;
     Span stGpuCopy = {};  // GPU frame copies done, offers declined, offer to completion
     // Once per window, just before a copy, the source is read alone (readPass): next to the copy's time it shows whether the copy
@@ -1748,6 +1753,7 @@ private:
             __atomic_store_n(&vsyncSentAt, stamp, __ATOMIC_RELAXED);
             __atomic_store_n(&vsyncSentKhz, switch_perf_cpu_khz(), __ATOMIC_RELAXED);
             KDBG(SWITCH_KDBG_CODE(SWITCH_KDBG_VSYNC), frameEnds);
+            switch_sched_render_vsync(stamp, interval);
         }
         native_legacy_vsync_notify(this, stamp, continuous, interval);
         native_legacy_vsync_observed(1, vsyncHz);
@@ -3733,11 +3739,10 @@ public:
         cache = mach_absolute_time() - cacheAt;
     }
 
-    // The block-linear pass into target: kSwizzleFast, kSwizzleByte or kSwizzleFailed. Both loops write the same bytes;
-    // native_legacy_block_layout (the caller's check) bounds them.
+    // The block-linear pass into target: kSwizzleTiled, kSwizzleByte or kSwizzleFailed; native_legacy_block_layout (the
+    // caller's check) bounds it.
     enum Swizzled {
         kSwizzleFailed,
-        kSwizzleFast,
         kSwizzleByte,
         kSwizzleTiled
     };
@@ -3761,13 +3766,13 @@ public:
 
     void noteSwizzled(Swizzled how)
     {
-        if (how == kSwizzleFast || how == kSwizzleTiled)
+        if (how == kSwizzleTiled)
             ++stFast;
         else if (how == kSwizzleByte)
             ++stByte;
     }
 
-    // The stats' read probe: every visible row of the source loaded once, 16 bytes at a time as the fast swizzle does. Ticks; 0 when
+    // The stats' read probe: every visible row of the source loaded once, 16 bytes at a time. Ticks; 0 when
     // the source is not 16-byte aligned.
     static uint64_t readPass(const void *source, uint64_t stride, uint32_t width, uint32_t height)
     {
@@ -4638,6 +4643,7 @@ public:
             tl.mode = (int8_t)mode;
             tl.qos = (int8_t)qos;
             KDBG(SWITCH_KDBG_CODE(SWITCH_KDBG_SWAP), frameEnds);
+            switch_sched_render_swapped();
             return;
         }
     }

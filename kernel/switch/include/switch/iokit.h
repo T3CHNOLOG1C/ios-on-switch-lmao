@@ -36,6 +36,18 @@ enum {
 
 void switch_iokit_iosurface_trap(IOUserClient *client, uint32_t index, void *p1, void *p2);
 kern_return_t switch_iokit_iosurface_lock_will(IOUserClient *client, void *p1, void *p2);
+void switch_iokit_iosurface_method_done(IOUserClient *client, uint32_t selector,
+                                        const struct IOExternalMethodArguments *args);
+
+/* is_io_connect_method, after the client's method ran: an IOSurface create hands the new surface to the GPU driver,
+ * which faults its pages in off the creating thread (tegra_gm20b_iosurface_method_done). */
+static inline void switch_iokit_method_done(IOUserClient *client, uint32_t selector,
+                                            const struct IOExternalMethodArguments *args, kern_return_t result)
+{
+    if (result == KERN_SUCCESS) {
+        switch_iokit_iosurface_method_done(client, selector, args);
+    }
+}
 
 /* iokit_user_client_trap, before the client's trap runs (result: the filter's so far): an IOSurface lock first waits
  * for the GPU writes it must see, or fails as Apple's does when kIOSurfaceLockAvoidSync forbids that wait; an unlock

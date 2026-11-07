@@ -50,8 +50,8 @@ extern "C" {
 bool switch_refusal_first(uint64_t key);
 
 // "<process>[<pid>] <reason_key>: <text>" as os_log_error, category domain. domain and reason_key must live as long as
-// the image (literals). In the kernel with preemption disabled, where creating a log handle could block, the line goes
-// to the default log with the domain in front.
+// the image (literals). The kernel logs to the default log with the domain in front: creating a log handle can block,
+// and a refusal may be logged with preemption off.
 void switch_refusal_log(const char *domain, const char *reason_key, const char *text);
 
 // switch_refusal_first() on switch_refusal_key(domain, reason_key), then the printf-style text, formatted only then.

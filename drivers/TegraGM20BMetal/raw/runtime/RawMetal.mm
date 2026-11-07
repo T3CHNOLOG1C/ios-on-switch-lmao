@@ -26,7 +26,9 @@
 #include <notify.h>
 #include <os/log.h>
 #include <pthread.h>
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <deque>
 #include <map>
@@ -146,6 +148,7 @@ enum RMPred : uint8_t {
     PredCallVertexSampler,
     PredCallCull,
     PredCallFillMode,
+    PredCallDepthBias,     // a = bias, b = slope (float bits)
     PredCallInvocation,    // an encoder selector recorded as an invocation (each selector logged once)
     PredCallCBInvocation,  // a command buffer selector recorded as an invocation
     PredCallBlitOptions,
@@ -169,6 +172,7 @@ enum RMPred : uint8_t {
     PredEncColorFormats,  // a = attachment, b = pass format, c in the line: state format
     PredEncUboOffset,     // a = stage << 8 | slot, b = va & 255
     PredEncNoTic,
+    PredEncDepthStencil,  // a = the state's depth format, b = the pass's | a state that tests without the attachment << 32
     PredCount
 };
 
@@ -202,6 +206,7 @@ static const char *const kPredNames[] = {"-",
                                          "call.vsampler",
                                          "call.cull",
                                          "call.fill",
+                                         "call.dbias",
                                          "call.inv",
                                          "call.cbinv",
                                          "call.blitopt",
@@ -223,7 +228,8 @@ static const char *const kPredNames[] = {"-",
                                          "enc.baseinst",
                                          "enc.colorfmt",
                                          "enc.ubo",
-                                         "enc.notic"};
+                                         "enc.notic",
+                                         "enc.ds"};
 static_assert(sizeof kPredNames / sizeof *kPredNames == PredCount, "a name for each predicate");
 static std::atomic<uint64_t> gPredCbs[PredCount], gPredOnly[PredCount], gPredLogged{0};
 static uint64_t gPredRates[PredCount];  // the rates line's last gPredCbs (its timer thread only)
@@ -296,6 +302,19 @@ static bool chainShape(MTLTextureDescriptor *d)
            (d.storageMode == MTLStorageModePrivate || d.storageMode == MTLStorageModeMemoryless ||
             d.storageMode == MTLStorageModeShared) &&
            f && f->rt && !f->srgb && raw::fx::twodFormat(uint32_t(d.pixelFormat));
+}
+
+// A memoryless Depth32Float_Stencil8 texture, 2D, one level, one sample, no rotation: the raw path's zeta (raw_zeta.h). A stored
+// one stays m2v's: its twin could not hold the raw path's texels (NVK's image is its own memory), and a command buffer m2v
+// replays would read another depth than the one the raw path left.
+static bool zetaDescriptor(MTLTextureDescriptor *d)
+{
+    static const SEL rotation = NSSelectorFromString(@"rotation");
+    const NSUInteger turned =
+        [d respondsToSelector:rotation] ? ((NSUInteger (*)(id, SEL))objc_msgSend)(d, rotation) : 0;
+    return d.textureType == MTLTextureType2D && d.mipmapLevelCount <= 1 && d.sampleCount <= 1 && d.arrayLength <= 1 &&
+           d.depth <= 1 && !turned && d.pixelFormat == MTLPixelFormat(raw::kZetaFormat) &&
+           d.storageMode == MTLStorageModeMemoryless;
 }
 
 // Diagnostics: which rawShape term fails (1 type, 2 levels, 3 samples, 4 array/depth, 5 rotation, 6 format; 0 none)
@@ -1632,7 +1651,7 @@ static void refuseTexture(RMTexture *t, RMPred p, uint64_t a, uint64_t b, NSStri
 
 @end
 
-@interface RMTwinObject : RMObject  // depth-stencil and compute states, and any m2v object the facade only carries
+@interface RMTwinObject : RMObject  // compute states, and any m2v object the facade only carries
 @end
 @implementation RMTwinObject
 
@@ -1641,6 +1660,14 @@ static void refuseTexture(RMTexture *t, RMPred p, uint64_t a, uint64_t b, NSStri
     return [super conformsToProtocol:protocol] || [_twin conformsToProtocol:protocol];
 }
 
+@end
+
+@interface RMDepthStencil : RMTwinObject {
+@public
+    raw::DepthStencilDesc _raw;
+}
+@end
+@implementation RMDepthStencil
 @end
 
 @implementation RMHeap
@@ -1943,6 +1970,7 @@ static inline void hit(RMCommandBuffer *cb, RMPred p, uint64_t a = 0, uint64_t b
 
 - (void)endEncoding
 {
+    SWITCH_API(ApiEncoder);
     if (_ended)
         return;
     _ended = true;
@@ -1993,6 +2021,8 @@ static inline void hit(RMCommandBuffer *cb, RMPred p, uint64_t a = 0, uint64_t b
     RMTexture *_tex[16];   // fragment textures (unretained: the command buffer retains what it binds)
     uint32_t _formats[8];  // the pass's color attachments' formats as the raw path holds them (0: none)
     uint32_t _count;       // its attachment count (the last attachment's index + 1)
+    uint32_t _zeta;        // its depth/stencil attachment's format as the raw path holds it (0: none)
+    raw::DepthStencilDesc _ds;
 }
 @end
 @interface RMBlitEncoder : RMEncoder
@@ -2050,6 +2080,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
                    baseVertex:(NSInteger)baseVertex
                  baseInstance:(NSUInteger)baseInstance
 {
+    SWITCH_API(ApiDraw);
     if (![(id)buffer isKindOfClass:[RMBuffer class]] || instances != 1 || baseVertex || baseInstance) {
         [_cb takeReason:WhyCall why:@"an indexed draw of several instances or a base vertex"];
         hit(_cb, PredCallIndexedForm, instances, uint64_t(uint32_t(baseVertex)) | uint64_t(baseInstance) << 32);
@@ -2082,6 +2113,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
             indexBufferOffset:(NSUInteger)offset
                 instanceCount:(NSUInteger)instances
 {
+    SWITCH_API(ApiDraw);
     [self drawIndexedPrimitives:type
                      indexCount:count
                       indexType:indexType
@@ -2098,6 +2130,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
                   indexBuffer:(id<MTLBuffer>)buffer
             indexBufferOffset:(NSUInteger)offset
 {
+    SWITCH_API(ApiDraw);
     [self drawIndexedPrimitives:type
                      indexCount:count
                       indexType:indexType
@@ -2110,6 +2143,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
 
 - (void)setRenderPipelineState:(id<MTLRenderPipelineState>)state
 {
+    SWITCH_API(ApiState);
     RMPipeline *p = (RMPipeline *)state;
     if (![(id)p isKindOfClass:[RMPipeline class]]) {
         [_cb takeReason:WhyState why:@"a render state not made by this device"];
@@ -2141,6 +2175,10 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
             return hit(_cb, PredEncColorFormats, j, f);
         }
     }
+    if (pl.depthFormat != _zeta || (!_zeta && _ds.active())) {  // (raw::RenderEncoder::prepare's test)
+        [_cb takeReason:WhyEncode why:@"a depth/stencil state or format the pass's attachment does not take"];
+        return hit(_cb, PredEncDepthStencil, pl.depthFormat, _zeta | uint64_t(_ds.active()) << 32);
+    }
     const raw::PackPipeline &r = *pl.rec;
     for (uint32_t i = 0; i < r.entries; i++) {
         const raw::PackEntry &e = r.entry[i];
@@ -2161,6 +2199,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
 
 - (void)bytes:(int)stage data:(const void *)bytes length:(NSUInteger)length index:(NSUInteger)index
 {
+    SWITCH_API(ApiBind);
     if (stage >= 1 && stage <= 2 && index < 31) {
         _bufVa[stage][index] = 0;  // its own 256-byte-aligned upload chunk
         _buf[stage][index] = nil;
@@ -2185,6 +2224,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
 
 - (void)buffer:(int)stage object:(id<MTLBuffer>)b offset:(NSUInteger)offset index:(NSUInteger)index
 {
+    SWITCH_API(ApiBind);
     if (b && ![(id)b isKindOfClass:[RMBuffer class]]) {
         [_cb takeReason:WhyCall why:@"a buffer not made by this device"];
         hit(_cb, PredCallBufForeign, uint64_t(stage) << 8 | index, b.length);
@@ -2209,6 +2249,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
 
 - (void)bufferOffset:(int)stage offset:(NSUInteger)offset index:(NSUInteger)index
 {
+    SWITCH_API(ApiBind);
     if (index < 31 && _buf[stage][index])
         _bufVa[stage][index] = _buf[stage][index]->_raw.va + offset;
     setBinding(_cb, OpBufferOffset, stage, index, nil, offset);
@@ -2240,6 +2281,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
 
 - (void)texture:(int)stage object:(id<MTLTexture>)t index:(NSUInteger)index
 {
+    SWITCH_API(ApiBind);
     RMTexture *x = [(id)t isKindOfClass:[RMTexture class]] ? (RMTexture *)t : nil;
     if (t && (!x || !x->_rawOk || !x->_raw.tic)) {
         [_cb takeReason:WhyTexture why:@"a texture the raw path does not keep"];
@@ -2285,6 +2327,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
 
 - (void)sampler:(int)stage object:(id<MTLSamplerState>)s index:(NSUInteger)index
 {
+    SWITCH_API(ApiBind);
     if (s && ![(id)s isKindOfClass:[RMSampler class]]) {
         [_cb takeReason:WhyCall why:@"a sampler not made by this device"];
         hit(_cb, PredCallSamplerForeign, index);
@@ -2314,6 +2357,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
 
 - (void)setScissorRect:(MTLScissorRect)r
 {
+    SWITCH_API(ApiState);
     Cmd m = cmd(OpScissor);
     m.a = uint32_t(r.x);
     m.b = uint32_t(r.y);
@@ -2323,6 +2367,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
 
 - (void)setViewport:(MTLViewport)v
 {
+    SWITCH_API(ApiState);
     Cmd m = cmd(OpViewport);
     m.x = _cb->_extra.size();
     const double d[6] = {v.originX, v.originY, v.width, v.height, v.znear, v.zfar};
@@ -2354,8 +2399,12 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
 
 - (void)setDepthStencilState:(id<MTLDepthStencilState>)s
 {
-    setBinding(_cb, OpDepthStencil, 0, 0, s,
-               0);  // no Core Animation pass has a depth or stencil attachment (checked at the pass)
+    if (s && ![(id)s isKindOfClass:[RMDepthStencil class]]) {
+        [_cb takeReason:WhyCall why:@"a depth/stencil state not made by this device"];
+        hit(_cb, PredStateForeign);
+    }
+    _ds = [(id)s isKindOfClass:[RMDepthStencil class]] ? ((RMDepthStencil *)s)->_raw : raw::DepthStencilDesc();
+    setBinding(_cb, OpDepthStencil, 0, 0, s, 0);
 }
 
 // SPI: lines one pixel wide are what the raw path draws (its default); any other width goes to m2v with the call
@@ -2422,6 +2471,13 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
 
 - (void)setDepthBias:(float)bias slopeScale:(float)slope clamp:(float)clamp
 {
+    if (bias != 0 || slope != 0 || clamp != 0) {
+        uint32_t b, k;
+        memcpy(&b, &bias, 4);
+        memcpy(&k, &slope, 4);
+        [_cb takeReason:WhyCall why:@"a depth bias"];
+        hit(_cb, PredCallDepthBias, b, k);
+    }
     Cmd m = cmd(OpDepthBias);
     m.x = _cb->_extra.size();
     const float f[3] = {bias, slope, clamp};
@@ -2439,6 +2495,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
          instanceCount:(NSUInteger)instances
           baseInstance:(NSUInteger)base
 {
+    SWITCH_API(ApiDraw);
     [self checkDraw:base];
     Cmd m = cmd(OpDraw, uint8_t(type));
     m.a = uint32_t(start);
@@ -2452,6 +2509,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
            vertexCount:(NSUInteger)count
          instanceCount:(NSUInteger)instances
 {
+    SWITCH_API(ApiDraw);
     [self drawPrimitives:type vertexStart:start vertexCount:count instanceCount:instances baseInstance:0];
 }
 
@@ -2808,6 +2866,24 @@ static void markWritten(RMCommandBuffer *cb);
 static void finish(RMCommandBuffer *cb, NSError *error);
 static bool heldBehindEvent();
 
+// A depth/stencil attachment the raw path renders (raw::DepthStencilAttachment): one memoryless Depth32Float_Stencil8 texture as
+// both aspects, whole (level, slice and depth plane 0, no resolve), cleared or not loaded and not stored (memoryless), a clear
+// depth that is a number (metal2vulkan refuses a NaN)
+static bool rawDepthStencil(MTLRenderPassDescriptor *pass)
+{
+    MTLRenderPassDepthAttachmentDescriptor *d = pass.depthAttachment;
+    MTLRenderPassStencilAttachmentDescriptor *s = pass.stencilAttachment;
+    RMTexture *t = (RMTexture *)d.texture;
+    if (!t || t != (RMTexture *)s.texture || ![(id)t isKindOfClass:[RMTexture class]] || !t->_rawOk || !t->_raw.zeta ||
+        !t->_raw.memoryless || std::isnan(d.clearDepth))
+        return false;
+    for (MTLRenderPassAttachmentDescriptor *a : @[ d, s ])
+        if (a.level || a.slice || a.depthPlane || a.resolveTexture || a.storeAction != MTLStoreActionDontCare ||
+            (a.loadAction != MTLLoadActionClear && a.loadAction != MTLLoadActionDontCare))
+            return false;
+    return true;
+}
+
 @implementation RMCommandBuffer
 
 - (void)retain:(id)object
@@ -2920,6 +2996,7 @@ static bool heldBehindEvent();
 
 - (id<MTLRenderCommandEncoder>)renderCommandEncoderWithDescriptor:(MTLRenderPassDescriptor *)d
 {
+    SWITCH_API(ApiEncoder);
     RMRenderEncoder *e = [RMRenderEncoder new];
     [self begin:e];
     MTLRenderPassDescriptor *pass = [d copy];
@@ -2966,19 +3043,23 @@ static bool heldBehindEvent();
             e->_count = c + 1;
         }
     }
-    // renderTargetWidth / renderTargetHeight: the render area's bounds (raw::PassDesc width, height)
-    if (pass.depthAttachment.texture || pass.stencilAttachment.texture || pass.visibilityResultBuffer ||
-        (pass.renderTargetArrayLength > 1) || pass.rasterizationRateMap) {
+    if (pass.depthAttachment.texture || pass.stencilAttachment.texture) {
         [self retain:pass.depthAttachment.texture];
         [self retain:pass.stencilAttachment.texture];
-        [self retain:pass.visibilityResultBuffer];
-        [self takeReason:WhyPass why:@"a depth, stencil or visibility attachment"];
-        if (pass.depthAttachment.texture || pass.stencilAttachment.texture)
+        if (rawDepthStencil(pass))
+            e->_zeta = raw::kZetaFormat;
+        else {
+            [self takeReason:WhyPass why:@"a depth/stencil attachment the raw path does not take"];
             hit(self, PredPassDepthStencil, pass.depthAttachment.texture.pixelFormat,
                 pass.stencilAttachment.texture.pixelFormat);
-        else
-            hit(self, PredPassOther, pass.visibilityResultBuffer != nil,
-                pass.renderTargetArrayLength | uint64_t(pass.rasterizationRateMap != nil) << 32);
+        }
+    }
+    // renderTargetWidth / renderTargetHeight: the render area's bounds (raw::PassDesc width, height)
+    if (pass.visibilityResultBuffer || (pass.renderTargetArrayLength > 1) || pass.rasterizationRateMap) {
+        [self retain:pass.visibilityResultBuffer];
+        [self takeReason:WhyPass why:@"a visibility attachment, layers or a rate map"];
+        hit(self, PredPassOther, pass.visibilityResultBuffer != nil,
+            pass.renderTargetArrayLength | uint64_t(pass.rasterizationRateMap != nil) << 32);
     }
     Cmd m = cmd(OpRender);
     m.obj = (__bridge void *)pass;
@@ -3162,7 +3243,8 @@ static bool heldBehindEvent();
     switch_frame::committed(_frame, since,
                             {gSurfaceTextures.load(std::memory_order_relaxed),
                              k.importsMade.load(std::memory_order_relaxed),
-                             k.importHits.load(std::memory_order_relaxed), gTwinsMade.load(std::memory_order_relaxed)});
+                             k.importHits.load(std::memory_order_relaxed), gTwinsMade.load(std::memory_order_relaxed)},
+                            __builtin_frame_address(0));
 #endif
     if (_active)
         [(RMEncoder *)_active endEncoding];
@@ -3292,6 +3374,7 @@ static bool heldBehindEvent();
 
 - (id<MTLCommandBuffer>)commandBuffer
 {
+    SWITCH_API(ApiObject);
     RMCommandBuffer *b = [RMCommandBuffer new];
     b->_device = _device;
     b->_queue = self;
@@ -3301,6 +3384,9 @@ static bool heldBehindEvent();
     b->_tape.reserve(512);
     b->_owners.reserve(256);
     b->_bytes.reserve(16384);
+#if SWITCH_FRAME_TIMELINE
+    switch_frame::made(b->_frame);
+#endif
     return (id<MTLCommandBuffer>)b;
 }
 
@@ -4061,8 +4147,8 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
     };
     // a draw the encoder refused: its predicate and values (raw_gpu.h Refusal)
     auto refused = [&]() {
-        static const RMPred map[] = {PredEncPassRender,   PredEncIndexedRange, PredEncBaseInstance,
-                                     PredEncColorFormats, PredEncUboOffset,    PredEncNoTic};
+        static const RMPred map[] = {PredEncPassRender, PredEncIndexedRange, PredEncBaseInstance, PredEncColorFormats,
+                                     PredEncUboOffset,  PredEncNoTic,        PredEncDepthStencil};
         const raw::Refusal &f = rc->refusal;
         hit(cb, f.id < sizeof map / sizeof *map ? map[f.id] : PredEncPassRender, f.a,
             uint64_t(f.b) | uint64_t(f.c) << 32);
@@ -4308,6 +4394,13 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
                 p.color[j].clear[3] = float(k.alpha);
                 p.count = j + 1;
             }
+            if (RMTexture *z = (RMTexture *)pass.depthAttachment.texture) {  // (rawDepthStencil: decided at record)
+                p.depthStencil.texture = &z->_raw;
+                p.depthStencil.clearDepth = pass.depthAttachment.loadAction == MTLLoadActionClear;
+                p.depthStencil.clearStencil = pass.stencilAttachment.loadAction == MTLLoadActionClear;
+                p.depthStencil.depth = float(std::clamp(pass.depthAttachment.clearDepth, 0.0, 1.0));
+                p.depthStencil.stencil = pass.stencilAttachment.clearStencil;
+            }
             p.width = uint32_t(std::min<NSUInteger>(pass.renderTargetWidth, UINT32_MAX));
             p.height = uint32_t(std::min<NSUInteger>(pass.renderTargetHeight, UINT32_MAX));
             if (loads)
@@ -4345,6 +4438,12 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
         }
         case OpBytes:
             re->setBytes(c.stage, c.index, cb->_bytes.data() + c.a, c.b);
+            break;
+        case OpDepthStencil:
+            re->setDepthStencil(c.obj ? &((__bridge RMDepthStencil *)c.obj)->_raw : nullptr);
+            break;
+        case OpStencilRef:
+            re->setStencilReference(c.a, c.b);
             break;
         case OpBuffer:
             re->setBuffer(c.stage, c.index, c.obj ? &((__bridge RMBuffer *)c.obj)->_raw : nullptr, c.c);
@@ -4704,6 +4803,7 @@ static void commitBuffer(RMCommandBuffer *cb);
 
 - (id<MTLBuffer>)newBufferWithLength:(NSUInteger)n options:(MTLResourceOptions)o
 {
+    SWITCH_API(ApiObject);
     RMBuffer *b = [RMBuffer new];
     b->_device = self;
     b->_options = o;
@@ -4726,6 +4826,7 @@ static void commitBuffer(RMCommandBuffer *cb);
 
 - (id<MTLBuffer>)newBufferWithBytes:(const void *)p length:(NSUInteger)n options:(MTLResourceOptions)o
 {
+    SWITCH_API(ApiObject);
     id<MTLBuffer> b = [self newBufferWithLength:n options:o];
     if (b && p && n) {
         memcpy(((RMBuffer *)b)->_raw.cpu, p, n);  // the draws that read it clean the lines they read
@@ -4738,6 +4839,7 @@ static void commitBuffer(RMCommandBuffer *cb);
                                   options:(MTLResourceOptions)o
                               deallocator:(void (^)(void *, NSUInteger))deallocator
 {
+    SWITCH_API(ApiObject);
     RMBuffer *b = [RMBuffer new];
     b->_device = self;
     b->_options = o;
@@ -4782,7 +4884,7 @@ static void commitBuffer(RMCommandBuffer *cb);
             return (id<MTLTexture>)t;
         }
     }
-    if (!rawShape(d)) {
+    if (!rawShape(d) && !zetaDescriptor(d)) {
         RMTexture *w = (RMTexture *)[self wrapTwin:[gRM->fallback newTextureWithDescriptor:d] descriptor:d];
         if (w)
             refuseTexture(w, PredTexShape, rawShapeTerm(d), d.pixelFormat, @"twin-only", nil);
@@ -4864,6 +4966,7 @@ static const char *ycbcrPlan(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteger
 
 - (id<MTLTexture>)newTextureWithDescriptor:(MTLTextureDescriptor *)d iosurface:(IOSurfaceRef)s plane:(NSUInteger)plane
 {
+    SWITCH_API(ApiObject);
     if (!s)
         return nil;
 #if SWITCH_FRAME_TIMELINE
@@ -4944,6 +5047,7 @@ static const char *ycbcrPlan(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteger
 
 - (id<MTLSamplerState>)newSamplerStateWithDescriptor:(MTLSamplerDescriptor *)d
 {
+    SWITCH_API(ApiObject);
     raw::SamplerDesc s;
     s.minFilter = uint8_t(d.minFilter);
     s.magFilter = uint8_t(d.magFilter);
@@ -4988,10 +5092,23 @@ static const char *ycbcrPlan(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteger
     id twin = [gRM->fallback newDepthStencilStateWithDescriptor:d];
     if (!twin)
         return nil;
-    RMTwinObject *o = [RMTwinObject new];
+    RMDepthStencil *o = [RMDepthStencil new];
     o->_device = self;
     o->_twin = twin;
     o.label = d.label;
+    o->_raw.depthCompare = uint8_t(d.depthCompareFunction);
+    o->_raw.depthWrite = d.depthWriteEnabled;
+    raw::StencilFace *faces[2] = {&o->_raw.front, &o->_raw.back};
+    MTLStencilDescriptor *stencils[2] = {d.frontFaceStencil, d.backFaceStencil};
+    for (int i = 0; i < 2; i++)
+        if (MTLStencilDescriptor *s = stencils[i]) {
+            faces[i]->compare = uint8_t(s.stencilCompareFunction);
+            faces[i]->fail = uint8_t(s.stencilFailureOperation);
+            faces[i]->depthFail = uint8_t(s.depthFailureOperation);
+            faces[i]->pass = uint8_t(s.depthStencilPassOperation);
+            faces[i]->readMask = s.readMask;
+            faces[i]->writeMask = s.writeMask;
+        }
     return (id<MTLDepthStencilState>)o;
 }
 
@@ -5075,6 +5192,7 @@ static id<MTLRenderPipelineState> pipelineTwin(MTLRenderPipelineDescriptor *d, M
 - (id<MTLRenderPipelineState>)newRenderPipelineStateWithDescriptor:(MTLRenderPipelineDescriptor *)d
                                                              error:(NSError **)error
 {
+    SWITCH_API(ApiObject);
     RMPipeline *p = [self pipelineFor:d twin:nil];
     p->_twin = pipelineTwin(d, MTLPipelineOptionNone, p->_raw, error);
     if (!p->_twin && !p->_raw)
@@ -5089,6 +5207,7 @@ static id<MTLRenderPipelineState> pipelineTwin(MTLRenderPipelineDescriptor *d, M
                                                         reflection:(MTLAutoreleasedRenderPipelineReflection *)reflection
                                                              error:(NSError **)error
 {
+    SWITCH_API(ApiObject);
     if (reflection) {
         id<MTLRenderPipelineState> twin = [gRM->fallback newRenderPipelineStateWithDescriptor:twinDescriptor(d)
                                                                                       options:o

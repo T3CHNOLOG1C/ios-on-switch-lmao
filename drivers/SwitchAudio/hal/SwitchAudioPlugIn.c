@@ -63,6 +63,7 @@
 #include <string.h>
 #include "SwitchAudioAbi.h"
 #include "SwitchAudioConvert.h"
+#include "../../../kits/SwitchRefusal/SwitchRefusal.h"
 
 enum {
     kPlugIn = kAudioObjectPlugInObject,
@@ -81,7 +82,7 @@ enum {
 #define kMicUID     "SwitchAudioMic"
 #define kModelUID   "SwitchAudioModel"
 static const UInt32 kClockDomain = SWITCH_AUDIO_MAGIC;  // speaker and microphone: the service's one clock
-static const Float64 kRate = SWITCH_AUDIO_RATE;
+static const Float64 kRate = SWITCH_AUDIO_RATE;  // Hawking's, and the service's until the audio server picks another
 static const UInt32 kZeroPeriod = SWITCH_AUDIO_RING_FRAMES;
 
 static AudioServerPlugInHostRef gHost;
@@ -92,8 +93,9 @@ static SwitchAudioControl *gControl;
 static switch_audio_sample_t *gOut, *gIn;
 static UInt32 gSpeakerUsers, gMicUsers, gHawkingUsers;  // IO clients per device (gLock)
 static Float32 gVolume = 1.0f;
-static Float64 gTicksPerFrame;      // the service's clock (its control page), nominal until it is mapped
-static Float64 gHostTicksPerFrame;  // the host clock's nominal rate: Hawking's
+static Float64 gRate = SWITCH_AUDIO_RATE;  // the service's clock: speaker and microphone (gLock)
+static Float64 gTicksPerFrame;             // the service's clock (its control page), nominal until it is mapped
+static Float64 gHostTicksPerFrame;         // the host clock's nominal rate: Hawking's
 static uint64_t gZeroOrigin, gZeroSeed, gHawkingOrigin, gHawkingSeed;
 
 static int mapType(uint32_t type, void **out)
@@ -155,6 +157,14 @@ static int connectService(void)
     return 0;
 }
 
+static int connectServiceLocked(void)
+{
+    pthread_mutex_lock(&gLock);
+    const int r = connectService();
+    pthread_mutex_unlock(&gLock);
+    return r;
+}
+
 static kern_return_t call(uint32_t selector)
 {
     return gConnect ? IOConnectCallScalarMethod(gConnect, selector, NULL, 0, NULL, NULL) : KERN_FAILURE;
@@ -179,10 +189,10 @@ static void cleanToMemory(const void *start, size_t bytes)
     __asm__ volatile("dsb sy" ::: "memory");
 }
 
-static AudioStreamBasicDescription format(UInt32 channels)
+static AudioStreamBasicDescription format(UInt32 channels, Float64 rate)
 {
     AudioStreamBasicDescription f = {0};
-    f.mSampleRate = kRate;
+    f.mSampleRate = rate;
     f.mFormatID = kAudioFormatLinearPCM;
     f.mFormatFlags = kAudioFormatFlagIsFloat | kAudioFormatFlagsNativeEndian | kAudioFormatFlagIsPacked;
     f.mBytesPerPacket = 4 * channels;
@@ -257,6 +267,38 @@ static UInt32 usersOf(AudioObjectID device)
     return device == kSpeaker ? gSpeakerUsers : device == kMic ? gMicUsers : gHawkingUsers;
 }
 
+static Float64 rateOf(AudioObjectID device)
+{
+    return device == kHawking ? kRate : gRate;
+}
+
+// The rates a device runs at: the service's (its control page) for the speaker and microphone, which share its clock.
+static UInt32 ratesOf(AudioObjectID device, Float64 rates[SWITCH_AUDIO_MAX_RATES])
+{
+    rates[0] = kRate;
+    if (device == kHawking || connectServiceLocked())
+        return 1;
+    UInt32 n = 0;
+    for (UInt32 i = 0; i < SWITCH_AUDIO_MAX_RATES && gControl->rates[i]; ++i)
+        rates[n++] = gControl->rates[i];
+    return n;
+}
+
+static OSStatus requestRate(AudioObjectID device, Float64 rate)
+{
+    if (rate == rateOf(device))
+        return 0;
+    Float64 rates[SWITCH_AUDIO_MAX_RATES];
+    const UInt32 n = ratesOf(device, rates);
+    for (UInt32 i = 0; i < n; ++i) {
+        if (rates[i] == rate)
+            return gHost->RequestDeviceConfigurationChange(gHost, device, (UInt64)rate, NULL);
+    }
+    switch_refusal_k(switch_refusal_key_with(switch_refusal_key("audio", "rate"), (uint64_t)rate), "audio", "rate",
+                     "%.0f Hz asked of device %u; it runs %.0f Hz", rate, (unsigned)device, rateOf(device));
+    return kAudioDeviceUnsupportedFormatError;
+}
+
 static HRESULT QueryInterface(void *self, REFIID uuid, LPVOID *out);
 
 static ULONG AddRef(void *self)
@@ -318,12 +360,27 @@ static OSStatus RemoveDeviceClient(AudioServerPlugInDriverRef d, AudioObjectID o
     return 0;
 }
 
+// A rate change (requestRate: the action is the rate). The audio server has stopped this device's IO; the kernel
+// service changes the clock only while the other device's is stopped too, and that device then follows.
 static OSStatus PerformDeviceConfigurationChange(AudioServerPlugInDriverRef d, AudioObjectID o, UInt64 a, void *i)
 {
     (void)d;
-    (void)o;
-    (void)a;
     (void)i;
+    if (o == kHawking || (Float64)a == gRate)
+        return 0;
+    const uint64_t rate = a;
+    pthread_mutex_lock(&gLock);
+    kern_return_t kr =
+        connectService() ? KERN_FAILURE : IOConnectCallScalarMethod(gConnect, SwitchAudioSetRate, &rate, 1, NULL, NULL);
+    if (kr == KERN_SUCCESS) {
+        gRate = gControl->rate;
+        gTicksPerFrame = (Float64)gControl->ticks_per_frame_q32 / 4294967296.0;
+    }
+    pthread_mutex_unlock(&gLock);
+    if (kr != KERN_SUCCESS)
+        return kAudioHardwareIllegalOperationError;
+    os_log(OS_LOG_DEFAULT, "SwitchAudio: clock now %.0f Hz", gRate);
+    gHost->RequestDeviceConfigurationChange(gHost, o == kSpeaker ? kMic : kSpeaker, a, NULL);
     return 0;
 }
 
@@ -396,12 +453,12 @@ static OSStatus SetPropertyData(AudioServerPlugInDriverRef d, AudioObjectID o, p
     if (isStream(o) &&
         (a->mSelector == kAudioStreamPropertyVirtualFormat || a->mSelector == kAudioStreamPropertyPhysicalFormat)) {
         const AudioStreamBasicDescription *f = data;
-        return size >= sizeof *f && f->mSampleRate == kRate && f->mChannelsPerFrame == channelsOf(o)
-                   ? 0
-                   : kAudioDeviceUnsupportedFormatError;
+        if (size < sizeof *f || f->mChannelsPerFrame != channelsOf(o))
+            return kAudioDeviceUnsupportedFormatError;
+        return requestRate(deviceOf(o), f->mSampleRate);
     }
     if (isDevice(o) && a->mSelector == kAudioDevicePropertyNominalSampleRate)
-        return size >= sizeof(Float64) && *(const Float64 *)data == kRate ? 0 : kAudioDeviceUnsupportedFormatError;
+        return size >= sizeof(Float64) ? requestRate(o, *(const Float64 *)data) : kAudioHardwareBadPropertySizeError;
     // The audio server turns streams it does not use off and on; they stay running, so this only acknowledges it.
     if (isStream(o) && a->mSelector == kAudioStreamPropertyIsActive)
         return size >= sizeof(UInt32) ? 0 : kAudioHardwareBadPropertySizeError;
@@ -525,9 +582,17 @@ static OSStatus GetPropertyData(AudioServerPlugInDriverRef d, AudioObjectID o, p
                 REPLY(UInt32, SWITCH_AUDIO_PERIOD_FRAMES);
             REPLY(UInt32, scopeIn ? inputSafetyFrames() : latencyFrames() + 2 * SWITCH_AUDIO_PERIOD_FRAMES);
         case kAudioDevicePropertyNominalSampleRate:
-            REPLY(Float64, kRate);
-        case kAudioDevicePropertyAvailableNominalSampleRates:
-            REPLY(AudioValueRange, ((AudioValueRange){kRate, kRate}));
+            REPLY(Float64, rateOf(o));
+        case kAudioDevicePropertyAvailableNominalSampleRates: {
+            Float64 rates[SWITCH_AUDIO_MAX_RATES];
+            UInt32 n = ratesOf(o, rates);
+            if (inDataSize / sizeof(AudioValueRange) < n)
+                n = inDataSize / (UInt32)sizeof(AudioValueRange);
+            for (UInt32 k = 0; k < n; ++k)
+                ((AudioValueRange *)outData)[k] = (AudioValueRange){rates[k], rates[k]};
+            *outDataSize = n * (UInt32)sizeof(AudioValueRange);
+            return 0;
+        }
         case kAudioDevicePropertyIsHidden:
             REPLY(UInt32, 0);
         case kAudioDevicePropertyZeroTimeStampPeriod:
@@ -618,10 +683,20 @@ static OSStatus GetPropertyData(AudioServerPlugInDriverRef d, AudioObjectID o, p
             REPLY(UInt32, 0);
         case kAudioStreamPropertyVirtualFormat:
         case kAudioStreamPropertyPhysicalFormat:
-            REPLY(AudioStreamBasicDescription, format(channels));
+            REPLY(AudioStreamBasicDescription, format(channels, rateOf(deviceOf(o))));
         case kAudioStreamPropertyAvailableVirtualFormats:
-        case kAudioStreamPropertyAvailablePhysicalFormats:
-            REPLY(AudioStreamRangedDescription, ((AudioStreamRangedDescription){format(channels), {kRate, kRate}}));
+        case kAudioStreamPropertyAvailablePhysicalFormats: {
+            Float64 rates[SWITCH_AUDIO_MAX_RATES];
+            UInt32 n = ratesOf(deviceOf(o), rates);
+            if (inDataSize / sizeof(AudioStreamRangedDescription) < n)
+                n = inDataSize / (UInt32)sizeof(AudioStreamRangedDescription);
+            for (UInt32 k = 0; k < n; ++k) {
+                ((AudioStreamRangedDescription *)outData)[k] =
+                    (AudioStreamRangedDescription){format(channels, rates[k]), {rates[k], rates[k]}};
+            }
+            *outDataSize = n * (UInt32)sizeof(AudioStreamRangedDescription);
+            return 0;
+        }
         default:
             return kAudioHardwareUnknownPropertyError;
         }

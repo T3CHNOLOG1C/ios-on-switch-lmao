@@ -529,7 +529,11 @@ int main(int argc, char **argv)
             }
             made++;
             MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
-            bool usedFb = false;
+            // beside a depth/stencil attachment a linear color is m2v's stand-in, copied in by a draw and merged back by
+            // dispatches (metal2vulkan linear_attachment.rs): such a state draws into private colors, which NVK renders in place
+            const bool depthStencil = s.d.depthAttachmentPixelFormat != MTLPixelFormatInvalid ||
+                                      s.d.stencilAttachmentPixelFormat != MTLPixelFormatInvalid;
+            bool usedFb = depthStencil;
             for (NSUInteger c = 0; c < 8; c++) {
                 MTLRenderPipelineColorAttachmentDescriptor *ca = s.d.colorAttachments[c];
                 if (ca.pixelFormat == MTLPixelFormatInvalid)
@@ -543,6 +547,12 @@ int main(int argc, char **argv)
                 pass.colorAttachments[c].loadAction = memoryless ? MTLLoadActionDontCare : MTLLoadActionLoad;
                 pass.colorAttachments[c].storeAction = memoryless ? MTLStoreActionDontCare : MTLStoreActionStore;
             }
+            // a state with depth or stencil formats draws into a memoryless attachment of them (Metal's default Clear load and
+            // DontCare store, its default depth/stencil state), so its registers are those NVK writes beside one
+            if (depthStencil && s.d.depthAttachmentPixelFormat != MTLPixelFormatInvalid)
+                pass.depthAttachment.texture = target(s.d.depthAttachmentPixelFormat, true);
+            if (s.d.stencilAttachmentPixelFormat != MTLPixelFormatInvalid)
+                pass.stencilAttachment.texture = target(s.d.stencilAttachmentPixelFormat, true);
             id<MTLCommandBuffer> cb = [queue commandBuffer];
             id<MTLRenderCommandEncoder> enc = [cb renderCommandEncoderWithDescriptor:pass];
             [enc setRenderPipelineState:state];

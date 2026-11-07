@@ -268,6 +268,9 @@ struct nvk_cmd_buffer {
    /** Array of struct nvk_cmd_mem* */
    struct util_dynarray copy_memory_indirect_temps;
 
+   /* Copies and fills take the copy engine whatever the queue (nvk_copies_on_ce_now when the buffer began) */
+   bool copies_on_ce;
+
    struct nvk_cmd_mem *push_mem;
    uint32_t *push_mem_limit;
    struct nv_push push;
@@ -399,6 +402,7 @@ nvk_cmd_buffer_last_subchannel(const struct nvk_cmd_buffer *cmd)
 }
 
 VkQueueFlags nvk_cmd_buffer_queue_flags(struct nvk_cmd_buffer *cmd);
+bool nvk_copies_on_ce_now(void);
 
 VkResult nvk_cmd_buffer_alloc_mem(struct nvk_cmd_buffer *cmd,
                                   bool force_gart,

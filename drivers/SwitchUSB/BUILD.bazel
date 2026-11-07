@@ -112,6 +112,13 @@ kernel_driver(
         "com.apple.iokit.IOUSBDeviceFamily",
         "com.apple.driver.usb.AppleUSBCommon",
         "com.apple.driver.AppleUSBDeviceMux",
+        # J120's other device functions (USBDeviceConfiguration.plist stdMuxPTPEthValIDA), prelinked ahead of the switch
+        # to that configuration: the iPod USB audio interface (USBAudioControl/USBAudioStreaming), USB Audio 2 for
+        # Interdevice Audio and its IDAM interface. NCM, USB Ethernet and IOAccessoryPortUSB (iAP over HID) need
+        # IONetworkingFamily (and AppleOnboardSerial's IOSkywalkFamily), which SwitchWLAN still defines natively.
+        "com.apple.driver.AppleUSBMike",
+        "com.apple.driver.AppleUSBDeviceAudioController",
+        "com.apple.driver.AppleIDAMInterface",
         # Host mode: Apple's host stack and xHCI driver, which SwitchXHCI subclasses, and what it needs
         # (IOAccessoryManager: AppleUSBXHCI's Type-C port classes; IOPortFamily: declared by AppleUSBXHCI) ...
         "com.apple.iokit.IOUSBHostFamily",

@@ -5469,7 +5469,9 @@ impl Texture {
             if let Some(twin) = self.twin_image() {
                 copies.push((twin, twin_copy(copy)));
             }
+            let alone = truth.own_memory() && copies.len() == 1;
             let staged = TexelCopy::new(source, host.packed_len(), copies, Box::new(staging));
+            let staged = if alone { staged.alone() } else { staged };
             // The decoded twin's texels of the region, after the copy.
             let regions = std::slice::from_ref(&image_region);
             let staged = match truth.decode_pass(regions, PassScratch::Device)? {

@@ -80,7 +80,8 @@ def rename(text: str, names: dict[str, str], assign: bool) -> str:
 # path renders a target NVK renders through a tiled shadow (rows not 128 apart) through a pitch pool image, and samples
 # a surface m2v samples through a shadow image (rows not 32 apart) through a pitch pool image: the texels are the same,
 # their headers' addresses, pitches and layouts are not. So: a texture header is its format word, width and height; a
-# target its format; a target's address, pitch, memory layout and array registers are dropped; and the hash of a
+# target its format; a target's address, pitch, memory layout and array registers are dropped, and the depth target's
+# address; and the hash of a
 # constant buffer that holds handles is not compared (its handles are, normalized; buffer contents keep their own
 # hashes).
 def layout_tic(m: re.Match[str]) -> str:
@@ -101,10 +102,12 @@ LAYOUT_REGS = {'%x' % (0x800 + 0x40 * j + k) for j in range(8) for k in (0x8, 0x
 def fields(ev: dict) -> collections.OrderedDict:
     f = collections.OrderedDict()
     if LAYOUTS:
+        head = re.sub(r'rt=\w+,\d+x\d+,(fmt=\w+),mem=\w+', r'rt=\1', ev['head'])
         ev = {
-            'head': re.sub(r'rt=\w+,\d+x\d+,(fmt=\w+),mem=\w+', r'rt=\1', ev['head']),
+            'head': re.sub(r'(zs=[0-9a-f]+,[0-9a-f]+),\w+', r'\1', head),
             'lines': [
-                re.sub(r'^(rt\d+)=\S+ \S+ (fmt=\w+).*$', r'\1=\2', normalize_layouts(line)) for line in ev['lines']
+                re.sub(r'^(rt\d+)=\S+ \S+ (fmt=\w+).*$|^(zt)=\S+$', r'\1\3=\2', normalize_layouts(line))
+                for line in ev['lines']
             ],
         }
     h = ev['head']
@@ -189,9 +192,29 @@ def compare_frame(tally: Tally, fi: int, fa: list[dict], fb: list[dict]) -> None
         tally.same += compare_draw(tally, fi, di, fields(ea), fields(eb))
 
 
+def split_depth_stencil(clears: list[str]) -> list[str]:
+    """Give each clear's color part, then each one's depth/stencil part on its own, in order.
+
+    NVK clears depth and stencil in the CLEAR_SURFACE of the first color its BeginRendering clears, and m2v decides which
+    colors those are (a fetched memoryless color's scratch clears apart): the same texels, packed another way.
+    """
+    colors, zs = [], []
+    for c in clears:
+        m = re.match(r'data=([0-9a-f]{8}) (.*?)(?: (zs=\S+))?$', c)
+        if not m or not m.group(3):
+            colors.append(c)
+            continue
+        data = int(m.group(1), 16)
+        if data & 0x3C:
+            colors.append(f'data={data & ~3:08x} {m.group(2)}')
+        rect = re.search(r'rect=\S+', c).group(0)
+        zs.append(f'{m.group(3)} aspects={data & 3} {rect}')
+    return colors + zs
+
+
 def compare_clears(tally: Tally, fi: int, fa: list[dict], fb: list[dict]) -> None:
-    ca = [fields(e)['clear'] for e in fa if e['head'].startswith('CLEAR')]
-    cb = [fields(e)['clear'] for e in fb if e['head'].startswith('CLEAR')]
+    ca = split_depth_stencil([fields(e)['clear'] for e in fa if e['head'].startswith('CLEAR')])
+    cb = split_depth_stencil([fields(e)['clear'] for e in fb if e['head'].startswith('CLEAR')])
     if fi == 0:
         extra = [c for c in ca if c not in cb]
         if extra:

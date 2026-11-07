@@ -42,6 +42,7 @@ kernel_driver(
         "kits/SwitchCAR",
         "kits/SwitchDMA",
         "kits/SwitchMMIO",
+        "kits/SwitchRefusal",
     ],
 )
 
@@ -49,11 +50,15 @@ kernel_driver(
 # the same interface, come first on the include path).
 ios_binary(
     name = "SwitchAudioHAL",
-    srcs = ["hal/SwitchAudioPlugIn.c"],
+    srcs = [
+        "hal/SwitchAudioPlugIn.c",
+        "//kits/SwitchRefusal:SwitchRefusal.c",
+    ],
     out = "build/switch-audio/SwitchAudio.driver/SwitchAudio",
     hdrs = [
         "SwitchAudioAbi.h",
         "hal/SwitchAudioConvert.h",
+        "//kits/SwitchRefusal:SwitchRefusal.h",
     ],
     copts = [
         "-I",

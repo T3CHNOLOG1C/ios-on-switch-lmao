@@ -353,7 +353,6 @@ kernel_archive(
         "//kits/SwitchCAR:SwitchCAR",
         "//kits/SwitchDMA:SwitchDMA",
         "//kits/SwitchFalcon:SwitchFalcon",
-        "//kits/SwitchRefusal:SwitchRefusal",
     ] + select({
         "//drivers/SwitchDisplayPort:on": ["//drivers/SwitchDisplayPort:SwitchDisplayPort"],
         "//conditions:default": [],
@@ -440,6 +439,12 @@ kernel_archive(
 )
 
 kernel_archive(
+    name = "libSwitchRefusal",
+    out = "build/switch-refusal/libSwitchRefusal.a",
+    members = ["//kits/SwitchRefusal:SwitchRefusal"],
+)
+
+kernel_archive(
     name = "libLinkStubs",
     out = "build/link-stubs/libLinkStubs.a",
     members = ["//kits/qemu:LinkStubs"],
@@ -463,6 +468,7 @@ xnu_kernel(
         ":libmockfs_fixture",
         ":libShengPlatformPower",
         ":libSwitchDiag",
+        ":libSwitchRefusal",
         ":libLinkStubs",
     ],
     modes = [
@@ -473,6 +479,7 @@ xnu_kernel(
         "force_load",
         "force_load",
         "plain",
+        "force_load",
         "force_load",
         "force_load",
         "force_load",
@@ -499,6 +506,7 @@ xnu_kernel_12377(
         ":libmockfs_fixture",
         ":libShengPlatformPower",
         ":libSwitchDiag",
+        ":libSwitchRefusal",
         ":libLinkStubs",
     ],
     modes = [
@@ -509,6 +517,7 @@ xnu_kernel_12377(
         "force_load",
         "force_load",
         "plain",
+        "force_load",
         "force_load",
         "force_load",
         "force_load",

@@ -44,6 +44,7 @@ kernel_driver(
         "drivers/SwitchTouch",
         "drivers/TegraGPIO",
         "drivers/TegraI2C",
+        "kits/SwitchRefusal",
     ],
 )
 

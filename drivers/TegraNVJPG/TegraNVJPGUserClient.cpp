@@ -44,6 +44,7 @@
 #include <string.h>
 #include "../TegraVIC/TegraVICSurface.h"
 #include "TegraNVJPG.h"
+#include "../../kits/SwitchRefusal/SwitchRefusal.h"
 #include "../../kits/SwitchDMA/SwitchHwPage.h"
 #include "../../kits/SwitchMath/SwitchMath.h"
 #include "../../kits/SwitchTime/SwitchTime.h"
@@ -92,23 +93,16 @@ struct {
     uint64_t windowStart, decodes, refused, failed, engineUs, cpuUs, pixels, bytes;
 } gStats;
 
-const char *gRefusals[32];  // reasons already logged once
 IOLock *gStatsLock;
 bool gFirstLogged;
 
+// `why` is a literal: it is the refusal's key as well as its text.
 void refused(const char *why)
 {
     IOLockLock(gStatsLock);
     gStats.refused++;
-    bool seen = false;
-    uint32_t i = 0;
-    for (; i < 32 && gRefusals[i]; i++)
-        seen = seen || gRefusals[i] == why;
-    if (!seen && i < 32)
-        gRefusals[i] = why;
     IOLockUnlock(gStatsLock);
-    if (!seen)
-        IOLog("TegraNVJPG: decode refused (first of its kind this boot; the caller decodes on the CPU): %s\n", why);
+    switch_refusal("TegraNVJPG", why, "decode refused, the caller decodes on the CPU: %s", why);
 }
 
 void statsLine()

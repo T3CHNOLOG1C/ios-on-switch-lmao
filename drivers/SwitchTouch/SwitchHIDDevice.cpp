@@ -43,6 +43,7 @@
 #include <mach/kmod.h>
 #include "SwitchHID.h"
 #include "../SwitchPower/SwitchPower.h"
+#include "../../kits/SwitchRefusal/SwitchRefusal.h"
 
 extern kmod_info_t g_kernel_kmod_info;
 extern "C" void switch_hid_static_init(void) __asm__("__GLOBAL__sub_I_SwitchHIDDevice.cpp");
@@ -559,8 +560,16 @@ public:
     IOReturn setReport(IOMemoryDescriptor *report, uint32_t type, IOOptionBits options)
     {
         const SwitchHIDFeatureHandler handler = __atomic_load_n(&featureHandler, __ATOMIC_ACQUIRE);
-        if (!handler || type != 2 /* kIOHIDReportTypeFeature */)
+        constexpr uint32_t kFeature = 2;  // kIOHIDReportTypeFeature
+        // A temperature sensor streams nothing (thermalmonitord copies its value), so its Report Interval has nothing
+        // to pace.
+        if (!handler && type == kFeature && isTemperature())
+            return kIOReturnSuccess;
+        if (!handler || type != kFeature) {
+            switch_refusal_k(switch_refusal_key_with(switch_refusal_key("hid", "set-report"), profile->productID),
+                             "hid", "set-report", "%s refuses a type %u report: it takes none", profile->product, type);
             return kIOReturnUnsupported;
+        }
         uint8_t bytes[16];
         const size_t length = report ? report->getLength() : 0;
         if (!length || length > sizeof(bytes) || report->readBytes(0, bytes, length) != length) {

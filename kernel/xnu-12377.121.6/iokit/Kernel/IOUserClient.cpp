@@ -5260,6 +5260,7 @@ is_io_connect_method
 	if (kIOReturnSuccess == ret) {
 		ret = client->callExternalMethod( selector, &args );
 	}
+	switch_iokit_method_done(client, selector, &args, ret);
 
 	*scalar_outputCnt = args.scalarOutputCount;
 	*inband_outputCnt = args.structureOutputSize;

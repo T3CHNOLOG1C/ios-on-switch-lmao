@@ -249,7 +249,11 @@ mesa_cc_library(
             "gen:src/util/format",
             "gen:src/compiler/spirv",
         ],
-    ),
+    ) + select({
+        # nvk_cmd_meta.c's copy-engine A/B switch, debug builds only
+        "//bazel:release": ["-DSWITCH_DEBUG=0"],
+        "//conditions:default": ["-DSWITCH_DEBUG=1"],
+    }),
     sources = [
         "nvk_acceleration_structure.c",
         "nvk_buffer.c",

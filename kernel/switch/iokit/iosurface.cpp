@@ -5,8 +5,11 @@
  * direction needs on the surfaces it imported (tegra_gm20b_iosurface_trap, TegraGM20BCoherency.cpp): a lock after GPU
  * writes invalidates, an unlock that wrote cleans (before IOSurface's unlock moves the seed). Before a lock runs, the driver waits for the GPU's pending writes to
  * the surface (tegra_gm20b_iosurface_lock_will). Surfaces the GPU never imported cost a class compare and a hash
- * lookup.
+ * lookup. A create's output goes to the driver too, which faults a large new surface's pages in on a thread call, so
+ * the GPU import's wiring finds them resident instead of zero-filling on the render thread
+ * (tegra_gm20b_iosurface_method_done).
  */
+#include <IOKit/IOLib.h>
 #include <IOKit/IOUserClient.h>
 #include <libkern/c++/OSMetaClass.h>
 #include <os/atomic_private.h>
@@ -16,6 +19,8 @@
 
 extern "C" void tegra_gm20b_iosurface_trap(uint32_t index, uint32_t surface_id, uint32_t options) __attribute__((weak));
 extern "C" int tegra_gm20b_iosurface_lock_will(uint32_t surface_id, uint32_t options) __attribute__((weak));
+extern "C" void tegra_gm20b_iosurface_method_done(uint32_t selector, const void *output, uint32_t output_size,
+                                                  task_t task) __attribute__((weak));
 
 static bool surface_client(IOUserClient *client)
 {
@@ -48,4 +53,11 @@ kern_return_t switch_iokit_iosurface_lock_will(IOUserClient *client, void *p1, v
         return kIOReturnCannotLock;
     }
     return KERN_SUCCESS;
+}
+
+void switch_iokit_iosurface_method_done(IOUserClient *client, uint32_t selector, const IOExternalMethodArguments *args)
+{
+    if (tegra_gm20b_iosurface_method_done && args->structureOutput && surface_client(client)) {
+        tegra_gm20b_iosurface_method_done(selector, args->structureOutput, args->structureOutputSize, current_task());
+    }
 }

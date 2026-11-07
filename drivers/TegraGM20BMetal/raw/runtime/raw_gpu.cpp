@@ -214,7 +214,7 @@ Device::~Device()
 
 uint32_t Device::contextWords() const
 {
-    return uint32_t(pack_.bytes(PackInit) / sizeof(PackInitMethod)) * 2 + 4096;
+    return uint32_t(pack_.bytes(PackInit) / sizeof(PackInitMethod)) * 2 + 4096 + kDepthStencilWords;
 }
 
 // The channel's context: NVK's own init methods with our addresses, then every register Core Animation's states leave the
@@ -270,6 +270,14 @@ void Device::emitContext(Push &p)
     const uint32_t *base = pack_.section<uint32_t>(PackBaseline);
     for (uint64_t i = 0; i < pack_.bytes(PackBaseline) / 8; i++)
         p.m(base[2 * i], base[2 * i + 1]);
+    // the depth/stencil registers (the runtime's, as NVK leaves them for Metal's default state in a pass without the attachment)
+    {
+        DepthStencilRegs unknown;
+        for (uint32_t &v : unknown.v)
+            v = ~0u;
+        emitDepthStencil(p, depthStencilRegs(DepthStencilDesc(), 0, 0, false), unknown);
+        ds_ = unknown;
+    }
     // root table selected for LOAD_CONSTANT_BUFFER from here on (draws reselect it after binding set 0 as a cbuf); NVK's init
     // above zeroed it, so sample 0's location (the pixel centre, nvk_root_descriptor_table.draw.sample_locations) goes in now
     p.inc(CB_SELECTOR_A, {kRootBytes, uint32_t(root_.va >> 32), uint32_t(root_.va)});
@@ -463,6 +471,8 @@ Pipeline *Device::pipeline(uint64_t keyHash, PackForm form, bool caTransform)
         pl.positionOffset = uint16_t(offset);
     }
     pl.caTransform = caTransform;
+    if (const char *ds = strstr(pack_.string(pp.keyString), "ds="))
+        sscanf(ds, "ds=%u", &pl.depthFormat);
     for (uint32_t k = 0; k < pp.entries; k++)
         if (pp.entry[k].kind == EntryFetch && pp.entry[k].slot < 8)
             pl.fetchBits |= uint8_t(1u << pp.entry[k].slot);
@@ -909,26 +919,26 @@ bool Device::createView(const Texture &of, uint32_t format, Texture &t)
 
 bool Device::createMemoryless(uint32_t width, uint32_t height, uint32_t format, Texture &t)
 {
-    if (!shape(width, height, format, t))
+    uint64_t bytes, align;
+    if (format == kZetaFormat ? !zetaShape(width, height, t, bytes, align) : !shape(width, height, format, t))
         return false;
     t.memoryless = true;
     return true;
 }
 
-// ---- mip chains (raw/fx): kind-0xFE memory, made on demand ----
+// ---- block-linear memory (raw/fx mip chains: kind 0xFE; zeta: kZetaPteKind), made on demand ----
 
-constexpr uint64_t kBlChunk = 16ull << 20;  // a chunk of chains (a chain over half of one gets its own)
+constexpr uint64_t kBlChunk = 16ull << 20;  // a chunk of images (an image over half of one gets its own)
 constexpr uint64_t kBlAlign = 16384;        // NVK's image alignment here (r12-cafx niloracle), a multiple of NIL's
 
-// lock_ held
-bool Device::blAlloc(uint64_t bytes, uint64_t align, Span &s)
+bool Device::tiledAlloc(std::vector<Chunk> &chunks, uint32_t kind, uint64_t bytes, uint64_t align, Span &s)
 {
     align = std::max(align, kBlAlign);
     bytes = (bytes + kBlAlign - 1) & ~(kBlAlign - 1);
     s = {};
     for (int pass = 0; pass < 2; pass++) {
-        for (uint32_t c = 0; c < blChunks_.size(); c++) {
-            Chunk &ch = blChunks_[c];
+        for (uint32_t c = 0; c < chunks.size(); c++) {
+            Chunk &ch = chunks[c];
             if (!ch.memory || ch.dedicated)
                 continue;
             for (auto it = ch.free.begin(); it != ch.free.end(); ++it) {
@@ -956,7 +966,7 @@ bool Device::blAlloc(uint64_t bytes, uint64_t align, Span &s)
         ch.memory = reinterpret_cast<void *>(memory);
         ch.bytes = size;
         ch.dedicated = dedicated;
-        if (!k_.importPages(ch.memory, size, ch.bo) || !k_.bindImport(ch.memory, ch.bo, fx::kBlockLinearKind) ||
+        if (!k_.importPages(ch.memory, size, ch.bo) || !k_.bindImport(ch.memory, ch.bo, kind) ||
             (ch.bo.va & (kBlAlign - 1))) {
             if (ch.bo.handle)
                 k_.free(ch.bo);
@@ -964,30 +974,29 @@ bool Device::blAlloc(uint64_t bytes, uint64_t align, Span &s)
             return false;
         }
         uint32_t c = 0;
-        while (c < blChunks_.size() && blChunks_[c].memory)
+        while (c < chunks.size() && chunks[c].memory)
             c++;
-        if (c == blChunks_.size())
-            blChunks_.emplace_back();
+        if (c == chunks.size())
+            chunks.emplace_back();
         stats.poolBytes += size;
         stats.poolChunks++;
         if (dedicated) {
             ch.used = bytes;
             s = {c, 0, bytes, ch.bo.va, static_cast<uint8_t *>(ch.memory)};
-            blChunks_[c] = std::move(ch);
+            chunks[c] = std::move(ch);
             return true;
         }
         ch.free[0] = size;
-        blChunks_[c] = std::move(ch);
+        chunks[c] = std::move(ch);
     }
     return false;
 }
 
-// lock_ held
-void Device::blFree(Span &s)
+void Device::tiledFree(std::vector<Chunk> &chunks, Span &s)
 {
-    if (!s.valid() || s.chunk >= blChunks_.size())
+    if (!s.valid() || s.chunk >= chunks.size())
         return;
-    Chunk &ch = blChunks_[s.chunk];
+    Chunk &ch = chunks[s.chunk];
     ch.used -= s.bytes;
     if (ch.dedicated) {
         stats.poolBytes -= ch.bytes;
@@ -1511,40 +1520,84 @@ bool Device::createYcbcrTexture(uint64_t surfaceId, void *base, uint64_t allocBy
     return true;
 }
 
-// A memoryless attachment's memory: one per size and format, kept while passes use it (m2v 0105 gives a memoryless attachment
-// linear memory in a pass that renders to linear memory, as every raw pass does). Called with the device lock held.
-Texture *Device::backing(const Texture &m, uint32_t tag)
+// A memoryless attachment's memory: one per size, format, tag and layout, kept while passes use it (m2v 0105 gives a memoryless
+// attachment linear memory in a pass that renders to linear memory; NVK renders a pass with a depth/stencil attachment into
+// block-linear colour). Called with the device lock held.
+Texture *Device::backing(const Texture &m, uint32_t tag, bool blockLinear)
 {
+    blockLinear |= m.zeta;
     for (Backing *b : backings_)
         if (b->texture.width == m.width && b->texture.height == m.height && b->texture.format == m.format &&
-            b->tag == tag) {
+            b->tag == tag && b->texture.blockLinear == blockLinear) {
             b->lastCommit = commitCount_;
             return &b->texture;
         }
     Backing *b = new Backing;
     Texture &t = b->texture;
-    if (!shape(m.width, m.height, m.format, t)) {
-        delete b;
-        return nullptr;
+    if (m.zeta) {
+        uint64_t bytes, align;
+        if (!zetaShape(m.width, m.height, t, bytes, align) ||
+            !tiledAlloc(zChunks_, kZetaPteKind, bytes, align, t.span)) {
+            delete b;
+            return nullptr;
+        }
+        t.va = t.span.va;
+    } else if (blockLinear) {
+        fx::MipChain c;
+        const FormatInfo *f = formatInfo(m.format);
+        if (!f || !shape(m.width, m.height, m.format, t) || !fx::mipChainLayout(m.width, m.height, 1, t.bpp, c) ||
+            !blAlloc(c.bytes, c.align, t.span) || !(t.tic = allocTic())) {
+            blFree(t.span);
+            delete b;
+            return nullptr;
+        }
+        t.va = t.span.va;
+        t.pitch = c.level[0].rowBytes;
+        t.blockLinear = true;
+        t.blockHeight = c.level[0].yLog2;
+        t.layerBytes = uint64_t(c.level[0].rowBytes) * c.level[0].rows;
+        uint32_t w[8];
+        fx::mipChainTic(c, t.va, f->tic0, f->srgb, 0, 1, w);
+        memcpy(tic_.cpu + 32 * t.tic, w, 32);  // visible at the next submission's header invalidate
+    } else {
+        if (!shape(m.width, m.height, m.format, t)) {
+            delete b;
+            return nullptr;
+        }
+        t.pitch = (m.width * t.bpp + 255) & ~255u;
+        if (!poolAlloc(uint64_t(t.pitch) * t.height, t.span)) {
+            delete b;
+            return nullptr;
+        }
+        t.va = t.span.va;
+        t.cpu = t.span.cpu;
+        if (!(t.tic = allocTic())) {
+            poolFree(t.span);
+            delete b;
+            return nullptr;
+        }
+        t.renderable = t.renderable && linearTarget(t);
+        writeTic(t);
     }
-    t.pitch = (m.width * t.bpp + 255) & ~255u;
-    if (!poolAlloc(uint64_t(t.pitch) * t.height, t.span)) {
-        delete b;
-        return nullptr;
-    }
-    t.va = t.span.va;
-    t.cpu = t.span.cpu;
-    if (!(t.tic = allocTic())) {
-        poolFree(t.span);
-        delete b;
-        return nullptr;
-    }
-    t.renderable = t.renderable && linearTarget(t);
-    writeTic(t);
     b->tag = tag;
     b->lastCommit = commitCount_;
     backings_.push_back(b);
     return &t;
+}
+
+// lock_ held
+void Device::freeBacking(Texture &t)
+{
+    if (t.tic) {
+        memset(tic_.cpu + 32 * t.tic, 0, 32);
+        freeTic_.push_back(t.tic);
+    }
+    if (t.zeta)
+        tiledFree(zChunks_, t.span);
+    else if (t.blockLinear)
+        blFree(t.span);
+    else
+        poolFree(t.span);
 }
 
 // Backings no pass used for 600 command buffers (~10 s of frames) and whose last use completed go back to the pool.
@@ -1566,9 +1619,7 @@ void Device::trimBackings()
     for (auto it = backings_.begin(); it != backings_.end();) {
         Backing *b = *it;
         if (commitCount_ - b->lastCommit > 600 && (!b->lastUse || done(b->lastUse))) {
-            memset(tic_.cpu + 32 * b->texture.tic, 0, 32);
-            freeTic_.push_back(b->texture.tic);
-            poolFree(b->texture.span);
+            freeBacking(b->texture);
             delete b;
             it = backings_.erase(it);
             continue;
@@ -1645,6 +1696,7 @@ CommandBuffer *Device::begin()
     cb.uploadStart_ = upload_.head;
     memcpy(cb.rootPush_, rootPush_, sizeof rootPush_);
     cb.restart_ = restart_;
+    cb.ds_ = ds_;
     cb.drawn_ = false;
     {
         std::lock_guard<std::mutex> l(lock_);
@@ -1700,13 +1752,26 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
     e.cb_ = this;
     e.dev_ = dev_;
     e.pass_ = pass;
-    // the render hardware takes one memory layout for all of a pass's color targets
-    bool blockLinear = false, pitch = false;
+    // the render hardware takes one memory layout for all of a pass's color targets, block-linear beside a zeta (NVK renders
+    // its pitch colors through tiled shadows then); memoryless ones get a backing of the pass's layout
+    const Texture *zeta = pass.depthStencil.texture;
+    if (zeta && (!zeta->zeta || !zeta->memoryless))
+        return nullptr;
+    bool blockLinear = zeta != nullptr, pitch = false;
     for (uint32_t j = 0; j < pass.count && j < 8; j++)
         if (const Texture *t = pass.color[j].texture)
-            (t->blockLinear ? blockLinear : pitch) = true;
+            if (!t->memoryless || !zeta)
+                (t->blockLinear ? blockLinear : pitch) = true;
     if (blockLinear && pitch)
         return nullptr;
+    if (zeta) {
+        std::lock_guard<std::mutex> l(dev_->lock_);
+        Texture *b = dev_->backing(*zeta);
+        if (!b)
+            return nullptr;
+        e.pass_.depthStencil.texture = b;
+        backings_.push_back(b);
+    }
     for (uint32_t j = 0; j < pass.count && j < 8; j++) {
         const Texture *t = pass.color[j].texture;
         if (!t)
@@ -1728,7 +1793,7 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
         }
         if (t->memoryless) {  // back it for this pass
             std::lock_guard<std::mutex> l(dev_->lock_);
-            Texture *b = dev_->backing(*t);
+            Texture *b = dev_->backing(*t, Device::kMemorylessTag + j, zeta != nullptr);
             if (!b)
                 return nullptr;
             e.pass_.color[j].texture = b;
@@ -1738,8 +1803,11 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
     }
     // the render area: from the origin, the smallest attachment's extent, each axis within the pass's target size where it
     // names one (m2v render_pass.rs `area`); Metal's default viewport and scissor cover it (render_state.rs `metal_defaults`)
+    const Texture *extents[9] = {zeta};
     for (uint32_t j = 0; j < pass.count && j < 8; j++)
-        if (const Texture *t = e.pass_.color[j].texture) {
+        extents[1 + j] = e.pass_.color[j].texture;
+    for (const Texture *t : extents)
+        if (t) {
             e.areaW_ = e.areaW_ ? std::min(e.areaW_, t->width) : t->width;
             e.areaH_ = e.areaH_ ? std::min(e.areaH_, t->height) : t->height;
         }
@@ -1806,6 +1874,7 @@ bool CommandBuffer::commit(uint32_t &seqno)
     d.retire(d.upload_, seq);
     memcpy(d.rootPush_, rootPush_, sizeof rootPush_);
     d.restart_ = restart_;
+    d.ds_ = ds_;
     {
         std::lock_guard<std::mutex> l(d.lock_);
         for (Texture *b : backings_)
@@ -1929,6 +1998,19 @@ void RenderEncoder::setBlendColor(const float rgba[4])
         memcpy(blendColor_, v, sizeof v);
         blendColorDirty_ = true;
     }
+}
+
+void RenderEncoder::setDepthStencil(const DepthStencilDesc *d)
+{
+    ds_ = d ? *d : DepthStencilDesc();
+    dsDirty_ = true;
+}
+
+void RenderEncoder::setStencilReference(uint32_t front, uint32_t back)
+{
+    stencilRef_[0] = front;
+    stencilRef_[1] = back;
+    dsDirty_ = true;
 }
 
 void RenderEncoder::barrier()
@@ -2077,6 +2159,14 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
             return false;
         }
     }
+    const Texture *zeta = pass_.depthStencil.texture;
+    // Metal tests a state's depth and stencil against the pass's hidden attachments where it has none (metal2vulkan
+    // depth_stencil.rs depth_without_attachment), which NVK's gating does not give
+    if (pl->depthFormat != (zeta ? kZetaFormat : 0) || (!zeta && ds_.active())) {
+        *why = "a depth/stencil state or format the pass's depth/stencil attachment does not take";
+        cb_->refusal = {RefDepthStencil, pl->depthFormat, zeta ? kZetaFormat : 0, ds_.active()};
+        return false;
+    }
     if (p_.room() < 1024)
         reserve();
     Device &d = *dev_;
@@ -2090,6 +2180,10 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
             p.m(DA_PRIMITIVE_RESTART_INDEX, restart);
             cb_->restart_ = restart;
         }
+    }
+    if (dsDirty_) {
+        emitDepthStencil(p, depthStencilRegs(ds_, stencilRef_[0], stencilRef_[1], zeta != nullptr), cb_->ds_);
+        dsDirty_ = false;
     }
     uint32_t *root = cb_->rootPush_;
     const PackPipeline &r = *pl->rec;
@@ -2491,7 +2585,7 @@ void RenderEncoder::end()
     d.push_.head = uint64_t(reinterpret_cast<uint8_t *>(p_.at) - d.push_.bo.cpu);  // give back the unused reservation
     // pass prologue: the full barrier m2v puts between passes, the targets, then the clears
     const std::vector<Clear> cl = clears();
-    const uint32_t room = 160 + 8 * 32 + uint32_t(cl.size()) * 48;
+    const uint32_t room = 160 + 8 * 32 + uint32_t(cl.size()) * 48 + kZetaTargetWords + kZetaClearWords + 16;
     uint64_t va;
     uint32_t *start = reinterpret_cast<uint32_t *>(d.alloc(d.push_, room * 4, 256, va));
     Push p{start, start + room};
@@ -2557,17 +2651,30 @@ void RenderEncoder::end()
         ct |= k << (4 + 3 * k);
     p.m(CT_SELECT, ct | count);
     p.inc(SURFACE_CLIP_H, {areaW_ << 16, areaH_ << 16});  // the render area (nvk_CmdBeginRendering)
-    p.m(ZT_SELECT, 0);
+    const DepthStencilAttachment &zs = pass_.depthStencil;
+    zetaTargetWords(p, zs.texture);
+    // NVK clears depth and stencil with the first color the pass clears over its render area, else on their own
+    uint32_t zsBits = zs.texture ? zetaClearBits(zs.clearDepth, zs.clearStencil) : 0;
+    zetaClearValues(p, zsBits & 1, zs.depth, zsBits & 2, zs.stencil);
     for (const Clear &c : cl) {
         if (c.own)
             continue;
         uint32_t v[4];
         clearValue(pass_.color[c.target].texture->format, c.value, v);
+        const bool area = !c.x0 && !c.y0 && c.x1 == areaW_ && c.y1 == areaH_;
         p.inc(COLOR_CLEAR_VALUE, {v[0], v[1], v[2], v[3]});
         p.inc(CLEAR_RECT_H, {c.x1 << 16 | c.x0, c.y1 << 16 | c.y0});
         p.m(CLEAR_SURFACE_CONTROL, 0x10);  // USE_CLEAR_RECT
         p.m(RENDER_ENABLE_OVERRIDE, 1);
-        p.m(CLEAR_SURFACE, 0x3c | c.target << 6);
+        p.m(CLEAR_SURFACE, 0x3c | c.target << 6 | (area ? zsBits : 0));
+        p.m(RENDER_ENABLE_OVERRIDE, 0);
+        zsBits = area ? 0 : zsBits;
+    }
+    if (zsBits) {
+        p.inc(CLEAR_RECT_H, {areaW_ << 16, areaH_ << 16});
+        p.m(CLEAR_SURFACE_CONTROL, 0x10);
+        p.m(RENDER_ENABLE_OVERRIDE, 1);
+        p.m(CLEAR_SURFACE, zsBits);
         p.m(RENDER_ENABLE_OVERRIDE, 0);
     }
     cb_->segment(start, p.at);
