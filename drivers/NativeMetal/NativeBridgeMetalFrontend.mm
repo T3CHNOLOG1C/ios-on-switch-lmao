@@ -1686,6 +1686,20 @@ static bool systemCompiler();
     return function;
 }
 
+// A pipeline library holds an Apple GPU's compiled functions, none for this device (newPipelineLibraryWithFilePath: refuses
+// each), so the function is made from this library as without one.
+- (id<MTLFunction>)newFunctionWithName:(NSString *)name
+                        constantValues:(MTLFunctionConstantValues *)values
+                       pipelineLibrary:(id)pipelineLibrary
+                                 error:(NSError **)error
+{
+    (void)pipelineLibrary;
+    MTLFunctionDescriptor *d = [MTLFunctionDescriptor functionDescriptor];
+    d.name = name;
+    d.constantValues = values;
+    return [self newFunctionWithDescriptor:d error:error];
+}
+
 - (void)newFunctionWithDescriptor:(MTLFunctionDescriptor *)d
                 completionHandler:(void (^)(id<MTLFunction>, NSError *))handler
 {

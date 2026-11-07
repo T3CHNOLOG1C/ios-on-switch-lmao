@@ -12,6 +12,7 @@ use metal2vulkan_runtime::Device;
 const COUNTS: &[(&str, u64)] = &[
     ("argumentBuffersSupport", 0),
     ("maxThreadgroupMemoryLength", 16384),
+    ("maxComputeThreadgroupMemory", 16384),
     ("maxVertexTextures", 31),
     ("maxFragmentTextures", 31),
     ("maxComputeTextures", 31),
@@ -55,6 +56,9 @@ const NO: &[&str] = &[
     "supportsSIMDReduction",
     "supports32BitFloatFiltering",
     "supportsTexture2DMultisampleArray",
+    "isLargeMRTSupported",
+    "supportsComputeCompressedTextureWrite",
+    "supportsConditionalLoadStore",
 ];
 
 pub(crate) fn count(selector: &str) -> Option<u64> {
@@ -77,6 +81,7 @@ pub(crate) fn device_bound(device: &Device, selector: &str, color_attachments: u
     let p = device.properties();
     let l = &p.description.limits;
     Some(match selector {
+        "maxComputeThreadgroupMemory" => p.max_threadgroup_memory_length,
         "maxVertexAttributes" => l.max_vertex_input_attributes.into(),
         "maxInterpolants" | "maxInterpolatedComponents" => l.max_fragment_input_components.into(),
         "maxTextureWidth1D" => l.max_image_dimension_1d.into(),
