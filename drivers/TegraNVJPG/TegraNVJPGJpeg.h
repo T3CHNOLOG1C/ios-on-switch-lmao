@@ -520,7 +520,7 @@ static inline uint32_t tegra_nvjpg_planes(uint32_t format)
     }
 }
 
-static inline int tegra_nvjpg_is_yuv(uint32_t format)
+static inline bool tegra_nvjpg_is_yuv(uint32_t format)
 {
     return format == TEGRA_NVJPG_OUT_NV12 || format == TEGRA_NVJPG_OUT_I420 || format == TEGRA_NVJPG_OUT_NV16 ||
            format == TEGRA_NVJPG_OUT_NV24 || format == TEGRA_NVJPG_OUT_YUY2;
