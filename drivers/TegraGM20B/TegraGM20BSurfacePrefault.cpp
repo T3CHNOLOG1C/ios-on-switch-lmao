@@ -11,6 +11,7 @@
 #include <IOKit/IOService.h>
 #include <kern/task.h>
 #include <kern/thread_call.h>
+#include "OriginalIOSurfaceRootUserClient.h"
 #include "TegraGM20BSurfacePrefault.h"
 #include "TegraGM20BViews.h"
 
@@ -23,9 +24,12 @@ extern int memorystatus_vm_pressure_level;
 
 namespace
 {
-// kits/SwitchABI's IOSurface table does not hold the kinds' create methods yet: no selector matches, nothing is faulted
-// in, until these come from it.
-constexpr TegraGM20BSurfaceCreateAbi kCreateAbi = {{~0u, ~0u, ~0u, ~0u}, 0};
+using RootClient = OriginalIOSurfaceRootUserClient;
+constexpr TegraGM20BSurfaceCreateAbi kCreateAbi = {
+	{uint32_t(RootClient::createSurfaceSelector),
+	 uint32_t(RootClient::createSurfaceFastPathSelector),
+	 uint32_t(RootClient::createSurfaceClientMemorySelector), ~0u},
+	uint32_t(RootClient::createOutputSurfaceID)};
 constexpr uint32_t kQueued =
 	16;  // creates waiting for the thread call; past it a create is left to fault lazily
 
