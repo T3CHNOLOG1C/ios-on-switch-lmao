@@ -35,6 +35,7 @@
 #include "NativeBridgeMetalFrontend.h"
 #include "AsyncPipelines.h"
 #include "GpuMemoryRelease.h"
+#include "ImageFilterLink.h"
 #include "QueuePriority.h"
 #include "SurfaceLayout.h"
 #include "SwitchFrameTimeline.h"
@@ -1854,10 +1855,9 @@ static bool systemCompiler();
     return (id<MTLFunction>)function;
 }
 
-// No externFunctionNames (the plugin answers it nil): 21H461's Core Image takes a graph to its legacy DAG
-// (CI::LegacyDAGDescriptor, newLibraryWithImageFilterFunctionsSPI:, refused below) when its kernels are all among those names
-// (CI::DAGPrecompiledKernels) but not all stitchable (CI::MetalDAGHelper::analyze_kernels); without them such a graph is made
-// from source, which is served.
+// No externFunctionNames (the plugin answers it nil). Metal lists a Core Image library's functions there and none in functionNames;
+// 21H461's Core Image counts its own kernels (ci_stdlib, ci_filters: CI::DAGPrecompiledKernels) from it, so on this device it makes
+// every graph of them from source rather than stitching or linking it (CI::LegacyDAGDescriptor, newLibraryWithImageFilterFunctionsSPI:).
 @end
 
 // Each entry of a library's metallib function list, in order, until `visit` answers false: its NAME and, when both tags are there, its
@@ -5629,6 +5629,33 @@ static bool systemCompiler()
 @protocol NBOriginalStitching
 - (NSString *)newDagStringWithGraphs:(NSArray<MTLFunctionStitchingGraph *> *)graphs;
 @end
+
+@protocol NBImageFilterLinking
+- (id<MTLLibrary>)newLibraryWithCIFilters:(NSArray *)functions
+                  imageFilterFunctionInfo:(const switch_metal::ImageFilterFunctionInfo *)info
+                                    error:(NSError **)error;
+@end
+
+// A library the system's Metal compiler made from a request (a stitched DAG, Core Image's filter-function link), loaded as any library.
+static id<MTLLibrary> libraryFromCompilerRequest(id<MTLDevice> device, uint32_t type,
+                                                 const std::vector<uint8_t> &request, NSString *what, NSError **error)
+{
+    NSString *warnings = nil, *failure = nil;
+    NSData *metallib = codeGenRequest(type, request, &warnings, &failure);
+    if (!metallib) {
+        NBLOG(@"native-metal: %@: %@", what, [failure substringToIndex:MIN(failure.length, (NSUInteger)300)]);
+        if (error)
+            *error = [NSError errorWithDomain:MTLLibraryErrorDomain
+                                         code:MTLLibraryErrorCompileFailure
+                                     userInfo:@{NSLocalizedDescriptionKey : failure}];
+        return nil;
+    }
+    dispatch_data_t data = dispatch_data_create(metallib.bytes, metallib.length, nullptr, ^{
+        (void)metallib;
+    });
+    return [device newLibraryWithData:data error:error];
+}
+
 // The base class's limits table (-[_MTLDevice limits], the words after isa in 21H461). Metal's accessors read their field from it
 // (-[_MTLDevice maxTextureWidth2D] is limits+0x84), and frameworks read it directly, past this device's methods: PhotosUICore's texture
 // converter takes its largest image from 0x84/0x88 (-[PXGMetalTextureConverter createTextureFromCGImage:transform:alpha:options:],
@@ -5956,20 +5983,7 @@ static void fillLimits(id)
     word(0);
     word(0x61726964 /* 'arid' */);
     word(0);
-    NSString *warnings = nil, *failure = nil;
-    NSData *metallib = codeGenRequest(14, request, &warnings, &failure);
-    if (!metallib) {
-        NBLOG(@"native-metal: stitched library: %@", [failure substringToIndex:MIN(failure.length, (NSUInteger)300)]);
-        if (error)
-            *error = [NSError errorWithDomain:MTLLibraryErrorDomain
-                                         code:MTLLibraryErrorCompileFailure
-                                     userInfo:@{NSLocalizedDescriptionKey : failure}];
-        return nil;
-    }
-    dispatch_data_t data = dispatch_data_create(metallib.bytes, metallib.length, nullptr, ^{
-        (void)metallib;
-    });
-    return [(id<MTLDevice>)self newLibraryWithData:data error:error];
+    return libraryFromCompilerRequest((id<MTLDevice>)self, 14, request, @"stitched library", error);
 }
 
 - (id<MTLLibrary>)newLibraryWithStitchedDescriptor:(MTLStitchedLibraryDescriptor *)d
@@ -6013,27 +6027,60 @@ static void fillLimits(id)
     return nil;
 }
 
-// Core Image's legacy DAG (CI::LegacyDAGDescriptor, CreateFunctionFromDAG) and kernel reflection (CIKernelReflection::reflectConstants).
-- (id<MTLLibrary>)newLibraryWithImageFilterFunctionsSPI:(id)functions
-                                imageFilterFunctionInfo:(id)info
+// Core Image's legacy DAG (CI::LegacyDAGDescriptor, CreateFunctionFromDAG) and the constants of a kernel made with function constants
+// from a library's unstitchable function (CIKernelReflection::reflectConstants, which links the function to itself and reads
+// ciKernelMain's). _MTLDevice sends the first to the second.
+- (id<MTLLibrary>)newLibraryWithImageFilterFunctionsSPI:(NSArray *)functions
+                                imageFilterFunctionInfo:(const switch_metal::ImageFilterFunctionInfo *)info
                                                   error:(NSError **)error
 {
-    (void)functions;
-    (void)info;
-    refuseLibrary(@"Core Image filter-function linking");
-    if (error)
-        *error = nbError(@"Core Image filter-function linking is not implemented");
-    return nil;
+    return [(id<NBImageFilterLinking>)self newLibraryWithCIFilters:functions imageFilterFunctionInfo:info error:error];
 }
 
-- (id<MTLLibrary>)newLibraryWithCIFilters:(id)functions imageFilterFunctionInfo:(id)info error:(NSError **)error
+- (id<MTLLibrary>)newLibraryWithCIFilters:(NSArray *)functions
+                  imageFilterFunctionInfo:(const switch_metal::ImageFilterFunctionInfo *)info
+                                    error:(NSError **)error
 {
-    (void)functions;
-    (void)info;
-    refuseLibrary(@"Core Image filter-function linking");
-    if (error)
-        *error = nbError(@"Core Image filter-function linking is not implemented");
-    return nil;
+    if (!systemCompiler()) {
+        refuseLibrary(@"Core Image filter-function linking");
+        if (error)
+            *error = nbError(
+                @"Core Image filter-function linking needs the system compiler, which this process does not load");
+        return nil;
+    }
+    if (!functions.count || !info) {
+        if (error)
+            *error = nbError(@"Core Image filter-function linking needs functions and their infos");
+        return nil;
+    }
+    std::vector<switch_metal::ImageFilterFunction> linked(functions.count);
+    std::vector<NSData *> bitcodes;
+    for (NSUInteger i = 0; i < functions.count; i++) {
+        id function = functions[i];
+        NSData *bitcode = [function isKindOfClass:[NBFunction class]] ? functionBitcode((NBFunction *)function) : nil;
+        if (!bitcode) {
+            if (error)
+                *error =
+                    nbError([NSString stringWithFormat:@"filter function %@ has no bitcode here", [function name]]);
+            return nil;
+        }
+        bitcodes.push_back(bitcode);
+        switch_metal::ImageFilterFunction &f = linked[i];
+        f.name = [[function name] UTF8String] ?: "";
+        f.bitcode = (const uint8_t *)bitcode.bytes;
+        f.bitcodeBytes = bitcode.length;
+        f.earlyOut = info[i].earlyOut;
+        if (info[i].argumentCount && info[i].arguments)
+            f.arguments.assign(info[i].arguments, info[i].arguments + info[i].argumentCount);
+    }
+    const std::vector<uint8_t> request = switch_metal::imageFilterLinkRequest(linked);
+    if (request.empty()) {
+        if (error)
+            *error = nbError(@"the filter functions do not fit one link request");
+        return nil;
+    }
+    return libraryFromCompilerRequest((id<MTLDevice>)self, switch_metal::kImageFilterLinkRequest, request,
+                                      @"Core Image filter-function link", error);
 }
 
 - (BOOL)supportsDynamicLibraries

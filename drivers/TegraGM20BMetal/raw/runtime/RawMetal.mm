@@ -526,6 +526,13 @@ static id twinPublish(id object, __strong id &slot, id made)
 - (id)rmTwin;  // made now if needed; nil if it cannot be
 @end
 
+// The m2v device's Core Image filter-function linking (_MTLDevice's newLibraryWithImageFilterFunctionsSPI: sends it here)
+@protocol RMImageFilterLinking
+- (id<MTLLibrary>)newLibraryWithCIFilters:(NSArray *)functions
+                  imageFilterFunctionInfo:(const void *)info
+                                    error:(NSError **)error;
+@end
+
 @interface RMDevice : NSObject  // the methods the device class gets (raw_metal_device_open); no state of its own
 - (void)rmCommit:(RMCommandBuffer *)cb;
 - (id<MTLTexture>)rmNewTexture:(MTLTextureDescriptor *)d tiled:(bool)tiled;
@@ -5547,6 +5554,49 @@ static id<MTLRenderPipelineState> pipelineTwin(MTLRenderPipelineDescriptor *d, M
                                                                              options:o
                                                                           reflection:r
                                                                                error:error]];
+}
+
+// The m2v device links these libraries from its own functions' bitcode: the functions here are their twins. Its methods, inherited
+// by this class, would be sent this device's functions.
+static NSArray *twinFunctions(NSArray *functions, NSError **error)
+{
+    NSMutableArray *twins = [NSMutableArray arrayWithCapacity:functions.count];
+    for (id f in functions) {
+        id twin = twinOf(f);
+        if (!twin) {
+            if (error)
+                *error = [NSError errorWithDomain:MTLLibraryErrorDomain
+                                             code:MTLLibraryErrorFunctionNotFound
+                                         userInfo:@{NSLocalizedDescriptionKey : @"a function with no m2v twin"}];
+            return nil;
+        }
+        [twins addObject:twin];
+    }
+    return twins;
+}
+
+- (id<MTLLibrary>)newLibraryWithStitchedDescriptor:(MTLStitchedLibraryDescriptor *)d error:(NSError **)error
+{
+    NSArray *twins = twinFunctions(d.functions, error);
+    if (!twins)
+        return nil;
+    MTLStitchedLibraryDescriptor *t = [d copy];
+    t.functions = twins;
+    return (id<MTLLibrary>)wrapLibrary(self, [gRM->fallback newLibraryWithStitchedDescriptor:t error:error], nil);
+}
+
+- (id<MTLLibrary>)newLibraryWithCIFilters:(NSArray *)functions
+                  imageFilterFunctionInfo:(const void *)info
+                                    error:(NSError **)error
+{
+    NSArray *twins = twinFunctions(functions, error);
+    if (!twins)
+        return nil;
+    return (id<MTLLibrary>)wrapLibrary(self,
+                                       [(id<RMImageFilterLinking>)gRM->fallback newLibraryWithCIFilters:twins
+                                                                                imageFilterFunctionInfo:info
+                                                                                                  error:error],
+                                       nil);
 }
 
 - (id<MTLHeap>)newHeapWithDescriptor:(MTLHeapDescriptor *)d

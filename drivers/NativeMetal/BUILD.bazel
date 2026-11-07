@@ -17,6 +17,7 @@ filegroup(
     srcs = [
         "AsyncPipelines.h",
         "GpuMemoryRelease.h",
+        "ImageFilterLink.h",
         "NativeBridgeMetalFrontend.h",
         "QueuePriority.h",
         "SurfaceLayout.h",
