@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// TegraNVDEC user client ABI, v7 (kernel: TegraNVDECUserClient.cpp; client: SwitchVideoDecoders/AVD).
+// TegraNVDEC user client ABI, v8 (kernel: TegraNVDECUserClient.cpp; client: SwitchVideoDecoders/AVD).
 //
 // The service is "TegraNVDEC" (IOServiceMatching), published by default once NVDEC has proven itself (N4). Its user
 // client's class is named AppleD5500UserClient, iPad7,1's own decoder client (VXD393), which some of 21H461's sandbox
@@ -29,7 +29,7 @@
 #define TEGRA_NVDEC_ABI_H
 #include <stdint.h>
 
-#define TEGRA_NVDEC_ABI_VERSION  7
+#define TEGRA_NVDEC_ABI_VERSION  8
 #define TEGRA_NVDEC_OPEN_TYPE    0x4e44       // 'ND'
 #define TEGRA_NVDEC_TUNNEL_MAGIC 0x4e44544eu  // 'NDTN'
 #define TEGRA_NVDEC_TUNNEL_PROBE 0xffffffffu
@@ -98,7 +98,7 @@ typedef struct {
 } TegraNVDECRange;
 
 // One NVDEC method. kind 0: `value` is written as is. kind 1: relocation, the method gets
-// (physical address of buffer `value` + `offset`) >> 8, so `offset` must be 256-byte aligned.
+// (NVDEC's address of buffer `value` + `offset`) >> 8, so `offset` must be 256-byte aligned.
 typedef struct {
     uint16_t method;  // byte offset in the NVDEC class (clc5b0.h)
     uint16_t kind;
@@ -136,14 +136,15 @@ typedef struct {
 } TegraNVDECReport;
 
 // A decoded picture of buffer `handle` (NV12 block linear, GOB height 2^block_height_log2: NVDEC's is 1) into the
-// '420v'/'420f' IOSurface `surface_id` of the calling task: the window (crop_x, crop_y, width x height), clipped to
-// the surface, at its corner. pitch: whole 64-byte GOBs; rows: whole pairs of 16-row blocks; chroma at chroma_offset
+// '420v'/'420f' IOSurface `surface_id` of the calling task: the window (crop_x, crop_y, width x height) at (dst_x,
+// dst_y), clipped to the surface (a grid image's tile goes to its place in the canvas; dst_x a multiple of 256 bytes). pitch: whole 64-byte GOBs; rows: whole pairs of 16-row blocks; chroma at chroma_offset
 // (256-byte aligned, past the luma), rows / 2 rows. kIOReturnUnsupported: VIC does not take it (one kernel line says
 // why); kIOReturnBadArgument: geometry outside the buffer or an unknown surface.
 typedef struct {
     uint32_t handle, surface_id;
     uint32_t pitch, rows, chroma_offset, block_height_log2;
     uint32_t crop_x, crop_y, width, height;
+    uint32_t dst_x, dst_y;
 } TegraNVDECPresent;
 
 typedef struct {

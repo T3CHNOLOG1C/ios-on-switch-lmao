@@ -35,8 +35,8 @@
 // windows emptied and the surfaces completed and released. The cache maintenance is the only CPU cost (about 80 us
 // per MiB) and it is paid by the scaler's callers only: nothing on the normal display path uses this service.
 //
-// Present (TegraVICPresent.h): TegraNVDEC's decoders hand each decoded picture here, on their own thread; it runs under
-// the same engine lock, with page lists of its own (the engine thread fills gPages outside the lock).
+// Present (TegraVICPresent.cpp): TegraNVDEC's decoders hand each decoded picture to VIC on their own thread, under the
+// same engine lock.
 #include <IOKit/IOLib.h>
 #include <IOKit/IOLocks.h>
 #include <IOKit/IOService.h>
@@ -309,180 +309,7 @@ void engineThread(void *, wait_result_t)
     }
 }
 
-// --- NVDEC's pictures (TegraVICPresent.h) -------------------------------------------------------------------------
-constexpr uint32_t kPresentPages = 8192;  // 32 MiB a side: a 4096x4096 NV12 picture and its IOSurface
-uint64_t *gPresentPages;                  // the destination surface's (the picture brings its own list)
-TegraVICJob gPresentJob;                  // under the engine lock
-
-struct {
-    uint64_t windowStart, pictures, refused, failed, engineUs, cpuUs, bytes;
-} gPresentStats;  // under the engine lock, but the refusals (atomic)
-
-uint32_t gPresentRefusedLogged;
-
-void presentRefused(uint32_t bit, const char *why)
-{
-    __atomic_add_fetch(&gPresentStats.refused, 1, __ATOMIC_RELAXED);
-    if (__atomic_fetch_or(&gPresentRefusedLogged, 1u << bit, __ATOMIC_RELAXED) & (1u << bit))
-        return;
-    IOLog("TegraVIC: present refused (first of its kind this boot): %s; the decoder copies on the CPU\n", why);
-}
-
-// One line per 5 s window with pictures (engine lock held).
-void presentStatsLine()
-{
-    const uint64_t now = switch_now_us();
-    if (!gPresentStats.windowStart)
-        gPresentStats.windowStart = now;
-    if (now - gPresentStats.windowStart < 5000000)
-        return;
-    const uint64_t n = gPresentStats.pictures ? gPresentStats.pictures : 1;
-    char line[200];
-    snprintf(line, sizeof(line),
-             "TegraVIC: %llus present=%llu refused=%llu failed=%llu engine=%lluus/picture cpu=%lluus/picture "
-             "mapped=%lluKB/picture",
-             (now - gPresentStats.windowStart) / 1000000, gPresentStats.pictures,
-             __atomic_load_n(&gPresentStats.refused, __ATOMIC_RELAXED), gPresentStats.failed,
-             gPresentStats.engineUs / n, gPresentStats.cpuUs / n, (gPresentStats.bytes >> 10) / n);
-    os_log(OS_LOG_DEFAULT, "%s", line);
-    bzero(&gPresentStats, sizeof(gPresentStats));
-    gPresentStats.windowStart = now;
-}
-
-// The picture and the surface as the engine sees them at `srcBase` / `dstBase`, and the 1:1 copy of the displayed
-// window into the surface's corner (clipped to it). The source takes the surface's format and colour standard, so the
-// job is the 4:2:0 pass-through (no matrix).
-const char *presentPlan(const TegraVICPicture *p, const TegraVICSurfaceDesc *d, uint64_t srcBase, uint64_t dstBase,
-                        TegraVICImage *src, TegraVICImage *dst, TegraVICOp *op)
-{
-    const char *why = tegra_vic_image_from(d, dstBase, dst);
-    if (why)
-        return why;
-    if (dst->format->kind == TEGRA_VIC_KIND_RGB)
-        return "destination is not 4:2:0";
-    if (tegra_vic_surface_extent(d) > (uint64_t)kPresentPages << 12)
-        return "surface over 32 MiB";
-    if (!p->pages || !p->bytes || p->bytes > (uint64_t)p->pageCount << 12 || p->bytes > (uint64_t)kPresentPages << 12)
-        return "picture memory outside its page list or over 32 MiB";
-    // Odd sizes are refused rather than rounded: the column or row VIC could not write would show what the buffer held.
-    if ((p->cropX | p->cropY) & 1)
-        return "picture window on odd coordinates";
-    const uint32_t w = p->width < dst->width ? p->width : dst->width;
-    const uint32_t h = p->height < dst->height ? p->height : dst->height;
-    if ((w | h) & 1)
-        return "picture of odd size";
-    if (w < TEGRA_VIC_MIN_DIM || h < TEGRA_VIC_MIN_DIM)
-        return "picture under 2x2";
-    bzero(src, sizeof(*src));
-    src->format = dst->format;
-    src->width = p->cropX + w;
-    src->height = p->cropY + h;
-    src->pitch[0] = src->pitch[1] = p->pitch;
-    src->rows[0] = p->rows;
-    src->rows[1] = p->rows / 2;
-    src->base[0] = srcBase;
-    src->span[0] = p->chromaOffset;
-    src->base[1] = srcBase + p->chromaOffset;
-    src->span[1] = p->chromaOffset < p->bytes ? p->bytes - p->chromaOffset : 0;
-    src->standard = dst->standard;
-    src->blockLinear = 1;
-    src->blockHeightLog2 = p->blockHeightLog2;
-    bzero(op, sizeof(*op));
-    op->srcX = (uint64_t)p->cropX << 16;
-    op->srcY = (uint64_t)p->cropY << 16;
-    op->srcW = (uint64_t)w << 16;
-    op->srcH = (uint64_t)h << 16;
-    op->dstW = w;
-    op->dstH = h;
-    op->nearest = 1;  // 1:1
-    return nullptr;
-}
 }  // namespace
-
-extern "C" bool tegra_vic_present_ready(void)
-{
-    const TegraVICTraits *t = tegra_vic_traits();
-    return __atomic_load_n(&gPresentPages, __ATOMIC_ACQUIRE) && tegra_vic_ready() && t && t->blockLinearIn;
-}
-
-extern "C" int tegra_vic_present(const TegraVICPicture *p, task_t task, const char **why)
-{
-    *why = nullptr;
-    if (!tegra_vic_present_ready()) {
-        *why = "VIC is not published, or block-linear input is not proven (see the V4 line)";
-        presentRefused(0, *why);
-        return -19;
-    }
-    const uint64_t t0 = switch_now_us();
-    TegraVICSurface surface;
-    if (tegra_vic_surface_lookup(p->surfaceID, task, &surface)) {
-        *why = "surface ID not found for this task";
-        presentRefused(1, *why);
-        return -22;
-    }
-    // Checked before the engine lock, at the windows' own addresses, so a refusal costs no engine time.
-    const uint64_t srcWindow = kTegraVICWindowBase + TEGRA_VIC_WINDOW_SRC * kTegraVICWindowBytes;
-    const uint64_t dstWindow = kTegraVICWindowBase + TEGRA_VIC_WINDOW_DST * kTegraVICWindowBytes;
-    TegraVICImage src, dst;
-    TegraVICOp op;
-    *why = presentPlan(p, &surface.desc, srcWindow, dstWindow, &src, &dst, &op);
-    TegraVICJob *check = *why ? nullptr : IONew(TegraVICJob, 1);
-    if (!*why && !check)
-        *why = "no memory for the check";
-    if (!*why)
-        *why = tegra_vic_build(&src, &dst, &op, tegra_vic_traits(), tegra_vic_config_address(),
-                               tegra_vic_filter_address(), check);
-    if (check)
-        IODelete(check, TegraVICJob, 1);
-    if (*why) {
-        tegra_vic_surface_release(&surface);
-        presentRefused(2, *why);
-        return -95;
-    }
-    // The engine lock from here: the page lists are shared by every decoder thread that presents.
-    tegra_vic_lock();
-    uint32_t dstPages = 0;
-    if (tegra_vic_surface_prepare(&surface, tegra_vic_surface_extent(&surface.desc), gPresentPages, kPresentPages,
-                                  &dstPages) != kIOReturnSuccess) {
-        tegra_vic_unlock();
-        tegra_vic_surface_release(&surface);
-        *why = "the surface could not be wired";
-        presentRefused(3, *why);
-        return -12;
-    }
-    const uint32_t srcPages = (uint32_t)((p->bytes + 0xfff) >> 12);
-    const uint64_t dstBase = tegra_vic_window_map(TEGRA_VIC_WINDOW_DST, gPresentPages, dstPages, true);
-    const uint64_t srcBase = tegra_vic_window_map(TEGRA_VIC_WINDOW_SRC, p->pages, srcPages, false);
-    *why = presentPlan(p, &surface.desc, srcBase, dstBase, &src, &dst, &op);
-    // NVDEC wrote the picture to DRAM and no CPU writes it (NVDEC's buffers are zeroed and cleaned when they are
-    // handed out, and the decoder only reads them): the source needs no cache maintenance. The destination does: a
-    // fresh IOSurface's pages were zeroed through the CPU's caches, and a dirty line written back later would land on
-    // VIC's output (a green stripe); the second flush drops lines a CPU reader may have pulled in meanwhile.
-    tegra_vic_cache_pages(SWITCH_DCACHE_CLEAN_INVALIDATE, gPresentPages, dstPages);
-    switch_dcache_sync();
-    if (!*why)
-        *why = tegra_vic_build(&src, &dst, &op, tegra_vic_traits(), tegra_vic_config_address(),
-                               tegra_vic_filter_address(), &gPresentJob);
-    uint64_t busy = 0;
-    int err = *why ? -95 : tegra_vic_run(&gPresentJob, &busy);
-    if (!*why && err)
-        *why = "the job did not finish";
-    tegra_vic_cache_pages(SWITCH_DCACHE_CLEAN_INVALIDATE, gPresentPages, dstPages);
-    switch_dcache_sync();
-    tegra_vic_window_clear(TEGRA_VIC_WINDOW_DST);
-    tegra_vic_window_clear(TEGRA_VIC_WINDOW_SRC);
-    gPresentStats.pictures++;
-    if (err)
-        gPresentStats.failed++;
-    gPresentStats.engineUs += busy;
-    gPresentStats.cpuUs += (switch_now_us() - t0) - busy;
-    gPresentStats.bytes += ((uint64_t)srcPages + dstPages) << 12;
-    presentStatsLine();
-    tegra_vic_unlock();
-    tegra_vic_surface_complete(&surface);
-    tegra_vic_surface_release(&surface);
-    return err;
-}
 
 namespace {
 void queueJob(Job *job)
@@ -879,12 +706,7 @@ extern "C" int tegra_vic_publish(void)
         return -12;
     }
     service->registerService();
-    // NVDEC's pictures (TegraVICPresent.h), only with block-linear input proven; their page lists last, as the ready
-    // bit: without them every present is refused and the decoders copy on the CPU.
-    if (tegra_vic_traits()->blockLinearIn) {
-        if (uint64_t *dst = IONew(uint64_t, kPresentPages))
-            __atomic_store_n(&gPresentPages, dst, __ATOMIC_RELEASE);
-    }
+    tegra_vic_present_start();
     IOLog("TegraVIC: V5 ok AppleM2ScalerCSCDriver published (Apple's classes, VIC's slots: newUserClient %d; "
           "IOSurfaceAcceleratorClient; BGRA, RGBA, 420v, 420f; transforms %#x; up to %ux%u, %ux up, %ux down); "
           "NVDEC present %s\n",

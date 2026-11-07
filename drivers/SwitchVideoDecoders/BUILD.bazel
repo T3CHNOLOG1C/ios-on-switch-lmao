@@ -62,6 +62,7 @@ ios_binary(
     name = "AVD",
     srcs = [
         "AVD/AVDDecoder.c",
+        "AVD/AVDTiles.c",
         "AVD/H264NVDEC.c",
         "AVD/H264Syntax.c",
         "AVD/NVDECClient.c",

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// NVDEC's pictures into VideoToolbox's buffers on VIC (TegraVICUserClient.cpp), for TegraNVDEC's Present method.
+// NVDEC's pictures into VideoToolbox's buffers on VIC (TegraVICPresent.cpp), for TegraNVDEC's Present method.
 //
 // NVDEC writes NV12 in Tegra block linear (16Bx2 sectors, GOB height 2) into its own buffers; VideoToolbox's clients
 // want pitch-linear '420v'/'420f' IOSurfaces. VIC copies one into the other (the 4:2:0 pass-through V4 proves,
@@ -8,8 +8,9 @@
 // snoop the CPU's caches reads what VIC wrote.
 //
 // Synchronous on the caller's thread (the decoder's, which sleeps on VIC's syncpoint interrupt), serialised with the
-// IOSurfaceAccelerator jobs by the engine lock. The IOSurface is looked up in `task` (the caller's), as Apple's scaler
-// looks surfaces up. A refusal (why set) costs no engine time: the caller copies on the CPU instead.
+// IOSurfaceAccelerator jobs by the engine lock. Only the destination rows the picture covers are mapped and kept
+// coherent, so a tile of a grid image costs its own rows, not the canvas. The IOSurface is looked up in `task` (the
+// caller's), as Apple's scaler looks surfaces up. A refusal (why set) costs no engine time.
 #ifndef TEGRA_VIC_PRESENT_H
 #define TEGRA_VIC_PRESENT_H
 #include <kern/task.h>
@@ -24,6 +25,7 @@ typedef struct {
     uint32_t blockHeightLog2;  // GOBs a block: NVDEC's GOB_2 is 1
     uint32_t cropX, cropY;     // the displayed window's corner (even)
     uint32_t width, height;    // its size (even); clipped to the destination's
+    uint32_t dstX, dstY;       // where in the destination it goes (even; dstX a multiple of 256 bytes but 0)
     uint32_t surfaceID;        // a '420v' or '420f' IOSurface of `task`
 } TegraVICPicture;
 
@@ -32,6 +34,7 @@ extern "C" {
 #endif
 // VIC is published (V5) and copies block-linear 4:2:0 exactly (V4).
 bool tegra_vic_present_ready(void);
+void tegra_vic_present_start(void);  // V5, once block-linear input is proven: presents are taken from here on
 // 0 when the picture is in the IOSurface; -19 VIC not ready, -22 bad surface ID, -95 a shape VIC does not take, -12 no
 // memory, -60 the job did not finish; `why` says which (static text).
 int tegra_vic_present(const TegraVICPicture *picture, task_t task, const char **why);

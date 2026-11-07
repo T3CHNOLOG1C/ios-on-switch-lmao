@@ -103,29 +103,37 @@ extern "C" void tegra_vic_surface_release(TegraVICSurface *s)
     bzero(s, sizeof(*s));
 }
 
-// Wires the surface (IOSurface::prepare) and lists the physical pages of its first `extent` bytes. The memory must
-// start on a page (IOSurface allocations do).
-extern "C" IOReturn tegra_vic_surface_prepare(TegraVICSurface *s, uint64_t extent, uint64_t *pages, uint32_t max,
-                                              uint32_t *count)
+// Wires the surface once (IOSurface::prepare) and lists the physical pages of [offset, offset + bytes), from the page
+// holding `offset`. The memory must start on a page (IOSurface allocations do).
+extern "C" IOReturn tegra_vic_surface_pages(TegraVICSurface *s, uint64_t offset, uint64_t bytes, uint64_t *pages,
+                                            uint32_t max, uint32_t *count)
 {
     *count = 0;
-    const uint64_t bytes = (extent + 0xfff) & ~0xfffull;
-    if (!extent || bytes / 4096 > max || extent > s->memory->getLength())
+    const uint64_t first = offset >> 12, end = (offset + bytes + 0xfff) >> 12;
+    if (!bytes || offset + bytes > s->memory->getLength() || end - first > max)
         return kIOReturnBadArgument;
-    // IOSurface::prepare keeps the surface's own wire count (and returns 0 even when the descriptor's prepare fails);
-    // the descriptor is prepared once more here, which is the result that counts.
-    if (tegra_vic_ios_prepare(s->surface) != kIOReturnSuccess)
-        return kIOReturnNoMemory;
-    if (s->memory->prepare() != kIOReturnSuccess) {
-        (void)tegra_vic_ios_complete(s->surface);
-        return kIOReturnNoMemory;
+    if (!s->prepared) {
+        // IOSurface::prepare keeps the surface's own wire count (and returns 0 even when the descriptor's prepare
+        // fails); the descriptor is prepared once more here, which is the result that counts.
+        if (tegra_vic_ios_prepare(s->surface) != kIOReturnSuccess)
+            return kIOReturnNoMemory;
+        if (s->memory->prepare() != kIOReturnSuccess) {
+            (void)tegra_vic_ios_complete(s->surface);
+            return kIOReturnNoMemory;
+        }
+        s->prepared = true;
     }
-    s->prepared = true;
-    if (!switch_dma_page_list(s->memory, bytes, pages, max, count)) {
+    if (!switch_dma_page_list(s->memory, offset, bytes, pages, max, count)) {
         tegra_vic_surface_complete(s);
         return kIOReturnNotAligned;
     }
     return kIOReturnSuccess;
+}
+
+extern "C" IOReturn tegra_vic_surface_prepare(TegraVICSurface *s, uint64_t extent, uint64_t *pages, uint32_t max,
+                                              uint32_t *count)
+{
+    return tegra_vic_surface_pages(s, 0, extent, pages, max, count);
 }
 
 // r18-planes: VIC wrote the surface (a TransformSurface destination): its seed moves as a CPU write-unlock or Apple's

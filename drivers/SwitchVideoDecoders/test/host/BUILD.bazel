@@ -168,6 +168,8 @@ host_library(
     name = "avd_host",
     srcs = [
         "avd_host.c",
+        "//drivers/SwitchVideoDecoders:AVD/AVDDecoder.h",
+        "//drivers/SwitchVideoDecoders:AVD/AVDTiles.c",
         "//drivers/SwitchVideoDecoders:AVD/NVDECClient.h",
         "//drivers/SwitchVideoDecoders:AVD/VTDecoderSPI.h",
     ],

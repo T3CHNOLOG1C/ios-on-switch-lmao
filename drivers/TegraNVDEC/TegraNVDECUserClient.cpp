@@ -316,6 +316,8 @@ IOReturn AppleD5500UserClient::run(uint32_t method, const void *in, uint32_t inS
         vic.cropY = p->crop_y;
         vic.width = p->width;
         vic.height = p->height;
+        vic.dstX = p->dst_x;
+        vic.dstY = p->dst_y;
         vic.surfaceID = p->surface_id;
         const char *why = nullptr;
         const int err = tegra_vic_present(&vic, current_task(), &why);
