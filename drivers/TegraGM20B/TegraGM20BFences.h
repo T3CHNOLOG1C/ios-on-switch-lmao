@@ -13,6 +13,10 @@
 #include <stdint.h>
 #include "TegraGM20BABI.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 static inline uint32_t tgm_fence_uid(uint64_t writer)
 {
 	return (uint32_t)(writer >> 32);
@@ -29,7 +33,7 @@ static inline uint32_t tgm_fence_seqno(uint64_t writer)
 static inline int tgm_fence_merge(uint64_t *acc, uint32_t *n, uint32_t max, uint64_t writer,
 				  uint32_t self)
 {
-	uint32_t i;
+	uint32_t i = 0;
 
 	if (!writer || tgm_fence_uid(writer) == self)
 		return 0;
@@ -57,21 +61,27 @@ struct tgm_fence_source {
 /* Whether a submission starts with a semaphore acquire on `writer`'s fence. */
 static inline int tgm_fence_wanted(uint64_t writer, const struct tgm_fence_source *src)
 {
-	return writer && !src->self && !src->killed &&
-	       (int32_t)(src->completed - tgm_fence_seqno(writer)) < 0;
+	return (writer != 0 && src->self == 0 && src->killed == 0 &&
+		(int32_t)(src->completed - tgm_fence_seqno(writer)) < 0)
+		       ? 1
+		       : 0;
 }
 
 /* Whether an Exec follows its list: one was given for it, not marked as touching every import, and the Exec submits. */
 static inline int tgm_fence_listed(int given, uint32_t flags, uint32_t pushes)
 {
-	return given && !(flags & TegraGM20BExecSurfacesAll) && pushes;
+	return (given != 0 && (flags & (uint32_t)TegraGM20BExecSurfacesAll) == 0 && pushes != 0)
+		       ? 1
+		       : 0;
 }
 
 /* Whether a submission counts as a writer of an import: with a list, a writable one it lists for writing; without, every
  * writable one. */
 static inline int tgm_fence_marks(int listed, uint32_t access, int writable)
 {
-	return writable && (!listed || (access & TegraGM20BSurfaceWrite));
+	return (writable != 0 && (listed == 0 || (access & (uint32_t)TegraGM20BSurfaceWrite) != 0))
+		       ? 1
+		       : 0;
 }
 
 /* Whether that mark marks even a surface TegraGM20BImportGpuReads said the GPU only samples: a listed write does (and is a
@@ -79,7 +89,10 @@ static inline int tgm_fence_marks(int listed, uint32_t access, int writable)
  * written. */
 static inline int tgm_fence_always(int listed, int imports_written)
 {
-	return listed || imports_written;
+	return (listed != 0 || imports_written != 0) ? 1 : 0;
 }
 
+#ifdef __cplusplus
+}
+#endif
 #endif

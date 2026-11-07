@@ -97,7 +97,8 @@ static inline uint32_t tgm_relayout_acquire(uint32_t *w, const struct tgm_relayo
 static inline uint32_t tgm_relayout_copy(uint32_t *w, const struct tgm_layout *l, uint64_t src,
 					 int src_tiled, uint64_t dst, int dst_tiled, uint32_t pitch)
 {
-	const uint32_t comp = l->bpp < 4 ? l->bpp : 4, n = l->bpp / comp;
+	const uint32_t comp = l->bpp < 4 ? l->bpp : 4;
+	const uint32_t n = l->bpp / comp;
 	uint32_t launch = 2u | 1u << 2 | 1u << 9 |
 			  1u << 10;  // NON_PIPELINED, FLUSH_ENABLE, MULTI_LINE, REMAP
 	uint32_t i = 0;
@@ -169,12 +170,14 @@ static inline void tgm_relayout_cpu_bytes(const struct tgm_relayout_pages *p, ui
 					  uint8_t *(*kva)(uint64_t pa))
 {
 	while (n) {
-		const uint32_t room = 4096 - (uint32_t)(at & 4095), run = n < room ? n : room;
-		uint8_t *cpu = kva(p->pas[at >> 12] & ~4095ull) + (at & 4095);
-		if (store)
+		const uint32_t room = 4096 - (uint32_t)(at & 4095);
+		const uint32_t run = n < room ? n : room;
+		uint8_t *cpu = kva(p->pas[at >> 12] & ~4095ULL) + (at & 4095);
+		if (store) {
 			__builtin_memcpy(cpu, bytes, run);
-		else
+		} else {
 			__builtin_memcpy(bytes, cpu, run);
+		}
 		at += run;
 		bytes += run;
 		n -= run;
@@ -186,21 +189,23 @@ static inline void tgm_relayout_cpu(const struct tgm_relayout_pages *surface,
 				    const struct tgm_layout *l, uint32_t bytes_per_row, int to_rows,
 				    uint8_t *(*kva)(uint64_t pa))
 {
-	if (to_rows)
+	if (to_rows) {
 		for (uint32_t i = 0; i < rows->npages; i++)
-			__builtin_memset(kva(rows->pas[i] & ~4095ull), 0, 4096);
-	const struct tgm_relayout_pages *from = to_rows ? surface : rows,
-					*to = to_rows ? rows : surface;
+			__builtin_memset(kva(rows->pas[i] & ~4095ULL), 0, 4096);
+	}
+	const struct tgm_relayout_pages *from = to_rows ? surface : rows;
+	const struct tgm_relayout_pages *to = to_rows ? rows : surface;
 	const uint32_t end = l->width * l->bpp;
 	uint8_t run[16];
-	for (uint32_t y = 0; y < l->height; y++)
+	for (uint32_t y = 0; y < l->height; y++) {
 		for (uint32_t xB = 0; xB < end; xB += 16) {
 			const uint32_t n = end - xB < 16 ? end - xB : 16;
-			const uint64_t texels = tgm_layout_offset(l, xB, y),
-				       line = (uint64_t)y * bytes_per_row + xB;
+			const uint64_t texels = tgm_layout_offset(l, xB, y);
+			const uint64_t line = (uint64_t)y * bytes_per_row + xB;
 			tgm_relayout_cpu_bytes(from, to_rows ? texels : line, run, n, 0, kva);
 			tgm_relayout_cpu_bytes(to, to_rows ? line : texels, run, n, 1, kva);
 		}
+	}
 }
 
 #ifdef __cplusplus

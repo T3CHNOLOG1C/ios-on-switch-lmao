@@ -108,8 +108,8 @@ TEST(GM20BPoolPolicySource, SystemBosGoAsPoolViewsDo)
 {
 	const std::string release =
 		flat(definition(client(), "void AGXDeviceUserClient::releaseBo(Bo *bo)"));
-	EXPECT_THAT(release, HasSubstr("if ((bo->pool_va || bo->system) && bo->view && (orphan = "
-				       "IONew(PoolOrphan, 1))) {"));
+	EXPECT_THAT(release, HasSubstr("if ((bo->pool_va || bo->system) && bo->view) orphan = "
+				       "IONew(PoolOrphan, 1); if (orphan) {"));
 	EXPECT_THAT(release, HasSubstr("bo->system ? bo->bmd : nullptr"));
 	EXPECT_THAT(
 		release,
@@ -119,11 +119,11 @@ TEST(GM20BPoolPolicySource, SystemBosGoAsPoolViewsDo)
 		     "orphan->view->release();", "orphan->backing->release();");
 	// Never read through the cacheable alias: the stats and a hang's line both read pushes through pushView.
 	EXPECT_THAT(flat(definition(client(), "const uint32_t *AGXDeviceUserClient::pushView(")),
-		    HasSubstr("!hit || hit->bo->system ? nullptr"));
+		    HasSubstr("if (hit && !hit->bo->system) {"));
 	EXPECT_THAT(flat(definition(client(), "void AGXDeviceUserClient::scanPushes(")),
 		    HasSubstr("pushView(va, bytes, hit)"));
 	EXPECT_THAT(flat(definition(client(), "int AGXDeviceUserClient::hungInterlocks(")),
-		    HasSubstr("pushView(va[i], uint64_t(dwords[i]) * 4, hit)"));
+		    HasSubstr("pushView(va[i], static_cast<uint64_t>(dwords[i]) * 4, hit)"));
 }
 
 // A system BO takes a ready spare as a cached BO does, and its pages go back to the spares once its view is released.
@@ -133,8 +133,9 @@ TEST(GM20BPoolPolicySource, SystemBosTakeAndReturnSpares)
 {
 	const std::string alloc =
 		flat(definition(client(), "IOReturn AGXDeviceUserClient::boAlloc("));
-	EXPECT_THAT(alloc, HasSubstr("} else if (!ret && !(in->flags & TegraGM20BBoContiguous) && "
-				     "(spare = spareTake(in->bytes))) {"));
+	EXPECT_THAT(alloc,
+		    HasSubstr("if (!ret && !bo->pool_va && !(in->flags & TegraGM20BBoContiguous)) "
+			      "spare = spareTake(in->bytes);"));
 	EXPECT_THAT(alloc, Not(HasSubstr("|| system ? kClasses")));
 	EXPECT_THAT(
 		alloc,
@@ -163,7 +164,8 @@ TEST(GM20BPoolPolicySource, SystemBosTakeAndReturnSpares)
 	const std::string release =
 		flat(definition(client(), "void AGXDeviceUserClient::releaseBo(Bo *bo)"));
 	expectBefore(release, "tgm_mem_del(&bo->mem);", "bo->system ? bo->pas : nullptr");
-	EXPECT_THAT(release, HasSubstr("bo->system ? uint64_t(bo->backing_pages) << 12 : 0"));
+	EXPECT_THAT(release,
+		    HasSubstr("bo->system ? static_cast<uint64_t>(bo->backing_pages) << 12 : 0"));
 	const std::string free =
 		flat(definition(client(), "IOReturn AGXDeviceUserClient::boFree("));
 	expectBefore(free, "unbindOverlaps(binds_[i].va, binds_[i].range, bo);", "reap(false);");
@@ -328,12 +330,12 @@ TEST(GM20BPresentSource, FenceOnlyPresentHasNoCopy)
 TEST(GM20BPresentSource, TiledSourceIsCopiedBlockLinear)
 {
 	const std::string copy = flat(Between(gpu(), "static int present_copy(", "\n}\n"));
-	expectBefore(copy, "if (src_block) PUSH_NVSQ(push, NVA0B5, NVB0B5_SET_SRC_BLOCK_SIZE",
+	expectBefore(copy, "if (src_block) { PUSH_NVSQ(push, NVA0B5, NVB0B5_SET_SRC_BLOCK_SIZE",
 		     "NVB0B5_LAUNCH_DMA");
 	EXPECT_THAT(copy, HasSubstr("(src_block ? 0 : NVB0B5_LAUNCH_DMA_SRC_PITCH)"));
 	const std::string surface = flat(Between(client(), "uint64_t presentSurface(", "\n}\n"));
 	EXPECT_THAT(surface, HasSubstr("const uint32_t kind = blockLinear ? TGM_LAYOUT_KIND : 0;"));
-	EXPECT_THAT(surface, HasSubstr("s.mem, bytes, uint8_t(kind))"));
+	EXPECT_THAT(surface, HasSubstr("s.mem, bytes, static_cast<uint8_t>(kind))"));
 	EXPECT_THAT(flat(Between(client(), "IOReturn AGXDeviceUserClient::vmBind(", "\n}\n")),
 		    Not(HasSubstr("tiled")));
 	EXPECT_THAT(
@@ -372,7 +374,7 @@ TEST(GM20BFenceWakeSource, WaitersWakeByChannel)
 {
 	const std::string nonstall = flat(definition(
 		gpu(), "static int chan_nonstall(struct nvif_event *event, void *repv, u32 repc)"));
-	EXPECT_THAT(nonstall, HasSubstr("else chan_wake_waiters(chan);"));
+	EXPECT_THAT(nonstall, HasSubstr("} else { chan_wake_waiters(chan); }"));
 	EXPECT_EQ(Count(nonstall, "nvxnu_wake();"),
 		  1u);  // the scrubber's, while the sleep gate is shut
 	EXPECT_THAT(flat(definition(gpu(), "static void chan_wake_waiters(struct tgm_chan *chan)")),
@@ -474,11 +476,13 @@ TEST(GM20BL2Source, InvalidateOnTheGpu)
 	const std::string exec = flat(Between(gpu(), "static int chan_exec(", "\n}\n"));
 	expectBefore(exec, "tlb = tgm_tlb_take(&chan->tlb, &chan->vm->tlb);",
 		     "NVB06F_MEM_OP_D_OPERATION_L2_SYSMEM_INVALIDATE);");
-	expectBefore(exec, "NVB06F_MEM_OP_D_OPERATION_L2_SYSMEM_INVALIDATE);",
-		     "NVB06F_MEM_OP_D_OPERATION_MMU_TLB_INVALIDATE); PUSH_KICK(&chan->chan.push);");
-	expectBefore(exec,
-		     "NVB06F_MEM_OP_D_OPERATION_MMU_TLB_INVALIDATE); PUSH_KICK(&chan->chan.push);",
-		     "pushes[i].no_prefetch || ((l2_on() || tlb) && !i));");
+	expectBefore(
+		exec, "NVB06F_MEM_OP_D_OPERATION_L2_SYSMEM_INVALIDATE);",
+		"NVB06F_MEM_OP_D_OPERATION_MMU_TLB_INVALIDATE); } PUSH_KICK(&chan->chan.push);");
+	expectBefore(
+		exec,
+		"NVB06F_MEM_OP_D_OPERATION_MMU_TLB_INVALIDATE); } PUSH_KICK(&chan->chan.push);",
+		"pushes[i].no_prefetch || ((l2_on() || tlb) && !i));");
 }
 
 // A CPU IOSurfaceLock waits for the submissions that may write the surface: Exec names each one once it has its seqno.

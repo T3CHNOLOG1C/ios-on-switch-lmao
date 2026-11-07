@@ -20,7 +20,8 @@ static void *lazy(void **slot, void *(*alloc)(void), void (*release)(void *))
 	void *have = __atomic_load_n(slot, __ATOMIC_ACQUIRE);
 	if (have)
 		return have;
-	void *fresh = alloc(), *expected = NULL;
+	void *fresh = alloc();
+	void *expected = NULL;
 	if (!__atomic_compare_exchange_n(slot, &expected, fresh, false, __ATOMIC_ACQ_REL,
 					 __ATOMIC_ACQUIRE)) {
 		release(fresh);
@@ -207,7 +208,8 @@ const void *free_irq(unsigned int irq, void *dev)
 int nvxnu_poll_irqs(void)
 {
 	irq_handler_t h = __atomic_load_n(&irq_slot.handler, __ATOMIC_ACQUIRE);
-	int idle = 0, ret;
+	int idle = 0;
+	int ret = 0;
 	if (!h || !__atomic_compare_exchange_n(&irq_polling, &idle, 1, false, __ATOMIC_ACQUIRE,
 					       __ATOMIC_RELAXED))
 		return -1;
@@ -233,8 +235,8 @@ void kfree_const(const void *p)
 
 char *kstrndup(const char *s, size_t max, gfp_t gfp)
 {
-	size_t n;
-	char *d;
+	size_t n = 0;
+	char *d = NULL;
 	if (!s)
 		return NULL;
 	n = strnlen(s, max);
@@ -256,7 +258,7 @@ void *kmemdup(const void *p, size_t size, gfp_t gfp)
 
 void *krealloc(const void *p, size_t s, gfp_t g)
 {
-	void *d;
+	void *d = NULL;
 	if (!s) {
 		kfree(p);
 		return NULL;
@@ -272,9 +274,9 @@ void *krealloc(const void *p, size_t s, gfp_t g)
 
 char *kasprintf(gfp_t gfp, const char *fmt, ...)
 {
-	va_list ap;
-	char *s;
-	int n;
+	va_list ap; /* NOLINT(cppcoreguidelines-init-variables): va_start initializes it */
+	char *s = NULL;
+	int n = 0;
 	va_start(ap, fmt);
 	n = vsnprintf(NULL, 0, fmt, ap);
 	va_end(ap);
@@ -306,15 +308,16 @@ size_t strspn(const char *s, const char *accept)
 char *strstr(const char *h, const char *n)
 {
 	size_t l = strlen(n);
-	for (; *h; h++)
+	for (; *h; h++) {
 		if (!strncmp(h, n, l))
 			return (char *)h;
+	}
 	return l ? NULL : (char *)h;
 }
 
 ssize_t strscpy(char *dst, const char *src, size_t size)
 {
-	size_t n;
+	size_t n = 0;
 	if (!size)
 		return -E2BIG;
 	n = strnlen(src, size);
@@ -334,22 +337,23 @@ unsigned long simple_strtoul(const char *cp, char **endp, unsigned int base)
 		base = 10;
 		if (cp[0] == '0') {
 			base = 8;
-			if ((cp[1] | 32) == 'x') {
+			if (((unsigned char)cp[1] | 32u) == 'x') {
 				base = 16;
 				cp += 2;
 			}
 		}
-	} else if (base == 16 && cp[0] == '0' && (cp[1] | 32) == 'x') {
+	} else if (base == 16 && cp[0] == '0' && ((unsigned char)cp[1] | 32u) == 'x') {
 		cp += 2;
 	}
 	for (;; cp++) {
-		unsigned int d;
-		if (isdigit(*cp))
+		unsigned int d = 0;
+		if (isdigit(*cp)) {
 			d = *cp - '0';
-		else if ((*cp | 32) >= 'a' && (*cp | 32) <= 'f')
-			d = (*cp | 32) - 'a' + 10;
-		else
+		} else if (((unsigned char)*cp | 32u) >= 'a' && ((unsigned char)*cp | 32u) <= 'f') {
+			d = ((unsigned char)*cp | 32u) - 'a' + 10;
+		} else {
 			break;
+		}
 		if (d >= base)
 			break;
 		v = v * base + d;
@@ -368,7 +372,7 @@ long simple_strtol(const char *cp, char **endp, unsigned int base)
 
 int kstrtoul(const char *s, unsigned int base, unsigned long *res)
 {
-	char *end;
+	char *end = NULL;
 	if (!*s)
 		return -EINVAL;
 	*res = simple_strtoul(s, &end, base);
@@ -379,8 +383,9 @@ int kstrtoul(const char *s, unsigned int base, unsigned long *res)
 
 int kstrtol(const char *s, unsigned int base, long *res)
 {
-	unsigned long v;
-	int neg = *s == '-', ret = kstrtoul(s + neg, base, &v);
+	unsigned long v = 0;
+	int neg = *s == '-';
+	int ret = kstrtoul(s + neg, base, &v);
 	if (!ret)
 		*res = neg ? -(long)v : (long)v;
 	return ret;
@@ -396,7 +401,8 @@ void sort(void *base, size_t num, size_t size, int (*cmp)(const void *, const vo
 			if (swap_fn) {
 				swap_fn(b + (j - 1) * size, b + j * size, (int)size);
 			} else {
-				char *x = b + (j - 1) * size, *y = b + j * size;
+				char *x = b + (j - 1) * size;
+				char *y = b + j * size;
 				for (size_t k = 0; k < size; k++) {
 					char t = x[k];
 					x[k] = y[k];
@@ -412,7 +418,8 @@ void list_sort(void *priv, struct list_head *head,
 {
 	LIST_HEAD(sorted);
 	while (!list_empty(head)) {
-		struct list_head *e = head->next, *pos;
+		struct list_head *e = head->next;
+		struct list_head *pos = NULL;
 		list_del(e);
 		for (pos = sorted.prev; pos != &sorted && cmp(priv, pos, e) > 0; pos = pos->prev)
 			;
@@ -423,17 +430,19 @@ void list_sort(void *priv, struct list_head *head,
 
 unsigned long find_next_bit(const unsigned long *a, unsigned long size, unsigned long off)
 {
-	for (; off < size; off++)
+	for (; off < size; off++) {
 		if (test_bit(off, a))
 			return off;
+	}
 	return size;
 }
 
 unsigned long find_next_zero_bit(const unsigned long *a, unsigned long size, unsigned long off)
 {
-	for (; off < size; off++)
+	for (; off < size; off++) {
 		if (!test_bit(off, a))
 			return off;
+	}
 	return size;
 }
 
@@ -453,7 +462,7 @@ unsigned int bitmap_weight(const unsigned long *map, unsigned int bits)
 {
 	unsigned int w = 0;
 	for (unsigned int i = 0; i < bits; i++)
-		w += test_bit(i, map);
+		w += (unsigned int)test_bit(i, map);
 	return w;
 }
 
@@ -470,23 +479,25 @@ static void rb_set_parent(struct rb_node *n, struct rb_node *p)
 
 static void rb_set_color(struct rb_node *n, int c)
 {
-	n->__rb_parent_color = (n->__rb_parent_color & ~1UL) | c;
+	n->__rb_parent_color = (n->__rb_parent_color & ~1UL) | (unsigned long)c;
 }
 
 static void rb_replace_child(struct rb_node *old, struct rb_node *new, struct rb_node *parent,
 			     struct rb_root *root)
 {
-	if (!parent)
+	if (!parent) {
 		root->rb_node = new;
-	else if (parent->rb_left == old)
+	} else if (parent->rb_left == old) {
 		parent->rb_left = new;
-	else
+	} else {
 		parent->rb_right = new;
+	}
 }
 
 static void rb_rotate_left(struct rb_node *x, struct rb_root *root)
 {
-	struct rb_node *y = x->rb_right, *p = rb_parent(x);
+	struct rb_node *y = x->rb_right;
+	struct rb_node *p = rb_parent(x);
 	x->rb_right = y->rb_left;
 	if (y->rb_left)
 		rb_set_parent(y->rb_left, x);
@@ -498,7 +509,8 @@ static void rb_rotate_left(struct rb_node *x, struct rb_root *root)
 
 static void rb_rotate_right(struct rb_node *x, struct rb_root *root)
 {
-	struct rb_node *y = x->rb_left, *p = rb_parent(x);
+	struct rb_node *y = x->rb_left;
+	struct rb_node *p = rb_parent(x);
 	x->rb_left = y->rb_right;
 	if (y->rb_right)
 		rb_set_parent(y->rb_right, x);
@@ -510,9 +522,14 @@ static void rb_rotate_right(struct rb_node *x, struct rb_root *root)
 
 void rb_insert_color(struct rb_node *n, struct rb_root *root)
 {
-	struct rb_node *p, *g, *u;
+	struct rb_node *p = NULL;
+	struct rb_node *g = NULL;
+	struct rb_node *u = NULL;
 	rb_set_color(n, RB_RED);
-	while ((p = rb_parent(n)) && rb_is_red(p)) {
+	for (;;) {
+		p = rb_parent(n);
+		if (!p || !rb_is_red(p))
+			break;
 		g = rb_parent(p);
 		if (p == g->rb_left) {
 			u = g->rb_right;
@@ -555,7 +572,7 @@ void rb_insert_color(struct rb_node *n, struct rb_root *root)
 
 static void rb_erase_fixup(struct rb_node *x, struct rb_node *parent, struct rb_root *root)
 {
-	struct rb_node *w;
+	struct rb_node *w = NULL;
 	while (x != root->rb_node && rb_is_black(x)) {
 		if (x == parent->rb_left) {
 			w = parent->rb_right;
@@ -565,6 +582,8 @@ static void rb_erase_fixup(struct rb_node *x, struct rb_node *parent, struct rb_
 				rb_rotate_left(parent, root);
 				w = parent->rb_right;
 			}
+			/* A red-black tree gives a double-black node a sibling. */
+			/* NOLINTNEXTLINE(clang-analyzer-core.NullDereference) */
 			if (rb_is_black(w->rb_left) && rb_is_black(w->rb_right)) {
 				rb_set_color(w, RB_RED);
 				x = parent;
@@ -619,8 +638,9 @@ static void rb_erase_fixup(struct rb_node *x, struct rb_node *parent, struct rb_
 
 void rb_erase(struct rb_node *z, struct rb_root *root)
 {
-	struct rb_node *child, *parent;
-	int color;
+	struct rb_node *child = NULL;
+	struct rb_node *parent = NULL;
+	int color = 0;
 
 	if (z->rb_left && z->rb_right) {
 		struct rb_node *y = z->rb_right;
@@ -677,7 +697,7 @@ struct rb_node *rb_last(const struct rb_root *root)
 
 struct rb_node *rb_next(const struct rb_node *n)
 {
-	struct rb_node *p;
+	struct rb_node *p = NULL;
 	if (RB_EMPTY_NODE(n))
 		return NULL;
 	if (n->rb_right) {
@@ -686,14 +706,18 @@ struct rb_node *rb_next(const struct rb_node *n)
 			n = n->rb_left;
 		return (struct rb_node *)n;
 	}
-	while ((p = rb_parent(n)) && n == p->rb_right)
+	for (;;) {
+		p = rb_parent(n);
+		if (!p || n != p->rb_right)
+			break;
 		n = p;
+	}
 	return p;
 }
 
 struct rb_node *rb_prev(const struct rb_node *n)
 {
-	struct rb_node *p;
+	struct rb_node *p = NULL;
 	if (RB_EMPTY_NODE(n))
 		return NULL;
 	if (n->rb_left) {
@@ -702,8 +726,12 @@ struct rb_node *rb_prev(const struct rb_node *n)
 			n = n->rb_right;
 		return (struct rb_node *)n;
 	}
-	while ((p = rb_parent(n)) && n == p->rb_left)
+	for (;;) {
+		p = rb_parent(n);
+		if (!p || n != p->rb_left)
+			break;
 		n = p;
+	}
 	return p;
 }
 
@@ -720,7 +748,8 @@ static DEFINE_SPINLOCK(pool_lock);
 
 int nvxnu_pool_setup(void)
 {
-	int zeroed = 0, ret = nvxnu_pool_init(&zeroed);
+	int zeroed = 0;
+	int ret = nvxnu_pool_init(&zeroed);
 	if (ret)
 		return ret;
 	pool_npages = nvxnu_pool_size() >> PAGE_SHIFT;
@@ -741,10 +770,11 @@ int nvxnu_pool_setup(void)
  * allocation does, so a page is zero when handed out whether the CPU or the GPU (the scrubber) zeroed it. */
 static void pool_zero_dirty(unsigned long first, unsigned long n, int all)
 {
-	unsigned long k;
-	for (k = 0; k < n; k++)
+	unsigned long k = 0;
+	for (k = 0; k < n; k++) {
 		if (all || test_bit(first + k, pool_dirty))
 			memset(page_address(&pool_pages[first + k]), 0, PAGE_SIZE);
+	}
 	spin_lock(&pool_lock);
 	bitmap_clear(pool_dirty, first, n);
 	spin_unlock(&pool_lock);
@@ -752,7 +782,8 @@ static void pool_zero_dirty(unsigned long first, unsigned long n, int all)
 
 static long pool_alloc(unsigned long n, unsigned long align)
 {
-	unsigned long start = 0, i;
+	unsigned long start = 0;
+	unsigned long i = 0;
 	spin_lock(&pool_lock);
 	while ((start = find_next_zero_bit(pool_map, pool_npages, start)) + n <= pool_npages) {
 		start = ALIGN(start, align);
@@ -787,7 +818,7 @@ unsigned long nvxnu_pool_used_pages(void)
 static long pool_index(u64 pa)
 {
 	u64 base = nvxnu_pool_base_pa();
-	if (pa < base || pa >= base + (pool_npages << PAGE_SHIFT))
+	if (pa < base || pa >= base + ((size_t)pool_npages << PAGE_SHIFT))
 		return -1;
 	return (pa - base) >> PAGE_SHIFT;
 }
@@ -820,7 +851,7 @@ void __free_page(struct page *p)
 
 void *page_address(const struct page *p)
 {
-	return (char *)nvxnu_pool_base_va() + ((p - pool_pages) << PAGE_SHIFT);
+	return (char *)nvxnu_pool_base_va() + ((size_t)(p - pool_pages) << PAGE_SHIFT);
 }
 
 struct page *pfn_to_page(unsigned long pfn)
@@ -832,9 +863,10 @@ struct page *pfn_to_page(unsigned long pfn)
 struct page *vmalloc_to_page(const void *addr)
 {
 	char *base = nvxnu_pool_base_va();
-	if ((const char *)addr < base || (const char *)addr >= base + (pool_npages << PAGE_SHIFT))
+	if ((const char *)addr < base ||
+	    (const char *)addr >= base + ((size_t)pool_npages << PAGE_SHIFT))
 		return NULL;
-	return &pool_pages[((const char *)addr - base) >> PAGE_SHIFT];
+	return &pool_pages[(size_t)((const char *)addr - base) >> PAGE_SHIFT];
 }
 
 void *dma_alloc_attrs(struct device *dev, size_t size, dma_addr_t *handle, gfp_t gfp,
@@ -878,7 +910,11 @@ void *nvxnu_pool_alloc_clean(unsigned long size, unsigned long align, unsigned l
 
 unsigned long nvxnu_pool_claim_dirty(unsigned long max_bytes, unsigned long long *pa)
 {
-	unsigned long first = 0, n = 0, max = max_bytes >> PAGE_SHIFT, w, bits;
+	unsigned long first = 0;
+	unsigned long n = 0;
+	unsigned long max = max_bytes >> PAGE_SHIFT;
+	unsigned long w = 0;
+	unsigned long bits = 0;
 	if (!pool_map || !max)
 		return 0;
 	spin_lock(&pool_lock);
@@ -906,7 +942,8 @@ unsigned long nvxnu_pool_claim_dirty(unsigned long max_bytes, unsigned long long
 
 unsigned long nvxnu_pool_dirty_free_pages(void)
 {
-	unsigned long w, n = 0;
+	unsigned long w = 0;
+	unsigned long n = 0;
 	if (!pool_map)
 		return 0;
 	spin_lock(&pool_lock);
@@ -964,16 +1001,17 @@ void dma_sync_single_for_cpu(struct device *dev, dma_addr_t a, size_t s,
 	long i = pool_index(a);
 	(void)dev;
 	(void)dir;
-	if (i >= 0)
+	if (i >= 0) {
 		nvxnu_dcache_clean_inval((char *)page_address(&pool_pages[i]) + (a & ~PAGE_MASK),
 					 s);
+	}
 }
 
 void *vmap(struct page **pages, unsigned int count, unsigned long flags, pgprot_t prot)
 {
-	u64 *pas;
-	void *va;
-	unsigned int i;
+	u64 *pas = NULL;
+	void *va = NULL;
+	unsigned int i = 0;
 	(void)flags;
 	(void)prot;
 	for (i = 1; i < count && pages[i] == pages[0] + i; i++)
@@ -1075,9 +1113,9 @@ void __iomem *devm_platform_ioremap_resource(struct platform_device *pdev, unsig
 
 int request_firmware(const struct firmware **pfw, const char *name, struct device *dev)
 {
-	struct firmware *fw;
-	const void *data;
-	unsigned long size;
+	struct firmware *fw = NULL;
+	const void *data = NULL;
+	unsigned long size = 0;
 	(void)dev;
 	*pfw = NULL;
 	if (nvxnu_firmware_find(name, &data, &size))

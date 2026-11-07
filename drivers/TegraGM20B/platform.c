@@ -76,9 +76,9 @@
 #define MAX77812_BUS 5
 #define MAX77812_PHASE211 0x33
 #define MAX77812_EN_CTRL 0x06
-#define MAX77812_EN_M1 0x01 /* vdd-gpu */
-#define MAX77812_EN_M3 0x10 /* vddio-ddr (0x33 part) */
-#define MAX77812_EN_M4 0x40 /* vdd-cpu */
+#define MAX77812_EN_M1 0x01u /* vdd-gpu */
+#define MAX77812_EN_M3 0x10  /* vddio-ddr (0x33 part) */
+#define MAX77812_EN_M4 0x40  /* vdd-cpu */
 #define MAX77812_M1_VOUT 0x23
 #define MAX77812_UV_MIN 250000
 #define MAX77812_UV_STEP 5000
@@ -136,9 +136,10 @@ static int pmic_rd(uint8_t reg, uint8_t *v)
 	if (ret)
 		return ret;
 	ret = tegra_i2c_read(MAX77812_BUS, max77812_addr, reg, v, 1);
-	if (ret)
+	if (ret) {
 		ret = tegra_i2c_read(MAX77812_BUS, max77812_addr, reg, v,
 				     1); /* one retry: arbitration */
+	}
 	return ret;
 }
 
@@ -173,7 +174,7 @@ static int pmic_en_ctrl(uint8_t *en)
 
 int tegra_gm20b_rail_get_uv(int *uv)
 {
-	uint8_t code;
+	uint8_t code = 0;
 	int ret = pmic_rd(MAX77812_M1_VOUT, &code);
 	if (!ret)
 		*uv = MAX77812_UV_MIN + MAX77812_UV_STEP * code;
@@ -184,8 +185,10 @@ int tegra_gm20b_rail_get_uv(int *uv)
  * what switchroot allows this rail. */
 int tegra_gm20b_rail_set_uv(int uv)
 {
-	uint8_t en, code, now = 0;
-	int ret;
+	uint8_t en = 0;
+	uint8_t code = 0;
+	uint8_t now = 0;
+	int ret = 0;
 	if (uv < GPU_UV_FLOOR)
 		uv = GPU_UV_FLOOR;
 	if (uv > GPU_UV_CEIL)
@@ -212,7 +215,8 @@ int tegra_gm20b_rail_set_uv(int uv)
 
 int tegra_gm20b_rail_enable(int on)
 {
-	uint8_t en, now = 0;
+	uint8_t en = 0;
+	uint8_t now = 0;
 	int ret = pmic_en_ctrl(&en);
 	if (ret)
 		return ret;
@@ -296,7 +300,8 @@ uint32_t tegra_gm20b_dvfs_khz(int row)
 
 int tegra_gm20b_dvfs_na_uv(uint32_t khz, int speedo)
 {
-	unsigned int i, j;
+	unsigned int i = 0;
+	unsigned int j = 0;
 	int worst = GPU_B01_CVB_VMIN_UV;
 
 	for (i = 0; i < sizeof(gpu_b01_cvb) / sizeof(gpu_b01_cvb[0]) && gpu_b01_cvb[i].khz != khz;
@@ -307,7 +312,9 @@ int tegra_gm20b_dvfs_na_uv(uint32_t khz, int speedo)
 	for (j = 0; j < sizeof(gpu_b01_trips_c) / sizeof(gpu_b01_trips_c[0]); j++) {
 		/* tegra_get_cvb_voltage() + tegra_get_cvb_t_voltage() (L4T cvb.c:22-57): speedo scale 100, thermal scale 10,
 		 * in uV (voltage scale 1000); then tegra_round_cvb_voltage() to the 5 mV step */
-		int t = gpu_b01_trips_c[j], uv, tv;
+		int t = gpu_b01_trips_c[j];
+		int uv = 0;
+		int tv = 0;
 		uv = div_round_closest(gpu_b01_cvb[i].c2 * speedo, 100);
 		uv = div_round_closest((uv + gpu_b01_cvb[i].c1) * speedo, 100) + gpu_b01_cvb[i].c0;
 		tv = div_round_closest(gpu_b01_cvb[i].c3 * speedo, 100) + gpu_b01_cvb[i].c4 +
@@ -322,7 +329,7 @@ int tegra_gm20b_dvfs_na_uv(uint32_t khz, int speedo)
 
 int tegra_gm20b_clk_enable(int id, int on)
 {
-	uint32_t v;
+	uint32_t v = 0;
 	switch (id) {
 	case TEGRA_GM20B_CLK_GPU:
 		wr(car, on ? CLK_ENB_X_SET : CLK_ENB_X_CLR, X_GPU);
@@ -337,13 +344,15 @@ int tegra_gm20b_clk_enable(int id, int on)
 		wr(car, PLLP_OUTC, v);
 		nvxnu_udelay(2); /* clk_pll_out_enable() */
 		return 0;
+	default:
+		break;
 	}
 	return -22;
 }
 
 unsigned long tegra_gm20b_clk_get_rate(int id)
 {
-	uint32_t div;
+	uint32_t div = 0;
 	switch (id) {
 	case TEGRA_GM20B_CLK_GPU:
 	case TEGRA_GM20B_CLK_REF:
@@ -351,13 +360,16 @@ unsigned long tegra_gm20b_clk_get_rate(int id)
 	case TEGRA_GM20B_CLK_PWR:
 		div = (rd(car, PLLP_OUTC) >> PLLP_OUT5_DIV_SHIFT) & 0xff;
 		return PLLP_RATE * 2 / (div + 2);
+	default:
+		break;
 	}
 	return 0;
 }
 
 int tegra_gm20b_clk_set_rate(int id, unsigned long rate)
 {
-	uint32_t v, div;
+	uint32_t v = 0;
+	uint32_t div = 0;
 	if (id != TEGRA_GM20B_CLK_PWR || !rate)
 		return 0; /* gpu/ref are fixed; GPCPLL is programmed by nvkm's clk subdev */
 	div = (uint32_t)((PLLP_RATE * 2 + rate - 1) /
@@ -415,8 +427,10 @@ void tegra_gm20b_mc_gpu_wpr(uint32_t v[5])
  * bounded spin like tegra_mc_flush(), which takes the status only after 5 identical reads (L4T mc.c:158-176,208-230). */
 int tegra_gm20b_mc_flush(int flush)
 {
-	uint32_t v = rd(mc, MC_HOTRESET_CTRL_1), s;
-	int i, j;
+	uint32_t v = rd(mc, MC_HOTRESET_CTRL_1);
+	uint32_t s = 0;
+	int i = 0;
+	int j = 0;
 	if (!flush) {
 		wr(mc, MC_HOTRESET_CTRL_1, v & ~MC_HOTRESET_GPU);
 		return 0;

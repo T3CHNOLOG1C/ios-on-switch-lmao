@@ -21,6 +21,7 @@
 #define __take_second_arg(__ignored, val, ...) val
 #define __is_defined(x) ___is_defined(x)
 #define ___is_defined(val) ____is_defined(__ARG_PLACEHOLDER_##val)
+// NOLINTNEXTLINE(bugprone-macro-parentheses): Linux's IS_ENABLED trick pastes the argument against the 1
 #define ____is_defined(arg1_or_junk) __take_second_arg(arg1_or_junk 1, 0)
 #define IS_ENABLED(option) __is_defined(option)
 #define IS_BUILTIN(option) __is_defined(option)
@@ -316,12 +317,12 @@ static inline unsigned long __ffs64(u64 x)
 
 static inline unsigned long roundup_pow_of_two(unsigned long n)
 {
-	return n <= 1 ? 1 : 1UL << fls_long(n - 1);
+	return n <= 1 ? 1 : 1UL << (unsigned)fls_long(n - 1);
 }
 
 static inline unsigned long rounddown_pow_of_two(unsigned long n)
 {
-	return 1UL << (fls_long(n) - 1);
+	return 1UL << (unsigned)(fls_long(n) - 1);
 }
 
 #define order_base_2(n) ilog2(roundup_pow_of_two(n))
@@ -337,13 +338,13 @@ static inline int get_order(unsigned long size)
 
 static inline size_t size_mul(size_t a, size_t b)
 {
-	size_t r;
+	size_t r = 0;
 	return __builtin_mul_overflow(a, b, &r) ? SIZE_MAX : r;
 }
 
 static inline size_t size_add(size_t a, size_t b)
 {
-	size_t r;
+	size_t r = 0;
 	return __builtin_add_overflow(a, b, &r) ? SIZE_MAX : r;
 }
 
@@ -474,7 +475,7 @@ static inline int isdigit(int c)
 
 static inline int isalpha(int c)
 {
-	return (c | 32) >= 'a' && (c | 32) <= 'z';
+	return ((unsigned)c | 32u) >= 'a' && ((unsigned)c | 32u) <= 'z';
 }
 
 static inline int isalnum(int c)
@@ -906,7 +907,8 @@ static inline int list_is_singular(const struct list_head *h)
 static inline void __list_splice(const struct list_head *l, struct list_head *p,
 				 struct list_head *n)
 {
-	struct list_head *f = l->next, *t = l->prev;
+	struct list_head *f = l->next;
+	struct list_head *t = l->prev;
 	f->prev = p;
 	p->next = f;
 	t->next = n;
@@ -961,34 +963,35 @@ static inline size_t list_count_nodes(struct list_head *h)
 #define list_next_entry(p, m) list_entry((p)->m.next, __typeof__(*(p)), m)
 #define list_prev_entry(p, m) list_entry((p)->m.prev, __typeof__(*(p)), m)
 #define list_entry_is_head(p, h, m) (&(p)->m == (h))
-#define list_for_each(p, h) for (p = (h)->next; p != (h); p = p->next)
-#define list_for_each_safe(p, n, h) for (p = (h)->next, n = p->next; p != (h); p = n, n = p->next)
-#define list_for_each_entry(p, h, m)                                                   \
-	for (p = list_first_entry(h, __typeof__(*p), m); !list_entry_is_head(p, h, m); \
-	     p = list_next_entry(p, m))
-#define list_for_each_entry_reverse(p, h, m)                                          \
-	for (p = list_last_entry(h, __typeof__(*p), m); !list_entry_is_head(p, h, m); \
-	     p = list_prev_entry(p, m))
+#define list_for_each(p, h) for ((p) = (h)->next; (p) != (h); (p) = (p)->next)
+#define list_for_each_safe(p, n, h) \
+	for ((p) = (h)->next, (n) = (p)->next; (p) != (h); (p) = (n), (n) = (p)->next)
+#define list_for_each_entry(p, h, m)                                                       \
+	for ((p) = list_first_entry(h, __typeof__(*(p)), m); !list_entry_is_head(p, h, m); \
+	     (p) = list_next_entry(p, m))
+#define list_for_each_entry_reverse(p, h, m)                                              \
+	for ((p) = list_last_entry(h, __typeof__(*(p)), m); !list_entry_is_head(p, h, m); \
+	     (p) = list_prev_entry(p, m))
 #define list_for_each_entry_continue(p, h, m) \
-	for (p = list_next_entry(p, m); !list_entry_is_head(p, h, m); p = list_next_entry(p, m))
+	for ((p) = list_next_entry(p, m); !list_entry_is_head(p, h, m); (p) = list_next_entry(p, m))
 #define list_for_each_entry_continue_reverse(p, h, m) \
-	for (p = list_prev_entry(p, m); !list_entry_is_head(p, h, m); p = list_prev_entry(p, m))
+	for ((p) = list_prev_entry(p, m); !list_entry_is_head(p, h, m); (p) = list_prev_entry(p, m))
 #define list_for_each_entry_from(p, h, m) \
-	for (; !list_entry_is_head(p, h, m); p = list_next_entry(p, m))
+	for (; !list_entry_is_head(p, h, m); (p) = list_next_entry(p, m))
 #define list_for_each_entry_from_reverse(p, h, m) \
-	for (; !list_entry_is_head(p, h, m); p = list_prev_entry(p, m))
-#define list_for_each_entry_safe(p, n, h, m)                                        \
-	for (p = list_first_entry(h, __typeof__(*p), m), n = list_next_entry(p, m); \
-	     !list_entry_is_head(p, h, m); p = n, n = list_next_entry(n, m))
-#define list_for_each_entry_safe_reverse(p, n, h, m)                               \
-	for (p = list_last_entry(h, __typeof__(*p), m), n = list_prev_entry(p, m); \
-	     !list_entry_is_head(p, h, m); p = n, n = list_prev_entry(n, m))
-#define list_for_each_entry_safe_from(p, n, h, m)                     \
-	for (n = list_next_entry(p, m); !list_entry_is_head(p, h, m); \
-	     p = n, n = list_next_entry(n, m))
-#define list_for_each_entry_safe_continue(p, n, h, m)                                            \
-	for (p = list_next_entry(p, m), n = list_next_entry(p, m); !list_entry_is_head(p, h, m); \
-	     p = n, n = list_next_entry(n, m))
+	for (; !list_entry_is_head(p, h, m); (p) = list_prev_entry(p, m))
+#define list_for_each_entry_safe(p, n, h, m)                                              \
+	for ((p) = list_first_entry(h, __typeof__(*(p)), m), (n) = list_next_entry(p, m); \
+	     !list_entry_is_head(p, h, m); (p) = (n), (n) = list_next_entry(n, m))
+#define list_for_each_entry_safe_reverse(p, n, h, m)                                     \
+	for ((p) = list_last_entry(h, __typeof__(*(p)), m), (n) = list_prev_entry(p, m); \
+	     !list_entry_is_head(p, h, m); (p) = (n), (n) = list_prev_entry(n, m))
+#define list_for_each_entry_safe_from(p, n, h, m)                       \
+	for ((n) = list_next_entry(p, m); !list_entry_is_head(p, h, m); \
+	     (p) = (n), (n) = list_next_entry(n, m))
+#define list_for_each_entry_safe_continue(p, n, h, m)                  \
+	for ((p) = list_next_entry(p, m), (n) = list_next_entry(p, m); \
+	     !list_entry_is_head(p, h, m); (p) = (n), (n) = list_next_entry(n, m))
 
 static inline void list_rotate_left(struct list_head *h)
 {
@@ -1055,11 +1058,13 @@ static inline void __clear_bit(unsigned long n, volatile unsigned long *a)
 	a[BIT_WORD(n)] &= ~BIT_MASK(n);
 }
 
+/* NOLINTNEXTLINE(readability-non-const-parameter): the atomic below writes through a */
 static inline void set_bit(unsigned long n, volatile unsigned long *a)
 {
 	__atomic_or_fetch(&a[BIT_WORD(n)], BIT_MASK(n), __ATOMIC_SEQ_CST);
 }
 
+/* NOLINTNEXTLINE(readability-non-const-parameter): the atomic below writes through a */
 static inline void clear_bit(unsigned long n, volatile unsigned long *a)
 {
 	__atomic_and_fetch(&a[BIT_WORD(n)], ~BIT_MASK(n), __ATOMIC_SEQ_CST);
@@ -1070,12 +1075,14 @@ static inline bool test_bit(unsigned long n, const volatile unsigned long *a)
 	return (a[BIT_WORD(n)] & BIT_MASK(n)) != 0;
 }
 
+/* NOLINTNEXTLINE(readability-non-const-parameter): the atomic below writes through a */
 static inline bool test_and_set_bit(unsigned long n, volatile unsigned long *a)
 {
 	return (__atomic_fetch_or(&a[BIT_WORD(n)], BIT_MASK(n), __ATOMIC_SEQ_CST) & BIT_MASK(n)) !=
 	       0;
 }
 
+/* NOLINTNEXTLINE(readability-non-const-parameter): the atomic below writes through a */
 static inline bool test_and_clear_bit(unsigned long n, volatile unsigned long *a)
 {
 	return (__atomic_fetch_and(&a[BIT_WORD(n)], ~BIT_MASK(n), __ATOMIC_SEQ_CST) &
@@ -1150,7 +1157,7 @@ static inline void kfree(const void *p)
 
 static inline void *kmalloc_array(size_t n, size_t s, gfp_t g)
 {
-	size_t b;
+	size_t b = 0;
 	return __builtin_mul_overflow(n, s, &b) ? NULL : kmalloc(b, g);
 }
 
@@ -1790,21 +1797,21 @@ int tegra_fuse_readl(unsigned long offset, u32 *value);
 
 static inline u16 get_unaligned_le16(const void *p)
 {
-	u16 v;
+	u16 v = 0;
 	memcpy(&v, p, 2);
 	return v;
 }
 
 static inline u32 get_unaligned_le32(const void *p)
 {
-	u32 v;
+	u32 v = 0;
 	memcpy(&v, p, 4);
 	return v;
 }
 
 static inline u64 get_unaligned_le64(const void *p)
 {
-	u64 v;
+	u64 v = 0;
 	memcpy(&v, p, 8);
 	return v;
 }
@@ -1963,6 +1970,7 @@ struct i2c_board_info {
 };
 
 #define I2C_M_RD 0x0001
+// NOLINTNEXTLINE(bugprone-macro-parentheses): t initializes a char array, which takes a bare string literal
 #define I2C_BOARD_INFO(t, a) .type = t, .addr = (a)
 
 static inline int i2c_transfer(struct i2c_adapter *a, struct i2c_msg *m, int n)
