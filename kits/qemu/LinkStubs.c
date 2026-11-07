@@ -29,8 +29,8 @@ STUB int native_ufs_block_authenticates(void *provider, const char *uuid, uint8_
     return -1;
 }
 
-// NativeRamBlock keeps the Data overlay in a UFS store when NativeUfs reports a store mode (sheng-data-persist). Mode 0
-// is no store, so the Data ramdisk stays in memory and the other hooks are never called; they refuse if they are.
+// NativeRamBlock asks for a UFS store mode; with no UFS driver in this kernel it is always 0, no store, so the Data
+// ramdisk stays in memory and the other hooks are never called; they refuse if they are.
 unsigned native_ufs_store_mode(void);
 
 STUB unsigned native_ufs_store_mode(void)
