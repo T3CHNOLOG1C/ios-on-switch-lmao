@@ -2113,6 +2113,8 @@ static void asyncCall(void (^call)(void))
 
 @interface NBSampler : NBObject
 @property (nonatomic) NmbSampler *handle;
+@property (nonatomic, copy) MTLSamplerDescriptor *descriptor;
+@property (nonatomic, strong) NSMutableDictionary<NSValue *, id<MTLSamplerState>> *clamped;
 @end
 @implementation NBSampler
 
@@ -2992,6 +2994,55 @@ static void waitForResource(id resource)
 - (void)setFragmentSamplerState:(id<MTLSamplerState>)s atIndex:(NSUInteger)i
 {
     [self sampler:s index:i stage:2];
+}
+
+// A bind's LOD clamps replace the state's (Metal's rule, metal2vulkan's for compute): the state of its descriptor with those clamps,
+// made once per state and clamps
+static id<MTLSamplerState> clampedSampler(id<MTLSamplerState> s, float lodMin, float lodMax)
+{
+    if (![(id)s isKindOfClass:[NBSampler class]])
+        return s;
+    NBSampler *base = (NBSampler *)s;
+    const float clamps[2] = {lodMin, lodMax};
+    NSValue *key = [NSValue valueWithBytes:clamps objCType:@encode(float[2])];
+    @synchronized(base) {
+        if (!base.clamped)
+            base.clamped = [NSMutableDictionary dictionary];
+        if (id<MTLSamplerState> made = base.clamped[key])
+            return made;
+        MTLSamplerDescriptor *d = [base.descriptor copy];
+        d.lodMinClamp = lodMin;
+        d.lodMaxClamp = lodMax;
+        id<MTLSamplerState> made = [(id<MTLDevice>)gDeviceObject newSamplerStateWithDescriptor:d];
+        if (made)
+            base.clamped[key] = made;
+        return made;
+    }
+}
+
+- (void)setVertexSamplerState:(id<MTLSamplerState>)s
+                  lodMinClamp:(float)lodMin
+                  lodMaxClamp:(float)lodMax
+                      atIndex:(NSUInteger)i
+{
+    [self sampler:clampedSampler(s, lodMin, lodMax) index:i stage:1];
+}
+
+- (void)setFragmentSamplerState:(id<MTLSamplerState>)s
+                    lodMinClamp:(float)lodMin
+                    lodMaxClamp:(float)lodMax
+                        atIndex:(NSUInteger)i
+{
+    [self sampler:clampedSampler(s, lodMin, lodMax) index:i stage:2];
+}
+
+- (void)setFragmentSamplerStates:(const id<MTLSamplerState> __unsafe_unretained[])s
+                    lodMinClamps:(const float[])lodMin
+                    lodMaxClamps:(const float[])lodMax
+                       withRange:(NSRange)r
+{
+    for (NSUInteger k = 0; k < r.length; k++)
+        [self sampler:clampedSampler(s[k], lodMin[k], lodMax[k]) index:r.location + k stage:2];
 }
 
 - (void)setDepthStencilState:(id<MTLDepthStencilState>)state
@@ -6501,6 +6552,7 @@ static void fillLimits(id)
     }
     NBSampler *sampler = [NBSampler new];
     sampler.handle = handle;
+    sampler.descriptor = d;
     return (id<MTLSamplerState>)sampler;
 }
 

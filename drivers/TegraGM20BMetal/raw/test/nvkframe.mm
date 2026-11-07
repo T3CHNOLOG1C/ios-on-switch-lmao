@@ -579,6 +579,16 @@ int main(int argc, char **argv)
                                 [e setFragmentSamplerState:smp[d.samplers[s]] atIndex:s];
                         if (getenv("FRAME_SAMPLER_SLOT"))
                             [e setFragmentSamplerState:smp[0] atIndex:atoi(getenv("FRAME_SAMPLER_SLOT"))];
+                        // FRAME_SPI: the first bound sampler again with a bind's LOD clamps (GL-on-Metal's)
+                        if (spi)
+                            for (int s = 0; s < 16; s++)
+                                if (d.samplers[s] >= 0) {
+                                    [e setFragmentSamplerState:smp[d.samplers[s]]
+                                                   lodMinClamp:0.5f
+                                                   lodMaxClamp:3.25f
+                                                       atIndex:s];
+                                    break;
+                                }
                         [e setScissorRect:(MTLScissorRect){d.scissor[0], d.scissor[1], d.scissor[2], d.scissor[3]}];
                         if (d.ds >= 0) {
                             [e setDepthStencilState:dss[d.ds]];

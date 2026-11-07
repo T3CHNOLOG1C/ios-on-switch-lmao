@@ -1666,6 +1666,7 @@ static void refuseTexture(RMTexture *t, RMPred p, uint64_t a, uint64_t b, NSStri
 @public
     raw::Sampler _raw;
     MTLSamplerDescriptor *_descriptor;
+    NSMutableDictionary<NSValue *, id<MTLSamplerState>> *_clamped;  // its descriptor's with a bind's LOD clamps
 }
 @end
 @implementation RMSampler
@@ -2456,6 +2457,55 @@ static void forwardCall(RMEncoder *e, SEL selector, const void *argument)
 {
     for (NSUInteger k = 0; k < r.length; k++)
         [self sampler:2 object:s[k] index:r.location + k];
+}
+
+// A bind's LOD clamps replace the state's (Metal's rule): the state of its descriptor with those clamps, made once per state and
+// clamps, bound as any state is (the frontend's the same)
+static id<MTLSamplerState> clampedSampler(id<MTLSamplerState> s, float lodMin, float lodMax)
+{
+    if (![(id)s isKindOfClass:[RMSampler class]])
+        return s;
+    RMSampler *base = (RMSampler *)s;
+    const float clamps[2] = {lodMin, lodMax};
+    NSValue *key = [NSValue valueWithBytes:clamps objCType:@encode(float[2])];
+    @synchronized(base) {
+        if (!base->_clamped)
+            base->_clamped = [NSMutableDictionary dictionary];
+        if (id<MTLSamplerState> made = base->_clamped[key])
+            return made;
+        MTLSamplerDescriptor *d = [base->_descriptor copy];
+        d.lodMinClamp = lodMin;
+        d.lodMaxClamp = lodMax;
+        id<MTLSamplerState> made = [(id<MTLDevice>)base->_device newSamplerStateWithDescriptor:d];
+        if (made)
+            base->_clamped[key] = made;
+        return made;
+    }
+}
+
+- (void)setVertexSamplerState:(id<MTLSamplerState>)s
+                  lodMinClamp:(float)lodMin
+                  lodMaxClamp:(float)lodMax
+                      atIndex:(NSUInteger)index
+{
+    [self sampler:1 object:clampedSampler(s, lodMin, lodMax) index:index];
+}
+
+- (void)setFragmentSamplerState:(id<MTLSamplerState>)s
+                    lodMinClamp:(float)lodMin
+                    lodMaxClamp:(float)lodMax
+                        atIndex:(NSUInteger)index
+{
+    [self sampler:2 object:clampedSampler(s, lodMin, lodMax) index:index];
+}
+
+- (void)setFragmentSamplerStates:(const id<MTLSamplerState> __unsafe_unretained[])s
+                    lodMinClamps:(const float[])lodMin
+                    lodMaxClamps:(const float[])lodMax
+                       withRange:(NSRange)r
+{
+    for (NSUInteger k = 0; k < r.length; k++)
+        [self sampler:2 object:clampedSampler(s[k], lodMin[k], lodMax[k]) index:r.location + k];
 }
 
 - (void)setScissorRect:(MTLScissorRect)r
