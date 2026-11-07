@@ -3,7 +3,8 @@
 The image is a sparse file. Its data ranges are copied. APFS reads only what its own structures reference, so the
 partition's other bytes (the Linux or Android data it held before) may stay, with one exception: on mount, APFS
 scans the checkpoint descriptor area for the newest valid superblock. A stale one from an earlier container there
-would win, so the checkpoint areas are written whole, holes as zeros.
+would win, so the descriptor area is written whole, holes as zeros. The checkpoint data area and the internal pool
+are read only where the checkpoint map or the pool's bitmap points, which is data, so their holes stay holes.
 """
 
 import os
@@ -44,18 +45,14 @@ def data_ranges(fd: int, offset: int, size: int, block: int) -> list[tuple[int, 
 
 
 def container(nxsb: bytes) -> tuple[int, int, uuid.UUID, list[tuple[int, int]]]:
-    """(block size, block count, container UUID, [(start, end)] of the checkpoint areas) from block 0."""
+    """(block size, block count, container UUID, [(start, end)] of the checkpoint descriptor area) from block 0."""
     if nxsb[32:36] != NX_MAGIC:
         raise ExtentError('partition offset 0 is not an APFS container superblock')
     block, count = struct.unpack_from('<IQ', nxsb, 36)
-    desc_blocks, data_blocks, desc_base, data_base = struct.unpack_from('<IIQQ', nxsb, 104)
-    if (desc_blocks | data_blocks) & NX_NONCONTIGUOUS:
-        raise ExtentError('the checkpoint areas are not contiguous')
-    areas = [
-        (desc_base * block, (desc_base + desc_blocks) * block),
-        (data_base * block, (data_base + data_blocks) * block),
-    ]
-    return block, count, uuid.UUID(bytes=nxsb[72:88]), sorted(areas)
+    desc_blocks, desc_base = struct.unpack_from('<I', nxsb, 104)[0], struct.unpack_from('<Q', nxsb, 112)[0]
+    if desc_blocks & NX_NONCONTIGUOUS:
+        raise ExtentError('the checkpoint descriptor area is not contiguous')
+    return block, count, uuid.UUID(bytes=nxsb[72:88]), [(desc_base * block, (desc_base + desc_blocks) * block)]
 
 
 def plan(

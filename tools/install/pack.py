@@ -144,8 +144,7 @@ def write_head(directory: Path, m: manifest.Manifest, boot_files: list[tuple[str
 class Source:
     """The composed container: the image file, its offset there, and apfs_tool's measure of it in bytes.
 
-    The measure has container_bytes, minimum_bytes and the internal pool's [pool_start, pool_end), which the installer
-    writes whole like the checkpoint areas: the fit reads the pool's bitmaps from the card.
+    The measure has container_bytes, minimum_bytes and the internal pool's [pool_start, pool_end).
     """
 
     image: Path
@@ -176,7 +175,7 @@ def pack(source: Source, target: Target, log: host.Log, punch: bool = True) -> m
         if block * count != size:
             raise extents.ExtentError(f'the container is {block * count} bytes, its measure {size}')
         data = [(a, min(b, minimum)) for a, b in extents.data_ranges(fd, source.offset, size, block) if a < minimum]
-        plan = extents.plan(data, [*areas, (layout['pool_start'], layout['pool_end'])], minimum, block)
+        plan = extents.plan(data, areas, minimum, block)
         sizes = manifest.split(manifest.BODY_OFFSET + sum(n for _, s, n in plan if s != manifest.ZERO))
         log(f'pack: {len(plan)} extents, {sum(sizes)} bytes in {len(sizes)} parts, {WORKERS} workers')
         writer = Writer(directory, name, sizes)
