@@ -267,11 +267,11 @@ impl Linked {
         spare: impl FnOnce() -> Option<Turn>,
         make: impl Fn(Part) -> Result<vk::Pipeline, Error> + Sync,
     ) -> Result<[vk::Pipeline; 4], Error> {
-        let library = |part: Part| &self.0[part as usize];
-        let made_here = |part: Part| library(part).made(|| make(part));
-        let fragment = match library(Part::PreRasterization).is_made() {
+        let made_here = |part: Part| self.library(part).made(|| make(part));
+        let fragment = match self.library(Part::PreRasterization).is_made() {
             true => None,
-            false => spare().and_then(|turn| Some((turn, library(Part::FragmentShader).claim()?))),
+            false => spare()
+                .and_then(|turn| Some((turn, self.library(Part::FragmentShader).claim()?))),
         };
         let mut raws = [vk::Pipeline::null(); 4];
         match fragment {
@@ -299,6 +299,10 @@ impl Linked {
             }
         }
         Ok(raws)
+    }
+
+    fn library(&self, part: Part) -> &Library {
+        &self.0[part as usize]
     }
 
     /// Whether the libraries of its shaders, its pre-rasterization and fragment shader parts,
