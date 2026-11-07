@@ -36,12 +36,17 @@ ios_binary(
         "AVE/AVEEncoder.c",
         "AVE/H264NVENC.c",
         "AVE/NVENCClient.c",
+        "//kits/SwitchRefusal:SwitchRefusal.c",
     ],
     out = "build/switch-video/H264H7.videoencoder",
     hdrs = glob(
         ["AVE/*.h"],
         allow_empty = True,
-    ) + ["//drivers/TegraNVENC:headers"] + ["//drivers/SwitchVideoDecoders:AVD/VTDecoderSPI.h"],
+    ) + [
+        "//drivers/SwitchVideoDecoders:AVD/VTDecoderSPI.h",
+        "//drivers/TegraNVENC:headers",
+        "//kits/SwitchRefusal:SwitchRefusal.h",
+    ],
     copts = [
         "-O2",
         "-Wall",

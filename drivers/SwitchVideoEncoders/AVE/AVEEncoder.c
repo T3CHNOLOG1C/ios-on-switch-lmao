@@ -30,8 +30,9 @@
 // picture predicts from the previous picture's reconstruction (two buffers in turn); a key frame is an IDR. A P picture
 // NVENC refuses (its status says why, one error line) leaves the session intra only, so the stream goes on.
 //
-// Log (subsystem com.brunostjohn.switch.ave, category encoder): per process, a refusal by TegraNVENC; per session, one
-// line when it starts and one when it ends (frames, bytes, mean copy and encode time).
+// Log (subsystem com.brunostjohn.switch.ave, category encoder): per session, one line when it starts and one when it ends
+// (frames, bytes, mean copy and encode time). Refusals (a size, TegraNVENC refusing the process, a property) are
+// kits/SwitchRefusal's, category AVE: one error line per process and reason.
 #include <CoreFoundation/CoreFoundation.h>
 #include <dispatch/dispatch.h>
 #include <mach/mach_time.h>
@@ -43,6 +44,7 @@
 #include "NVENCClient.h"
 #include "RateControl.h"
 #include "VTEncoderSPI.h"
+#include "../../../kits/SwitchRefusal/SwitchRefusal.h"
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wunused-const-variable"
 #pragma clang diagnostic ignored "-Wunused-variable"
@@ -444,13 +446,13 @@ static OSStatus startSession(VTVideoEncoderRef ref, VTVideoEncoderSession sessio
     OSStatus status = noErr;
     int error = 0;
     if (h264enc_configure(&probe)) {
-        os_log(gLog, "AVE: %dx%d in %{public}s refused: NVENC encodes 32..4096 a side, even sizes, up to 4096x2304",
-               size.width, size.height, getprogname());
+        switch_refusal_k(switch_refusal_key_with(switch_refusal_key("AVE", "size outside NVENC's range"),
+                                                 (uint64_t)(uint32_t)size.width << 32 | (uint32_t)size.height),
+                         "AVE", "size outside NVENC's range",
+                         "%dx%d: NVENC encodes 32..4096 a side, even sizes, up to 4096x2304", size.width, size.height);
         status = kVTCouldNotFindVideoEncoderErr;
     } else if (!(e->client = nvenc_open(&error)) || !nvenc_info(e->client, &e->info)) {
-        static int logged;
-        if (!__atomic_exchange_n(&logged, 1, __ATOMIC_RELAXED))
-            os_log_error(gLog, "AVE: TegraNVENC refused %{public}s (%#x): no H.264 encoder here", getprogname(), error);
+        switch_refusal("AVE", "TegraNVENC refused the process", "error %#x: no H.264 encoder here", error);
         status = kVTCouldNotFindVideoEncoderErr;
     }
     if (!status) {
@@ -657,10 +659,10 @@ static OSStatus setProperty(CMBaseObjectRef ref, CFStringRef key, CFTypeRef valu
         // that change no slice (progressive, square-sample 8-bit streams only).
     } else {
         status = kVTPropertyNotSupportedErr;
-        static int logged;
-        if (!__atomic_exchange_n(&logged, 1, __ATOMIC_RELAXED))
-            os_log(gLog, "AVE: %{public}s set %{public}@, which this encoder does not support (first refusal only)",
-                   getprogname(), key);
+        char name[96] = "";
+        CFStringGetCString(key, name, sizeof(name), kCFStringEncodingUTF8);
+        switch_refusal_k(switch_refusal_key_with(switch_refusal_key("AVE", "property not supported"), CFHash(key)),
+                         "AVE", "property not supported", "%s", name);
     }
     pthread_mutex_unlock(&e->lock);
     return status;

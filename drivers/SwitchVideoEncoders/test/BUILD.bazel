@@ -52,6 +52,8 @@ host_library(
         "//drivers/SwitchVideoEncoders:AVE/RateControl.h",
         "//drivers/SwitchVideoEncoders:AVE/VTEncoderSPI.h",
         "//drivers/SwitchVideoDecoders:AVD/VTDecoderSPI.h",
+        "//kits/SwitchRefusal:SwitchRefusal.c",
+        "//kits/SwitchRefusal:SwitchRefusal.h",
     ],
     copts = ["-O1"],
     defines = ["main=ave_host_main"],
