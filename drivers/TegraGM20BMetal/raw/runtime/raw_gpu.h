@@ -35,6 +35,7 @@
 #include "raw_pack.h"
 #include "raw_push.h"
 #include "raw_region.h"
+#include "raw_zeta.h"
 #include "raw_ycbcr.h"
 #include "../fx/fx_mip.h"
 
@@ -168,6 +169,10 @@ struct Texture {
     bool blockLinear = false;
     uint8_t blockHeight = 0;
     uint64_t layerBytes = 0;
+
+    // Depth32Float_Stencil8 (raw_zeta.h): block-linear zeta memory, bound with its own PTE kind; never sampled, copied or a
+    // colour target
+    bool zeta = false;
 };
 
 struct Buffer {
@@ -220,8 +225,9 @@ struct Pipeline {
     bool caTransform = false;
     uint8_t positionComponents = 0;
     uint16_t positionOffset = 0;
-    uint8_t readBits = 0;   // colors its draws read as they were: blended into, or written through a partial mask
-    uint8_t fetchBits = 0;  // colors it reads by framebuffer fetch
+    uint8_t readBits = 0;      // colors its draws read as they were: blended into, or written through a partial mask
+    uint8_t fetchBits = 0;     // colors it reads by framebuffer fetch
+    uint32_t depthFormat = 0;  // its key's depth and stencil attachment format (ds=<format>/<format>; 0: none)
 };
 
 // A render pass's attachments (Core Animation: color 0 the target, color 1 a memoryless attachment, writeMask 0 or 15)
@@ -238,9 +244,18 @@ struct ColorAttachment {
     float clear[4] = {};
 };
 
+// The pass's Depth32Float_Stencil8 attachment, its depth and stencil aspects one texture (memoryless: neither loaded nor stored)
+struct DepthStencilAttachment {
+    Texture *texture = nullptr;
+    bool clearDepth = false, clearStencil = false;  // the aspect's load is Clear (else DontCare)
+    float depth = 1;
+    uint32_t stencil = 0;
+};
+
 struct PassDesc {
     ColorAttachment color[8];
     uint32_t count = 0;
+    DepthStencilAttachment depthStencil;
     // renderTargetWidth / renderTargetHeight: the render area's bounds where nonzero (m2v render_pass.rs `area`: the
     // attachments' smallest extent, each axis limited by its target size)
     uint32_t width = 0, height = 0;
@@ -271,6 +286,8 @@ public:
 
     void setScissor(uint32_t x, uint32_t y, uint32_t w, uint32_t h);
     void setBlendColor(const float rgba[4]);
+    void setDepthStencil(const DepthStencilDesc *d);  // null: Metal's default state
+    void setStencilReference(uint32_t front, uint32_t back);
     void setViewport(double x, double y, double w, double h, double znear, double zfar);
     void barrier();  // memoryBarrier...: everything before is written and visible to what follows
     // false: this draw cannot be drawn exactly as m2v would (*why says what); the command buffer goes to m2v instead
@@ -311,6 +328,9 @@ private:
                  uint32_t baseInstance, bool indexed, const char **why);
     uint32_t scissor_[2] = {}, viewport_[8] = {};
     bool scissorDirty_ = true, viewportDirty_ = true;
+    DepthStencilDesc ds_;
+    uint32_t stencilRef_[2] = {};
+    bool dsDirty_ = true;
     uint32_t blendColor_[4] = {};  // Metal's default, (0, 0, 0, 0), until the encoder sets one
     bool blendColorDirty_ = true;
     uint32_t topology_ = ~0u, restart_ = ~0u, first_ = 0, baseInstance_ = 0;
@@ -392,7 +412,8 @@ enum RefusalId : uint8_t {
     RefBaseInstance,
     RefColorFormats,
     RefUboOffset,
-    RefNoTic
+    RefNoTic,
+    RefDepthStencil  // a: the state's depth format, b: the pass's
 };
 
 struct Refusal {
@@ -427,6 +448,7 @@ private:
     uint64_t pushStart_ = 0, uploadStart_ = 0;
     uint32_t rootPush_[32] = {};
     uint32_t restart_ = 0;  // SET_DA_PRIMITIVE_RESTART_INDEX as the GPU will hold it
+    DepthStencilRegs ds_;   // and its depth/stencil registers
     bool drawn_ = false;    // a draw was encoded (NVK resets the restart index at a command buffer's first)
     void segment(uint32_t *from, uint32_t *to);
 };
@@ -474,6 +496,7 @@ public:
                              uint32_t format,
                              Texture &t);  // over a buffer's memory (t holds no reference: the caller keeps the buffer)
     bool createView(const Texture &of, uint32_t format, Texture &t);  // the same memory as another format
+    // Memoryless (a pass gives it a backing); Depth32Float_Stencil8 among them, as zeta (Texture::zeta)
     bool createMemoryless(uint32_t width, uint32_t height, uint32_t format, Texture &t);
     // A mipmapped 2D texture of `levels` levels: level 0 a pool texture as createTexture's, its header the block-linear chain's
     // (Texture::chain). False: not one the raw path keeps (chainsOn() false, a format the 2D engine does not filter, no memory).
@@ -689,6 +712,7 @@ private:
     CommandBuffer cb_;
     uint32_t rootPush_[32] = {};  // what the GPU's root table holds at [0x700, 0x780) after everything submitted
     uint32_t restart_ = 0;        // and its primitive restart index
+    DepthStencilRegs ds_;         // and its depth/stencil registers
     std::map<std::tuple<uint64_t, uint64_t, uint64_t>, Import *> surfaces_;
     std::vector<Chunk> chunks_;
 
@@ -704,14 +728,28 @@ private:
     std::vector<Spare> spares_;
     // mip chains' memory: chunks bound with PTE kind 0xFE (fx::kBlockLinearKind), made on demand, never CPU-written
     std::vector<Chunk> blChunks_;
+    // zeta memory: chunks bound with kZetaPteKind, made on demand, never CPU-written
+    std::vector<Chunk> zChunks_;
     // write-combined buffers' memory: GPU-pool BOs (BoAlloc coherent: the CPU maps them write-combined), sub-allocated by page
     std::vector<Chunk> wcChunks_;
     bool wcAlloc(uint64_t bytes, Span &s);
     void wcFree(Span &s);
     bool chainsOn_ = false;
     fx::Sampling sampling_;  // the self-test's winner: how every chain's scaled steps sample
-    bool blAlloc(uint64_t bytes, uint64_t align, Span &s);
-    void blFree(Span &s);
+
+    bool blAlloc(uint64_t bytes, uint64_t align, Span &s)
+    {
+        return tiledAlloc(blChunks_, fx::kBlockLinearKind, bytes, align, s);
+    }
+
+    void blFree(Span &s)
+    {
+        tiledFree(blChunks_, s);
+    }
+
+    // a span of chunks bound with PTE kind `kind` (block-linear images), lock_ held
+    bool tiledAlloc(std::vector<Chunk> &chunks, uint32_t kind, uint64_t bytes, uint64_t align, Span &s);
+    void tiledFree(std::vector<Chunk> &chunks, Span &s);
     void selfTest();
 
     struct Backing {
@@ -752,9 +790,13 @@ private:
     void dropLocked(Lease *lease);
     // lock_ held: the span goes back to where it came from now, or at its lease's last drop
     void freeSpan(Span &span, Memory from, Lease *&lease);
-    // A memoryless attachment's memory (tag 0), or a shadow target's pool image for attachment j (tag 1 + j): one per size,
-    // format and tag, kept while passes use it
-    Texture *backing(const Texture &memoryless, uint32_t tag = 0);
+    // A memoryless color attachment j's memory (tag kMemorylessTag + j: two of a pass never share one), a shadow target's pool
+    // image for attachment j (tag 1 + j), or a memoryless zeta's (tag 0): one per size, format and tag, kept while passes use it
+    // `blockLinear`: a colour backing of a pass with a depth/stencil attachment (NVK renders no pitch colour beside zeta); a
+    // zeta's is zeta memory
+    static constexpr uint32_t kMemorylessTag = 9;
+    Texture *backing(const Texture &memoryless, uint32_t tag = 0, bool blockLinear = false);
+    void freeBacking(Texture &t);
     void trimBackings();
 };
 

@@ -44,6 +44,8 @@ enum : uint32_t {
     VERTEX_ARRAY_START = 0x0d74,
     DRAW_VERTEX_ARRAY = 0x0d78,
     COLOR_CLEAR_VALUE = 0x0d80,
+    Z_CLEAR_VALUE = 0x0d90,
+    STENCIL_CLEAR_VALUE = 0x0da0,
     INVALIDATE_SHADER_CACHES_NO_WFI = 0x0da4,
     PIXEL_SHADER_BARRIER = 0x0de0,
     INVALIDATE_TEXTURE_DATA_CACHE_PIXEL_ORDERED = 0x0f74,
@@ -862,11 +864,17 @@ void Decoder::clear(uint32_t data)
     pendingBarriers_.clear();
     const uint32_t rt = (data >> 6) & 0xf;
     const uint32_t m = COLOR_TARGET + 0x40 * rt;
-    fprintf(out_,
-            "CLEAR data=%08x rt=%s,%ux%u,fmt=%x,mem=%x color=%08x,%08x,%08x,%08x rect=%08x,%08x ctl=%08x barriers=%s\n",
-            data, name(addr3(m, m + 4)).c_str(), r3(m + 8), r3(m + 0xc), r3(m + 0x10), r3(m + 0x14),
-            r3(COLOR_CLEAR_VALUE), r3(COLOR_CLEAR_VALUE + 4), r3(COLOR_CLEAR_VALUE + 8), r3(COLOR_CLEAR_VALUE + 0xc),
-            r3(CLEAR_RECT_H), r3(CLEAR_RECT_V), r3(CLEAR_SURFACE_CONTROL), bar.c_str());
+    // depth (Z_ENABLE) or stencil (STENCIL_ENABLE): their clear values and the depth target too
+    char zs[96] = "";
+    if (data & 3)
+        snprintf(zs, sizeof zs, " zs=%08x,%02x,%s", r3(Z_CLEAR_VALUE), r3(STENCIL_CLEAR_VALUE) & 0xff,
+                 name(addr3(ZT_A, ZT_B)).c_str());
+    fprintf(
+        out_,
+        "CLEAR data=%08x rt=%s,%ux%u,fmt=%x,mem=%x color=%08x,%08x,%08x,%08x rect=%08x,%08x ctl=%08x%s barriers=%s\n",
+        data, name(addr3(m, m + 4)).c_str(), r3(m + 8), r3(m + 0xc), r3(m + 0x10), r3(m + 0x14), r3(COLOR_CLEAR_VALUE),
+        r3(COLOR_CLEAR_VALUE + 4), r3(COLOR_CLEAR_VALUE + 8), r3(COLOR_CLEAR_VALUE + 0xc), r3(CLEAR_RECT_H),
+        r3(CLEAR_RECT_V), r3(CLEAR_SURFACE_CONTROL), zs, bar.c_str());
 }
 
 // Raw facts of a draw for the pack generator (tools/mkpack.py): every non-zero 3D register, the root table's words, set 0's
