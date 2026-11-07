@@ -905,9 +905,17 @@ void SwitchMotion::post(Sensor sensor, const int16_t raw[3], uint64_t now)
 // tilt and hysteresis margins Apple's documentation describes: face up/down within 25 degrees of flat (leaving it past
 // 35), portrait against landscape 10 degrees past the diagonal, nothing while the device is accelerating, and 0.4 s of
 // agreement. A new orientation is announced at once; an unchanged one again once the console is still after it moved
-// (kOrientationMovingMicroG), since a client hears only events sent after it started listening (file comment).
+// (kOrientationMovingMicroG), since a client hears only events sent after it started listening (file comment). The
+// first sample after the detector starts (boot, panel on) seeds the filter and is announced as it is, as an AOP knows
+// its orientation from the first second: backboardd asks LastOrientation at its start, and an unknown one made it
+// lay the interface out in portrait and back for several seconds.
 void SwitchMotion::detectOrientation(const int32_t accel[3])
 {
+    const bool first = orientation == Unknown && candidate == Unknown && !gravity[0] && !gravity[1] && !gravity[2];
+    if (first) {
+        for (unsigned i = 0; i < 3; ++i)
+            gravity[i] = accel[i];
+    }
     int64_t moved = 0;
     for (unsigned i = 0; i < 3; ++i) {
         const int64_t d = (int64_t)accel[i] - gravity[i];
@@ -950,7 +958,7 @@ void SwitchMotion::detectOrientation(const int32_t accel[3])
         candidate = next;
         candidateCount = 0;
     }
-    if (++candidateCount < kOrientationStable)
+    if (++candidateCount < kOrientationStable && !(first && next != Unknown))
         return;
     candidateCount = 0;
     static const char *const names[] = {
