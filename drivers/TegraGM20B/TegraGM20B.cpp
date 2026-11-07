@@ -114,6 +114,9 @@ IOReturn publish()
 	}
 	accelerator->setProperty("MetalPluginName", "TegraGM20BMetal");
 	accelerator->setProperty("MetalPluginClassName", "TegraGM20BMetalDevice");
+	// OpenGL ES (libGFXShared's _gfxInitializeLibrary) loads the renderer this names, as on J120's AGXG9G: Apple's
+	// GLES over Metal, which runs on the Metal device above. Without it every EAGLContext is nil.
+	accelerator->setProperty("IOGLESBundleName", "AppleMetalGLRenderer");
 	// backboardd is the render server. iconservicesagent: with no Metal device Core Image 21H461 falls back to OpenGL ES,
 	// which has no driver here, and the agent crash-loops on every SF Symbol (Settings then waits on it forever).
 	// ScreenshotServicesService (the screenshot thumbnail and markup): PencilKit's -[PKMetalResourceHandler
