@@ -19,15 +19,6 @@ typedef struct OpaqueVTVideoDecoderFrame *VTVideoDecoderFrame;
 typedef CMBaseObjectRef VTVideoDecoderRef;
 typedef struct OpaqueVTTileDecoderSession *VTTileDecoderSession;
 
-// Passed by value in one register each (VTTileDecompressionSessionDecodeTile, 21H461 0x197bab840).
-typedef struct {
-    int32_t x, y;
-} VTInt32Point;
-
-typedef struct {
-    int32_t width, height;
-} VTInt32Size;
-
 typedef struct {
     uint32_t version;
     size_t derivedStorageSize;
@@ -74,7 +65,7 @@ _Static_assert(offsetof(VTPluginDecoderClass, canAcceptFormatDescription) == 0x3
 _Static_assert(offsetof(VTPluginDecoderClass, startTileSession) == 0x40, "VTVideoDecoderClass v3");
 _Static_assert(offsetof(VTPluginDecoderClass, decodeTile) == 0x48, "VTVideoDecoderClass v3");
 _Static_assert(offsetof(VTPluginDecoderClass, finishDelayedTiles) == 0x50, "VTVideoDecoderClass v3");
-_Static_assert(sizeof(VTInt32Point) == 8 && sizeof(VTInt32Size) == 8, "one register each");
+_Static_assert(sizeof(VTInt32Point) == 8 && sizeof(VTInt32Size) == 8, "VTBase.h's, one register each by value");
 
 typedef OSStatus (*VTDecoderCreateInstance)(FourCharCode codecType, CFAllocatorRef allocator, VTVideoDecoderRef *out);
 
