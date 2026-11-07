@@ -244,6 +244,20 @@ void tgm_coherency_put(struct tgm_coh *c);
 /* always: mark it even if the GPU only samples it (TegraGM20BPushImportsWritten). uid, seqno: the submission (channel
  * tgm_chan_uid, its fence seqno) that may have written it, which a CPU lock waits for. */
 void tgm_coherency_wrote(struct tgm_coh *c, int always, uint32_t uid, uint32_t seqno);
+/* The submissions an entry keeps as its writers: the raw path's channel and m2v's, in each of two processes. A later one
+ * of the same channel takes its slot, and so does any once its writer completed; past that the entry loses track. */
+#define TGM_COH_WRITERS 4
+/* A submission whose ExecSurfaces (method 17) listed the surface as written: wrote with `always`, and a listed writer too,
+ * which another channel's listed Exec waits for on the GPU. */
+void tgm_coherency_wrote_listed(struct tgm_coh *c, uint32_t uid, uint32_t seqno);
+/* The listed writers (uid << 32 | seqno) `c` names, done or not; *lost: nonzero when listed writers found no slot since
+ * tgm_coherency_lost_seen(c, *lost) last cleared it (some submissions that may write it are not among them); *pa: the
+ * surface's first page. */
+uint32_t tgm_coherency_writers(const struct tgm_coh *c, uint64_t out[TGM_COH_WRITERS],
+			       uint32_t *lost, uint64_t *pa);
+/* Every channel that imports the surface completed what it had submitted: the count `lost` read goes, unless more were
+ * lost since. */
+void tgm_coherency_lost_seen(struct tgm_coh *c, uint32_t lost);
 /* Also the locks that waited for GPU writes and the AvoidSync locks refused (count each). */
 void tgm_coherency_take_stats(uint64_t out[6]);
 /* XNU's iokit_user_client_trap, after an IOSurfaceRootUserClient trap ran: index 2 lock, 3 unlock (IOConnectTrap3 p1 the
@@ -306,6 +320,16 @@ void tgm_relayout_by_cpu(const struct tgm_relayout_pages *surface,
 /* The GPU address in `vm` (one that maps every connection's fence page, as every tgm_vm_new space does) of channel uid's
  * fence seqno; -ENOENT when it is gone or killed (its work is complete or abandoned). */
 int tgm_writer_fence_va(struct tgm_vm *vm, uint32_t uid, uint64_t *va);
+/* Method 17's acquires (TegraGM20BFences.h): chan's next submission waits on the GPU for each writer (uid << 32 | seqno) of
+ * another live channel that has not completed it, queued as tgm_chan_order's; follow_importers, for the last submission of
+ * every other channel whose address space imports the surface whose first page is `pa` and has work pending (*pending:
+ * how many). 0, or tgm_chan_order's -ENODEV (no view of the fence pages) or -ENOSPC (TGM_ORDER_MAX channels queued): the
+ * rest go unqueued. */
+int tgm_chan_follow(struct tgm_chan *chan, const uint64_t *writers, uint32_t n);
+int tgm_chan_follow_importers(struct tgm_chan *chan, uint64_t pa, uint32_t *pending);
+/* A GPU client made (add 1) or removed (add -1) a bind of the whole surface holding `c` with TEGRA_SCANOUT_TILED_KIND:
+ * the surface is tiled while any such bind lives, whatever other binds of it say (tegra_gm20b_surface_tiled). */
+void tgm_coherency_tiled_bind(struct tgm_coh *c, int add);
 
 /* The stats (every periodic tegra-gm20b line, the submissions' GPU stamps, the push scan and profile): debug kernels
  * only; a release kernel has none of their code or strings. */

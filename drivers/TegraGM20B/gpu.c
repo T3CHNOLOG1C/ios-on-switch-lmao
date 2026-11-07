@@ -62,6 +62,7 @@
 #include <nvhw/class/cla0b5.h>
 #include "TegraGM20BClkgate.h"
 #include "TegraGM20BGpu.h"
+#include "TegraGM20BFences.h"
 #include "TegraGM20BHangDecode.h"
 #include "TegraGM20BRail.h"
 #include "TegraGM20BRecover.h"
@@ -3819,6 +3820,59 @@ void tgm_writers_wait_all(void)
 {
 	while (tegra_gm20b_sync_for_cpu(NULL, 0, TGM_WRITER_HANG_NS) == -ETIMEDOUT) {
 	}
+}
+
+/* Implicit order between processes (TegraGM20BABI.h method 17, TegraGM20BFences.h): a submission's acquires on the writers of
+ * the surfaces it touches, queued as tgm_chan_order's are. Each writer names a submission kicked before the call (Exec records
+ * it once tgm_chan_exec returned), so no two submissions can wait for each other. */
+int tgm_chan_follow(struct tgm_chan *chan, const uint64_t *writers, uint32_t n)
+{
+	struct tgm_fence_source state;
+	struct tgm_chan *src;
+	uint32_t i;
+	int ret = 0;
+
+	mutex_lock(&live_lock);
+	for (i = 0; i < n && !ret; i++) {
+		src = live_by_uid(tgm_fence_uid(writers[i]));
+		if (!src || src->kernel)
+			continue;
+		state.self = src == chan;
+		state.killed = READ_ONCE(src->error) != 0;
+		state.completed = tgm_chan_completed(src);
+		if (tgm_fence_wanted(writers[i], &state))
+			ret = order_add(chan, src, tgm_fence_seqno(writers[i]));
+	}
+	mutex_unlock(&live_lock);
+	return ret;
+}
+
+int tgm_chan_follow_importers(struct tgm_chan *chan, uint64_t pa, uint32_t *pending)
+{
+	struct tgm_fence_source state;
+	struct tgm_chan *other;
+	u32 last;
+	int ret = 0;
+
+	*pending = 0;
+	mutex_lock(&live_lock);
+	list_for_each_entry(other, &live_chans, live)
+	{
+		if (other->kernel || !vm_imports(other->vm, pa))
+			continue;
+		last = READ_ONCE(other->submitted);
+		state.self = other == chan;
+		state.killed = READ_ONCE(other->error) != 0;
+		state.completed = tgm_chan_completed(other);
+		if (!tgm_fence_wanted((u64)(u32)other->id << 32 | last, &state))
+			continue;
+		(*pending)++;
+		ret = order_add(chan, other, last);
+		if (ret)
+			break;
+	}
+	mutex_unlock(&live_lock);
+	return ret;
 }
 
 void tgm_cpu_clean_pages(const uint64_t *pas, uint32_t npages)

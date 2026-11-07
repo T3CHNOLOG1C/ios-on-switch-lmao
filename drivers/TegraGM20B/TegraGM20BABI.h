@@ -32,10 +32,12 @@ enum {
 	TegraGM20BMethodOrder = 14,         /* with TegraGM20BInfoOrder */
 	TegraGM20BMethodSurfaceWrites = 15, /* with TegraGM20BInfoSurfaceWrites */
 	TegraGM20BMethodSurfaceLayout = 16, /* with TegraGM20BInfoSurfaceLayout */
+	TegraGM20BMethodExecSurfaces = 17,  /* with TegraGM20BInfoExecSurfaces */
 	TegraGM20BMethodPriority = 18,      /* with TegraGM20BInfoPriority */
 
 	TegraGM20BMaxBindOps = 100,
 	TegraGM20BMaxPushes = 255,
+	TegraGM20BMaxExecSurfaces = 64,
 };
 
 /* TegraGM20BAbiInfo.flags */
@@ -48,6 +50,7 @@ enum {
 	TegraGM20BInfoSurfaceWrites = 1u
 		<< 5, /* BoImport takes TegraGM20BImportGpuReads; method 15 is implemented */
 	TegraGM20BInfoSurfaceLayout = 1u << 6, /* method 16 is implemented */
+	TegraGM20BInfoExecSurfaces = 1u << 7, /* ExecSurfaces (method 17) is implemented */
 	TegraGM20BInfoPriority = 1u << 8,      /* Priority (method 18) is implemented */
 };
 
@@ -243,6 +246,42 @@ struct TegraGM20BAbiExecReply {
 	uint32_t reserved;
 };
 
+/* TegraGM20BAbiSurfaceUse.access: one or both */
+enum {
+	TegraGM20BSurfaceRead = 1u << 0,
+	TegraGM20BSurfaceWrite = 1u << 1, /* renders, blits or stores into it */
+};
+
+/* TegraGM20BAbiExecSurfaces.flags */
+enum {
+	TegraGM20BExecSurfacesAll = 1u
+		<< 0, /* it touches more imports than it lists: the Exec runs as one with no list */
+};
+
+/* Method 17. The host imports (BoImport handles) the channel's next Exec touches, as an Apple command buffer carries its
+ * resource list. That Exec starts with a semaphore acquire, as Order's (method 14), on each submission of another channel,
+ * in any process, whose own list named a listed import as written and that may still be running, so it reads and writes
+ * the surface after them on the GPU, with no CPU wait; and it counts as a GPU write (TegraGM20BImportGpuReads, the
+ * IOSurfaceLock wait) of the imports it lists with TegraGM20BSurfaceWrite only. An Exec with no list, or with
+ * TegraGM20BExecSurfacesAll, waits for nothing and counts as a write of every writable import of the connection for the
+ * IOSurfaceLock wait alone: no Exec waits for it on the GPU. A client's surfaces are fenced from the point it sends lists.
+ * The channel's next Exec takes the list whether it succeeds or not: a retry after kIOReturnBusy sends it again. The record
+ * may end after its `count` uses, as Exec's after its pushes. A handle that is not a live import is passed over. A channel
+ * queues at most TegraGM20BMaxOrderWaits acquires: the writers of more channels than that go unwaited for (logged once). */
+struct TegraGM20BAbiSurfaceUse {
+	uint64_t handle;
+	uint32_t access; /* TegraGM20BSurface* */
+	uint32_t reserved;
+};
+
+struct TegraGM20BAbiExecSurfaces {
+	uint32_t channel;
+	uint32_t count; /* 0..TegraGM20BMaxExecSurfaces */
+	uint32_t flags; /* TegraGM20BExecSurfaces* */
+	uint32_t reserved;
+	struct TegraGM20BAbiSurfaceUse uses[TegraGM20BMaxExecSurfaces];
+};
+
 /* Method 9. Returns kIOReturnSuccess once completed seqno has passed `seqno`, kIOReturnTimeout after timeout_ns (0 = poll once),
  * kIOReturnNotResponding if the channel is dead. */
 struct TegraGM20BAbiWaitFence {
@@ -370,6 +409,8 @@ TEGRA_GM20B_ASSERT(TegraGM20BAbiChannel, 8);
 TEGRA_GM20B_ASSERT(TegraGM20BAbiPush, 16);
 TEGRA_GM20B_ASSERT(TegraGM20BAbiExec, 4088);
 TEGRA_GM20B_ASSERT(TegraGM20BAbiExecReply, 8);
+TEGRA_GM20B_ASSERT(TegraGM20BAbiSurfaceUse, 16);
+TEGRA_GM20B_ASSERT(TegraGM20BAbiExecSurfaces, 1040);
 TEGRA_GM20B_ASSERT(TegraGM20BAbiWaitFence, 16);
 TEGRA_GM20B_ASSERT(TegraGM20BAbiTimestamp, 8);
 TEGRA_GM20B_ASSERT(TegraGM20BAbiStatus, 24);

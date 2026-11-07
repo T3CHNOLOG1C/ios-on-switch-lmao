@@ -486,7 +486,32 @@ TEST(GM20BCoherencySource, ExecNamesTheWriterOnceTheSubmissionHasItsSeqno)
 {
 	const std::string exec = flat(definition(client(), "IOReturn AGXDeviceUserClient::exec("));
 	expectBefore(exec, "ioreturn(tgm_chan_exec(chan, pushes, count, &seqno,",
-		     "tgm_coherency_wrote(bo->coh, importsWritten_, tgm_chan_uid(chan), seqno);");
+		     "surfaces_.after(listed, importsWritten_, tgm_chan_uid(chan), seqno);");
+	const std::string after = flat(definition(SourceText("../TegraGM20BExecSurfaces.cpp"),
+						  "void ExecSurfaces::after("));
+	EXPECT_THAT(after, HasSubstr("tgm_coherency_wrote(refs_[i].coh, always, uid, seqno);"));
+	// only a listed write is a writer another channel waits for on the GPU (gm20b_fences_test)
+	EXPECT_THAT(after, HasSubstr("tgm_coherency_wrote_listed(r->coh, uid, seqno);"));
+}
+
+// Method 17's acquires go into the submission's own stream: queued (order_add, under live_lock) before tgm_chan_exec makes
+// it, every exit of Exec past the channel check having taken the list; the decision is TegraGM20BFences.h's, which
+// gm20b_fences_test runs.
+TEST(GM20BFencesSource, ExecQueuesItsWritersAcquiresBeforeItSubmits)
+{
+	const std::string exec = flat(definition(client(), "IOReturn AGXDeviceUserClient::exec("));
+	expectBefore(exec, "const bool listed = surfaces_.before(in->channel - 1, chan, count);",
+		     "return kIOReturnBadArgument; if (p.flags & TegraGM20BPushImportsWritten)");
+	expectBefore(exec, "surfaces_.before(", "ioreturn(tgm_chan_exec(");
+	for (const char *signature :
+	     {"int tgm_chan_follow(struct tgm_chan *chan,", "int tgm_chan_follow_importers("}) {
+		const std::string follow = flat(definition(gpu(), signature));
+		expectBefore(follow, "mutex_lock(&live_lock);", "tgm_fence_wanted(");
+		expectBefore(follow, "tgm_fence_wanted(", "ret = order_add(chan,");
+		expectBefore(follow, "ret = order_add(chan,", "mutex_unlock(&live_lock);");
+	}
+	EXPECT_THAT(flat(definition(client(), "IOReturn AGXDeviceUserClient::getInfo(")),
+		    HasSubstr("TegraGM20BInfoExecSurfaces;"));
 }
 
 // A SurfaceWrites a client could not deliver never leaves a GPU write unmarked: the client stops saying its imports are
@@ -496,7 +521,7 @@ TEST(GM20BCoherencySource, AFailedSurfaceWritesFallsBackToMarkingEveryImport)
 {
 	const std::string exec = flat(definition(client(), "IOReturn AGXDeviceUserClient::exec("));
 	expectBefore(exec, "importsWritten_ = true;",
-		     "tgm_coherency_wrote(bo->coh, importsWritten_, tgm_chan_uid(chan), seqno);");
+		     "surfaces_.after(listed, importsWritten_, tgm_chan_uid(chan), seqno);");
 	const std::string raw = SourceText("../../TegraGM20BMetal/raw/runtime/raw_kernel.cpp");
 	const std::string declare = flat(definition(raw, "bool Kernel::surfaceGpuWrites("));
 	EXPECT_THAT(declare, HasSubstr("importsWritten_.store(true"));
