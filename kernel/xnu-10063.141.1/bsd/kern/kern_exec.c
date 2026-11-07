@@ -8490,29 +8490,18 @@ native_switch_watchdog_policy(proc_t p, user_addr_t scratch)
 #define NATIVE_SWITCH_POLICY_AUDIO "<key>com.apple.audiomxd</key><true/>"
 	/* maild and financed are not here, as on a Wi-Fi iPad with no account: without maild, Mail retries it about 460
 	 * times a second for minutes after every launch, and without financed FinanceKit traps destinationd at each boot.
-	 * FairPlay is out of scope (FairPlayIOKit is not prelinked), so fairplayd stays off with the FairPlay daemons that
-	 * start on their own: adid (CoreADI) and lskdd. lskdd's daily XPC activity launches it, it exits (92) before
-	 * completing the activity, and launchd respawns it once a second. SepUpdateTimer (seputil's sepOS update check) is
-	 * limited to device trees with a "hilo" node (_LimitLoadToDeviceTree), which J120 has not, yet launchd loads it
-	 * here; seputil then exits before taking its hourly activity and is respawned every 10 s. */
-#define NATIVE_SWITCH_POLICY_TAIL "<key>com.apple.photoanalysisd</key><true/>" \
-	    "<key>com.apple.mediaanalysisd</key><true/>" \
-	    "<key>com.apple.mediastream.mstreamd</key><true/>" \
-	    "<key>com.apple.icloud.searchpartyd</key><true/>" \
-	    "<key>com.apple.findmy.findmybeaconingd</key><true/>" \
-	    "<key>com.apple.familycircled</key><true/>" \
-	    "<key>com.apple.softwareupdateservicesd</key><true/>" \
-	    "<key>com.apple.ndoagent</key><true/>" \
-	    "<key>com.apple.biomesyncd</key><true/>" \
-	    "<key>com.apple.amsengagementd</key><true/>" \
-	    "<key>com.apple.eyereliefd</key><true/>" \
+	 * Every other job J120 loads runs as it does there (11-07); one that spins here is a contract of ours to fix, not
+	 * a job to turn off. softwareupdateservicesd stays off: an OTA must never replace this system. FairPlay is out of
+	 * scope (FairPlayIOKit is not prelinked), so fairplayd stays off with the FairPlay daemons that start on their own:
+	 * adid (CoreADI) and lskdd. lskdd's daily XPC activity launches it, it exits (92) before completing the activity,
+	 * and launchd respawns it once a second. SepUpdateTimer (seputil's sepOS update check) is limited to device trees
+	 * with a "hilo" node (_LimitLoadToDeviceTree), which J120 has not, yet launchd loads it here; seputil then exits
+	 * before taking its hourly activity and is respawned every 10 s. */
+#define NATIVE_SWITCH_POLICY_TAIL "<key>com.apple.softwareupdateservicesd</key><true/>" \
 	    "<key>com.apple.fairplayd.A2</key><true/>" \
 	    "<key>com.apple.adid</key><true/>" \
 	    "<key>com.apple.lskdd</key><true/>" \
 	    "<key>com.apple.SepUpdateTimer</key><true/>" \
-	    "<key>com.apple.passd</key><true/>" \
-	    "<key>com.apple.mobile.obliteration</key><true/>" \
-	    "<key>com.apple.coreduetd</key><true/>" \
 	    NATIVE_SWITCH_POLICY_NO_HARDWARE \
 	    "</dict></plist>\n"
 	/* No such hardware on the Switch (approved 11-04): NFC, secure element, Tap to Pay, ID wallet, Face ID, UWB,
