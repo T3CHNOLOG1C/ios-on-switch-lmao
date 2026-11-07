@@ -59,6 +59,36 @@ def to_xml(value):
 def sx(v, b): return v - (1 << b) if v & (1 << (b - 1)) else v
 
 
+LC_SEGMENT_SPLIT_INFO = 0x1E
+
+
+def first_section(kc, fo, vm):
+    """The lowest section address of the kext whose header is at file offset fo (unslid address vm)."""
+    addresses = []
+    for cmd, p, size in kc.entry_cmds(fo):
+        if cmd == 0x19:
+            for k in range(struct.unpack_from("<I", kc.d, p + 64)[0]):
+                addresses.append(struct.unpack_from("<Q", kc.d, p + 72 + 80 * k + 32)[0])
+    return min((a for a in addresses if a >= vm), default=vm)
+
+
+def mark_split(blob, at, vm, kc, fo, name):
+    """Give the kext header at blob[at] an empty LC_SEGMENT_SPLIT_INFO, as kcgen leaves on every kext of a prelinked
+    kernelcache (21H461's: dataoff and datasize 0).
+
+    XNU's prelinked-kernelcache paths take it to mean the kext's segments are scattered through the cache, which ours
+    are; a fileset's kexts do not carry it. Without it kalloc_type_view_parse panics ("No support for non-split seg
+    KCs") before the console, OSKext::setVMAttributes re-protects the kext as one range (its start then faults) and
+    slidePrelinkedExecutable frees what it takes for the kext's tail.
+    """
+    ncmds, sizeofcmds = struct.unpack_from("<II", blob, at + 16)
+    end = at + 32 + sizeofcmds
+    if vm + 32 + sizeofcmds + 16 > first_section(kc, fo, vm) or any(blob[end:end + 16]):
+        raise SystemExit("%s: no header padding for LC_SEGMENT_SPLIT_INFO" % name)
+    struct.pack_into("<4I", blob, end, LC_SEGMENT_SPLIT_INFO, 16, 0, 0)
+    struct.pack_into("<II", blob, at + 16, ncmds + 1, sizeofcmds + 16)
+
+
 def main():
     our_path, kc_path, out_path = sys.argv[1:4]
     native_data = open(our_path, "rb").read()
@@ -277,6 +307,7 @@ def main():
         n_, at = blob_at(vm)
         blob = blobs[n_]
         struct.pack_into("<I", blob, at + 8, 0)          # cpusubtype: CPU_SUBTYPE_ARM64_ALL, no ptrauth ABI
+        mark_split(blob, at, vm, kc, fo, b)
         for cmd, p, size in kc.entry_cmds(fo):
             if cmd != 0x19: continue
             q = at + (p - fo)
