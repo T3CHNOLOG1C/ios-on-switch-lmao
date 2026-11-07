@@ -53,7 +53,7 @@ enum {
 	TegraGM20BInfoSurfaceLayout = 1u << 6, /* method 16 is implemented */
 	TegraGM20BInfoExecSurfaces = 1u << 7, /* ExecSurfaces (method 17) is implemented */
 	TegraGM20BInfoPriority = 1u << 8,      /* Priority (method 18) is implemented */
-	TegraGM20BInfoCompression = 1u << 9, /* compressible kinds bind; ZBC (method 19) is implemented */
+	TegraGM20BInfoCompression = 1u << 9, /* compressible kinds bind; method 19 is implemented */
 };
 
 /* Method 1, output only. Everything NVK's struct nv_device_info needs that the client cannot derive. */
@@ -398,7 +398,7 @@ struct TegraGM20BAbiOrderReply {
 	uint32_t reserved;
 };
 
-/* Method 17. A zero-bandwidth-clear entry: a full-tile clear (CLEAR_SURFACE) of a compressed surface to a value in the
+/* Method 19. A zero-bandwidth-clear entry: a full-tile clear (CLEAR_SURFACE) of a compressed surface to a value in the
  * table writes the tiles' compression state instead of their pixels. The table is the GPU's, shared by every process,
  * 15 colour and 15 depth entries, never emptied: transparent black, opaque white, RGBA32F 0 and 1, opaque black as
  * A8B8G8R8 and A8R8G8B8, and depth 0.0 and 1.0 are in it from boot. Adding an entry that is there answers its index;
