@@ -75,7 +75,7 @@ int run(char *line, size_t size)
     const uint32_t pitch = setup->pitch_luma;
     const uint32_t lumaBytes = pitch * ((height + 31) & ~31u);
     for (int i = kInput; i <= kSurface; i++) {
-        if (tegra_nvdec_buffer_alloc(64 * 1024, &gBlocks[i])) {
+        if (tegra_nvdec_buffer_alloc(64ULL * 1024, &gBlocks[i])) {
             snprintf(line, size, "N3 FAIL no NVDEC memory");
             return -12;
         }
@@ -297,6 +297,7 @@ extern "C" int tegra_nvdec_self_test_hevc(void)
     if (ret != -60) {
         for (int i = 1; i <= 3; i++)
             tegra_nvdec_buffer_free(&gHEVCBlocks[i]);
+    }
     return ret;
 }
 
@@ -309,6 +310,7 @@ extern "C" int tegra_nvdec_self_test_vp9(void)
     if (ret != -60) {
         for (int i = 1; i <= 3; i++)
             tegra_nvdec_buffer_free(&gVP9Blocks[i]);
+    }
     return ret;
 }
 
@@ -321,5 +323,6 @@ extern "C" int tegra_nvdec_self_test(void)
     if (ret != -60) {  // a job still in the engine keeps its buffers
         for (int i = kInput; i <= kSurface; i++)
             tegra_nvdec_buffer_free(&gBlocks[i]);
+    }
     return ret;
 }

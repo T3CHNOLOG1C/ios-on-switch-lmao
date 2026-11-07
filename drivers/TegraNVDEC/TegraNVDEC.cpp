@@ -298,7 +298,7 @@ void bringUpStages(uint32_t stage)
 {
     // A failed bring-up leaves nothing behind: the engine back in reset with its clock off (once it was touched), then
     // its address space and setup slots returned.
-    auto giveUp = [](bool touched) {
+    const auto giveUp = [](bool touched) {
         if (touched)
             park();
         tegra_nvdec_memory_release();
@@ -319,7 +319,7 @@ void bringUpStages(uint32_t stage)
     }
     bool wasOn = false;
     gLine[0] = 0;
-    if (!switch_dma_alloc(&gSetup, kSetupSlots * kSetupSlotBytes) || !loadImage()) {
+    if (!switch_dma_alloc(&gSetup, static_cast<size_t>(kSetupSlots) * kSetupSlotBytes) || !loadImage()) {
         IOLog("TegraNVDEC: %s\n", gLine[0] ? gLine : "N1 FAIL no contiguous setup slots below 4 GiB");
         giveUp(false);
         return;
@@ -336,7 +336,7 @@ void bringUpStages(uint32_t stage)
     }
     IOLog("TegraNVDEC: N1 ok SMMU ASID %u, partition %u %s, 408 MHz, falcon started (OS code %#x+%#x data %#x+%#x, %u "
           "apps)\n",
-          (unsigned)TEGRA_SMMU_ASID_NVDEC, kPartition, wasOn ? "already on" : "powered here", gImage.code,
+          static_cast<unsigned>(TEGRA_SMMU_ASID_NVDEC), kPartition, wasOn ? "already on" : "powered here", gImage.code,
           gImage.code_size, gImage.data, gImage.data_size, gImage.apps);
     uint64_t us = 0;
     uint32_t id = 0;
@@ -485,8 +485,10 @@ extern "C" int tegra_nvdec_run(const TegraNVDECSubmit *s, TegraNVDECResolve reso
     tegra_nvdec_cache_clean(gSetup.va + static_cast<size_t>(slot) * kSetupSlotBytes, s->setup_bytes);
     for (uint32_t i = 0; i < s->entry_count; i++) {
         const TegraNVDECEntry *e = &s->entries[i];
-        if (i == s->entry_count - 1)  // EXECUTE, last by the check
-            method(NVC5B0_SET_DRV_PIC_SETUP_OFFSET, (uint32_t)((gSetup.pa + slot * kSetupSlotBytes) >> 8));
+        if (i == s->entry_count - 1) {  // EXECUTE, last by the check
+            method(NVC5B0_SET_DRV_PIC_SETUP_OFFSET,
+                   static_cast<uint32_t>((gSetup.pa + static_cast<uint64_t>(slot) * kSetupSlotBytes) >> 8));
+        }
         method(e->method,
                e->kind == TEGRA_NVDEC_ENTRY_RELOC ? (uint32_t)((blocks[i].iova + e->offset) >> 8) : e->value);
     }
