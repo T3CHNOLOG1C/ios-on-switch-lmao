@@ -3493,6 +3493,8 @@ static int chan_new(struct tgm_vm *vm, const void *vm_owner, volatile uint32_t *
 	chan->submitted = READ_ONCE(*fence_cpu);
 	chan->stat_done = chan->submitted;
 	chan->woken_done = chan->submitted;
+	chan->gov_done = chan->submitted;
+	chan->progress_done = chan->submitted;
 	chan->ring = dma_alloc_attrs(&gpu_pdev.dev, CHAN_BYTES, &chan->ring_pa, GFP_KERNEL,
 				     DMA_ATTR_WRITE_COMBINE);
 	chan->ring_pas = kcalloc(npages, sizeof(u64), GFP_KERNEL);

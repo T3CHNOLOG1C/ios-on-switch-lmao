@@ -20,12 +20,11 @@ import hashlib
 import os
 import shutil
 import tempfile
-import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
-from tools.install import gpt, host, renamed, target as targets
+from tools.install import disks, gpt, host, renamed, target as targets
 
 LINUX_MBR = 0x83
 BOOT_ENTRY = 'switchroot/ios'
@@ -36,7 +35,7 @@ FORMER_ICONS = ('bootloader/res/icon_ios.bmp',)
 # The user's own files in the entry's folder, which no package ships: the loader reads bootargs.txt at boot.
 USER_FILES = ('bootargs.txt',)
 HASH_CHUNK = 8 << 20
-UNMOUNT_TRIES = 5
+MOUNT_TRIES = 3
 
 
 class RefusedError(Exception):
@@ -243,30 +242,31 @@ def mounted(identifier: str, log: host.Log, read_only: bool = False, owners: boo
             yield Path(current)
             return
         # macOS's own mount of a card enforces owners, which closes root's 0700 folders to the user
-        unmount(identifier, log)
+        disks.unmount(identifier, log)
     with tempfile.TemporaryDirectory(prefix='switch-', ignore_cleanup_errors=True) as directory:
         args = ['mount']
         if read_only:
             args.append('readOnly')
         args += ['-mountOptions', 'nobrowse' if owners else 'nobrowse,noowners', '-mountPoint', directory, identifier]
-        host.run('diskutil', *args, log=log)
+        where = None
+        for attempt in range(MOUNT_TRIES):
+            host.run('diskutil', *args, log=log, check=attempt + 1 == MOUNT_TRIES)
+            where = host.mount_point(identifier)
+            if where and os.path.realpath(where) == os.path.realpath(directory):
+                break
+            # After a partition table write macOS mounts the card's volumes itself, and can take this one between
+            # our check and our mount; what we would write into `directory` would then land on the Mac's disk.
+            if where:
+                disks.unmount(identifier, log)
+        else:
+            raise host.HostError(f'{identifier} would not mount at {directory} (macOS has it at {where or "nowhere"})')
         try:
             if owners and os.geteuid() == 0:
                 host.run('diskutil', 'enableOwnership', directory, log=log)
             yield Path(directory)
         finally:
             host.run('sync')
-            unmount(identifier, log)
-
-
-def unmount(identifier: str, log: host.Log) -> None:
-    """Unmount a volume; Spotlight or FSKit can hold one busy for a moment after it was written, so try again."""
-    for _ in range(UNMOUNT_TRIES):
-        host.run('diskutil', 'unmount', identifier, log=log, check=False)
-        if not host.mount_point(identifier):
-            return
-        time.sleep(1)
-    log(f'{identifier} stays mounted')
+            disks.unmount(identifier, log)
 
 
 def sha256_file(path: Path, advance: Callable[[int], None] | None = None) -> str:

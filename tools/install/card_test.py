@@ -171,14 +171,18 @@ class CardTest(unittest.TestCase):
 
 
 class MountedTest(unittest.TestCase):
-    def mount(self, info: dict, owners: bool = False) -> list[list[str]]:
+    def mount(self, info: dict, owners: bool = False, taken: list[str] | None = None) -> list[list[str]]:
+        """`taken`: where macOS mounts the volume itself, one per `diskutil mount`, before ours lands."""
         calls = []
         mounted_at = ['/Volumes/Data']
+        taken = list(taken or [])
 
         def run(*args: str, **_: object) -> str:
             calls.append(list(args))
             if args[:2] == ('diskutil', 'unmount'):
                 mounted_at[0] = None
+            if args[:2] == ('diskutil', 'mount'):
+                mounted_at[0] = taken.pop(0) if taken else args[-2]
             return ''
 
         with (
@@ -204,6 +208,17 @@ class MountedTest(unittest.TestCase):
     def test_owners_wanted_keeps_the_mount(self):
         calls = self.mount({'WritableVolume': True, 'GlobalPermissionsEnabled': True}, owners=True)
         self.assertEqual(calls, [['root', '/Volumes/Data']])
+
+    def test_a_volume_macos_mounts_first_is_taken_back(self):
+        calls = self.mount({'WritableVolume': True, 'GlobalPermissionsEnabled': True}, taken=['/Volumes/SWITCH SD'])
+        mounts = [i for i, c in enumerate(calls) if c[:2] == ['diskutil', 'mount']]
+        self.assertEqual(len(mounts), 2)
+        self.assertEqual(calls[mounts[0] + 1], ['diskutil', 'unmount', 'disk34s2'])
+        self.assertEqual(calls[mounts[1] + 1], ['root', calls[mounts[1]][-2]])
+
+    def test_a_volume_that_never_mounts_here_is_refused(self):
+        with self.assertRaises(cards.host.HostError):
+            self.mount({'WritableVolume': True, 'GlobalPermissionsEnabled': True}, taken=['/Volumes/SWITCH SD'] * 3)
 
 
 if __name__ == '__main__':

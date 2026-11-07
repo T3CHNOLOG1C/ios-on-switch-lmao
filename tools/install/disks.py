@@ -12,12 +12,15 @@ import re
 import shutil
 import signal
 import tempfile
+import time
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from types import FrameType
 
 from tools.install import host
+
+UNMOUNT_TRIES = 5
 
 APFS_VOLUME = '41504653-0000-11AA-AA11-00306543ECAC'
 PARTIAL = '.partial-'
@@ -75,7 +78,24 @@ def mounted(device: str, log: host.Log, owners: bool, read_only: bool = False) -
         finally:
             if not read_only:
                 settle(Path(directory))
-            host.run('diskutil', 'unmount', device, log=log, check=False)
+            unmount(device, log, force=True)
+
+
+def unmount(device: str, log: host.Log, force: bool = False) -> None:
+    """Unmount a volume, trying again: Spotlight, fseventsd or FSKit hold one busy for a moment after it was written.
+
+    `force` (the builder's own scratch volumes only) forces the last try.
+    """
+    for _ in range(UNMOUNT_TRIES):
+        host.run('diskutil', 'unmount', device, log=log, check=False)
+        if not host.mount_point(device):
+            return
+        time.sleep(1)
+    if force:
+        host.run('diskutil', 'unmount', 'force', device, log=log, check=False)
+        if not host.mount_point(device):
+            return
+    log(f'{device} stays mounted')
 
 
 def quiet(root: Path) -> None:

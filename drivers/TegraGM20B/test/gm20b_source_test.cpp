@@ -717,3 +717,26 @@ TEST(GM20BSchedSource, EngineStatusReadsSkipTheSoftwareEngine)
 		EXPECT_GT(reads, 0u) << file;
 	}
 }
+
+// With interrupts off XNU formats an os_log line only through the kernel printf into the message buffer, which has no
+// privacy annotations: "%{public}s" prints "{public}s" and drops nvkm's report (the GR and MMU fault lines).
+TEST(GM20BShimSource, InterruptPassReportsUsePlainFormats)
+{
+	const std::string report = flat(definition(SourceText("../shim/xnu_glue.cpp"),
+						   "static void nvxnu_report(const char *line)"));
+	EXPECT_THAT(report, HasSubstr("os_log_error(OS_LOG_DEFAULT, \"%s\", line)"));
+	EXPECT_THAT(report, Not(HasSubstr("%{")));
+}
+
+// A channel made in a slot continues its predecessor's fence sequence, so every cursor the interrupt pass compares with
+// the completed seqno starts at that fence. From 0, the idle clock would count the predecessor's whole sequence retired,
+// its in-flight count (kicked - retired) would underflow, and the GPU would never drop its clock or rail-gate.
+TEST(GM20BChannelSource, SeqnoCursorsStartAtTheSlotsFence)
+{
+	const std::string create = flat(definition(gpu(), "static int chan_new("));
+	EXPECT_THAT(create, HasSubstr("chan->submitted = READ_ONCE(*fence_cpu);"));
+	for (const char *cursor : {"stat_done", "woken_done", "gov_done", "progress_done"})
+		EXPECT_THAT(create,
+			    HasSubstr(std::string("chan->") + cursor + " = chan->submitted;"))
+			<< cursor;
+}

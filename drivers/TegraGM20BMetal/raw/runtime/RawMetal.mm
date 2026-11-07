@@ -6144,7 +6144,9 @@ static void completionLoop()
         // false: the kernel killed the channel with it in flight (a GPU fault or hang); the next command buffer gets a new one
         const bool ok = r.raw->wait(cb->_seqno);
         if (!ok)
-            os_log_error(rawLog(), "raw: command buffer %u failed: the kernel killed its channel", cb->_seqno);
+            os_log_error(rawLog(),
+                         "raw: command buffer %u failed: the kernel killed its channel (error %u, fault VA 0x%llx)",
+                         cb->_seqno, r.raw->lostError(), (unsigned long long)r.raw->lostFaultVa());
 #if SWITCH_FRAME_TIMELINE
         cb->_frame.mark(switch_frame::Fence);
         switch_frame::trace(switch_frame::kFence, switch_frame::kPoint, cb->_frame.seq);
