@@ -563,16 +563,20 @@ int main(int argc, char **argv)
         // PROBE_TARGETS: the textured uber state drawn once into a private 64x64 target of each format the raw path may render to,
         // as its first color attachment; NVK's color target format for each is the draw's rt0 (raw/test/targetcheck.py).
         if (getenv("PROBE_TARGETS")) {
-            static const MTLPixelFormat formats[] = {
-                MTLPixelFormatA8Unorm,         MTLPixelFormatR8Unorm,         MTLPixelFormatR8Unorm_sRGB,
-                MTLPixelFormatRG8Unorm,        MTLPixelFormatR16Unorm,        MTLPixelFormatR16Float,
-                MTLPixelFormatRG16Unorm,       MTLPixelFormatRG16Float,       MTLPixelFormatR32Float,
-                MTLPixelFormatRGBA8Unorm,      MTLPixelFormatRGBA8Unorm_sRGB, MTLPixelFormatBGRA8Unorm,
-                MTLPixelFormatBGRA8Unorm_sRGB, MTLPixelFormatRGB10A2Unorm,    MTLPixelFormatBGR10A2Unorm,
-                MTLPixelFormatRG11B10Float,    MTLPixelFormatRGB9E5Float,     MTLPixelFormatRGBA16Unorm,
-                MTLPixelFormatRGBA16Float,     MTLPixelFormatRG32Float,       MTLPixelFormatRGBA32Float,
-                MTLPixelFormatB5G6R5Unorm,     MTLPixelFormatA1BGR5Unorm,     MTLPixelFormatABGR4Unorm,
-                MTLPixelFormatBGR5A1Unorm};
+            static const MTLPixelFormat formats[] = {MTLPixelFormatA8Unorm,         MTLPixelFormatR8Unorm,
+                                                     MTLPixelFormatR8Unorm_sRGB,    MTLPixelFormatRG8Unorm,
+                                                     MTLPixelFormatR16Unorm,        MTLPixelFormatR16Float,
+                                                     MTLPixelFormatRG16Unorm,       MTLPixelFormatRG16Float,
+                                                     MTLPixelFormatR32Float,        MTLPixelFormatRGBA8Unorm,
+                                                     MTLPixelFormatRGBA8Unorm_sRGB, MTLPixelFormatBGRA8Unorm,
+                                                     MTLPixelFormatBGRA8Unorm_sRGB, MTLPixelFormatRGB10A2Unorm,
+                                                     MTLPixelFormatBGR10A2Unorm,    MTLPixelFormatRG11B10Float,
+                                                     MTLPixelFormatRGB9E5Float,     MTLPixelFormatRGBA16Unorm,
+                                                     MTLPixelFormatRGBA16Float,     MTLPixelFormatRG32Float,
+                                                     MTLPixelFormatRGBA32Float,     MTLPixelFormatB5G6R5Unorm,
+                                                     MTLPixelFormatA1BGR5Unorm,     MTLPixelFormatABGR4Unorm,
+                                                     MTLPixelFormatBGR5A1Unorm,     MTLPixelFormat(550),
+                                                     MTLPixelFormat(552),           MTLPixelFormat(554)};
             State st;
             bool found = false;
             for (const std::string &line : lines)
@@ -588,6 +592,9 @@ int main(int argc, char **argv)
             for (unsigned i = 0; i < sizeof formats / sizeof formats[0]; i++) {
                 MTLRenderPipelineDescriptor *d = [st.d copy];
                 d.colorAttachments[0].pixelFormat = formats[i];
+                // with blending on, m2v's draw has no color target for an extended-range attachment (rt0 null)
+                if (extendedRange(formats[i]))
+                    d.colorAttachments[0].blendingEnabled = NO;
                 id<MTLRenderPipelineState> state = [dev newRenderPipelineStateWithDescriptor:d error:&error];
                 id<MTLTexture> t = target(formats[i], false);
                 if (!state || !t) {
@@ -601,7 +608,8 @@ int main(int argc, char **argv)
                         continue;
                     pass.colorAttachments[c].texture = c ? target(ca.pixelFormat, ca.writeMask == 0) : t;
                     pass.colorAttachments[c].loadAction = MTLLoadActionDontCare;
-                    pass.colorAttachments[c].storeAction = c ? MTLStoreActionDontCare : MTLStoreActionStore;
+                    pass.colorAttachments[c].storeAction =
+                        c || extendedRange(ca.pixelFormat) ? MTLStoreActionDontCare : MTLStoreActionStore;
                 }
                 id<MTLCommandBuffer> cb = [queue commandBuffer];
                 id<MTLRenderCommandEncoder> enc = [cb renderCommandEncoderWithDescriptor:pass];
