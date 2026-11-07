@@ -7,7 +7,8 @@
 # Rust, ...) is handed to a fresh output base already extracted, instead of re-extracting (the LLVM tarball alone
 # took 136 s per output base, three times over).
 common --repository_cache=~/Library/Caches/switch-ios-bazel/repository
-# Hardlink cached downloads into the external repositories instead of copying them (a multi-GB IPSW member once).
+# Hardlink a cached archive into the repository that extracts it instead of copying it. Only download_and_extract
+# (http_archive) hardlinks: a repository rule's download() always copies, which APFS makes a clone (ipsw/ipsw.bzl).
 common --experimental_repository_cache_hardlinks
 # Repository contents cache entries nobody used for a day are deleted (default 14 days): every change to a repository
 # rule's definition leaves its previous extraction behind (0.6-0.7 GB for Rust/LLVM-sized repositories).
