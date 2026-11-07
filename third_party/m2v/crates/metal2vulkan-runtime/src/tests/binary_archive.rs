@@ -220,7 +220,8 @@ fn a_metallib_is_an_archive_holding_nothing_for_this_device() {
         universal(&[(0x0100_0013, gpu), (0x0100_0017, air)]),
     )
     .unwrap();
-    for name in ["thin", "universal", "gpu-first"] {
+    fs::write(dir.join("gpu-only"), universal(&[(0x0100_0013, gpu)])).unwrap();
+    for name in ["thin", "universal", "gpu-first", "gpu-only"] {
         assert_eq!(
             container::read(&dir.join(name)),
             Ok(Contents::default()),
@@ -229,11 +230,11 @@ fn a_metallib_is_an_archive_holding_nothing_for_this_device() {
     }
     let mut cut = universal(&[(0x0100_0017, air)]);
     cut.truncate(cut.len() - 4);
-    fs::write(dir.join("no-air"), universal(&[(0x0100_0013, gpu)])).unwrap();
+    fs::write(dir.join("arm64"), universal(&[(0x0100_000c, gpu)])).unwrap();
     fs::write(dir.join("air-not-mtlb"), universal(&[(0x0100_0017, gpu)])).unwrap();
     fs::write(dir.join("cut"), cut).unwrap();
     fs::write(dir.join("no-slices"), universal(&[])).unwrap();
-    for name in ["no-air", "air-not-mtlb", "cut", "no-slices"] {
+    for name in ["arm64", "air-not-mtlb", "cut", "no-slices"] {
         let path = dir.join(name);
         assert_eq!(container::read(&path), Err(invalid_file(&path)), "{name}");
     }

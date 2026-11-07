@@ -21,11 +21,11 @@
 //! for a count before the bytes it counts are there.
 //!
 //! A metallib is an archive too, holding nothing for this device: thin (`MTLB`), or universal (a
-//! big-endian fat file with an AIR64 slice that is one, beside binaries for Apple's GPUs), as
-//! Apple's frameworks ship theirs and QuartzCore and CoreUI open them as their archives. Metal
-//! loads such a file on a GPU it holds no binary for with a count of 0, and every lookup misses
-//! (measured on an M4: iOS 17's QuartzCore file, AIR64 and applegpu_g9g, and a thin AIR metallib).
-//! Only its header and slice table are read.
+//! big-endian fat file of AIR64 slices that are one and binaries for Apple's GPUs), as Apple's
+//! frameworks ship theirs and QuartzCore and CoreUI open them as their archives. Metal loads such
+//! a file on a GPU it holds no binary for with a count of 0, and every lookup misses (measured on
+//! an M4: iOS 17's QuartzCore file, AIR64 and applegpu_g9g, either slice alone, and a thin AIR
+//! metallib). Only its header, slice table and each AIR64 slice's magic are read.
 //!
 //! An archive's file is read whole, and written through a temporary file beside it and a rename, so a
 //! reader never sees part of one. The errors are Metal's (measured on an M3 Max and an M4): a
@@ -46,6 +46,7 @@ const VERSION: u32 = 1;
 const METALLIB_MAGIC: [u8; 4] = *b"MTLB";
 const UNIVERSAL_MAGIC: u32 = 0xcafe_babe;
 const AIR64_CPU_TYPE: u32 = 0x0100_0017;
+const APPLE_GPU_CPU_TYPE: u32 = 0x0100_0013;
 const UNIVERSAL_SLICE_LEN: usize = 20;
 const UNIVERSAL_SLICES_MAX: usize = 64;
 const KINDS: [EntryKind; 3] = [
@@ -232,14 +233,19 @@ fn is_metallib(file: &mut std::fs::File, head: [u8; 8]) -> bool {
     if file.read_exact(&mut table).is_err() {
         return false;
     }
-    table.chunks_exact(UNIVERSAL_SLICE_LEN).any(|slice| {
+    table.chunks_exact(UNIVERSAL_SLICE_LEN).all(|slice| {
         let (offset, size) = (u64::from(word(slice, 8)), u64::from(word(slice, 12)));
         let mut magic = [0u8; 4];
-        word(slice, 0) == AIR64_CPU_TYPE
-            && offset + size <= length
-            && file.seek(SeekFrom::Start(offset)).is_ok()
-            && file.read_exact(&mut magic).is_ok()
-            && magic == METALLIB_MAGIC
+        offset + size <= length
+            && match word(slice, 0) {
+                APPLE_GPU_CPU_TYPE => true,
+                AIR64_CPU_TYPE => {
+                    file.seek(SeekFrom::Start(offset)).is_ok()
+                        && file.read_exact(&mut magic).is_ok()
+                        && magic == METALLIB_MAGIC
+                }
+                _ => false,
+            }
     })
 }
 
