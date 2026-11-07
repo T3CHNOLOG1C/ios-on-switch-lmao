@@ -51,7 +51,7 @@ mkdir -p "$GPU"
 for f in mme_fermi mme_fermi_sim; do xcrun clang -O2 -std=c11 -w -I "$RAW/pack/mesa" -c "$RAW/pack/mesa/$f.c" -o "$GPU/$f.o"; done
 xcrun clang -O1 -Wall -c -I "$TREE/drivers/TegraGM20B" "$RAW/pack/mock_iokit.c" -o "$GPU/mock_iokit.o"
 xcrun clang++ -O2 -std=c++17 -c -I "$TREE/drivers/TegraGM20B" "$RAW/pack/cap.cpp" -o "$GPU/cap.o"
-xcrun clang++ -O2 -std=c++17 -DNVDEC_TWOD -c "$RAW/pack/nvdec.cpp" -o "$GPU/nvdec.o"
+xcrun clang++ -O2 -std=c++17 -DNVDEC_TWOD -I "$TREE/drivers/TegraGM20B" -c "$RAW/pack/nvdec.cpp" -o "$GPU/nvdec.o"
 xcrun clang++ -O2 -std=c++17 -c "$RAW/fx/test/twod_sim.cpp" -o "$GPU/twod_sim.o"
 xcrun clang++ -dynamiclib "$GPU/mock_iokit.o" "$GPU/cap.o" "$GPU/nvdec.o" "$GPU/twod_sim.o" "$GPU/mme_fermi.o" "$GPU/mme_fermi_sim.o" \
     -framework IOKit -framework CoreFoundation -install_name @rpath/libmock_iokit.dylib -o "$GPU/libmock_iokit.dylib"

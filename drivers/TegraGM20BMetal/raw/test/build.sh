@@ -17,7 +17,7 @@ for f in mme_fermi mme_fermi_sim; do xcrun clang -O2 -std=c11 -w -I "$RAW/pack/m
 xcrun clang -O1 -Wall -c -I "$TREE/drivers/TegraGM20B" "$RAW/pack/mock_iokit.c" -o "$OUT/mock_iokit.o"
 xcrun clang++ "${FLAGS[@]}" -c -I "$TREE/drivers/TegraGM20B" "$RAW/pack/cap.cpp" -o "$OUT/cap.o"
 # the mock's decoder runs the 2D engine's blits too (raw/fx/test/twod_sim: the mip chains)
-xcrun clang++ "${FLAGS[@]}" -DNVDEC_TWOD -c "$RAW/pack/nvdec.cpp" -o "$OUT/nvdec.o"
+xcrun clang++ "${FLAGS[@]}" -DNVDEC_TWOD -I "$TREE/drivers/TegraGM20B" -c "$RAW/pack/nvdec.cpp" -o "$OUT/nvdec.o"
 xcrun clang++ "${FLAGS[@]}" -c "$RAW/runtime/raw_capture.cpp" -o "$OUT/raw_capture.o"
 xcrun clang++ "${FLAGS[@]}" -c "$RAW/runtime/raw_pack.cpp" -o "$OUT/raw_pack_mock.o"
 xcrun clang++ "${FLAGS[@]}" -c "$RAW/fx/test/twod_sim.cpp" -o "$OUT/twod_sim.o"

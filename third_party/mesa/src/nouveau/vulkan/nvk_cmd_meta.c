@@ -24,6 +24,8 @@
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 /* ios-on-switch-lmao, debug builds: where copies and fills run, switched within one boot from the Mac for an A/B
  * (idevicenotificationproxy -u <udid> post com.brunostjohn.switch.debug.nvk-copies-<meta|ce>): upstream's meta draws
@@ -35,6 +37,9 @@ static atomic_bool nvk_copies_ce;
 static void
 nvk_copies_watch(void)
 {
+   /* NVK_COPIES=ce: from the start (a host GPU model that runs no shaders, drivers/TegraGM20BMetal/raw/pack/cap.cpp) */
+   const char *start = getenv("NVK_COPIES");
+   atomic_store_explicit(&nvk_copies_ce, start && !strcmp(start, "ce"), memory_order_relaxed);
    static const char *const ways[] = {"meta", "ce"};
    for (unsigned i = 0; i < 2; i++) {
       char name[64];
