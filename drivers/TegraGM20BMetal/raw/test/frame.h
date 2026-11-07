@@ -298,7 +298,9 @@ struct Pass {
 struct Shape {
     unsigned blurPasses = 8, draws = 100,
              mainStates = getenv("FRAME_STATES") ? unsigned(atoi(getenv("FRAME_STATES"))) : 12;
-    uint32_t uniformBytes = 256, vertexBytes = 192;
+    // FRAME_UNIFORM_BYTES: the uniform payloads' length (with FRAME_RING_ALIGN=4, 52 binds them at offsets 4, 8 and 12 past 16)
+    uint32_t uniformBytes = getenv("FRAME_UNIFORM_BYTES") ? uint32_t(atoi(getenv("FRAME_UNIFORM_BYTES"))) : 256,
+             vertexBytes = 192;
     // FRAME_RING: every payload goes into one shared buffer at 256-aligned offsets, bound with set*Buffer:offset: at a pass's first
     // draw and set*BufferOffset: after (Core Animation's per-frame ring, cabench mode 16), instead of set*Bytes
     bool ring = getenv("FRAME_RING") != nullptr;
