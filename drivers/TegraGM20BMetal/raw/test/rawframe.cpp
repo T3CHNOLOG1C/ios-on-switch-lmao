@@ -143,13 +143,23 @@ int main(int argc, char **argv)
             }
         cpu.push_back((threadNs() - c0) / 1e6);
     }
-    raw::Buffer ring, indices;
+    raw::Buffer ring, indices, fills;
     dev.createBuffer(frame::kRingBytes, ring);
     dev.createBuffer(65536, indices);
+    const bool filling = frame::fillUniforms() && dev.createBuffer(frame::kFillBytes, fills);  // FRAME_FILL (frame.h)
+    if (filling)
+        memset(fills.cpu, 0, frame::kFillBytes);
     uint64_t ringAt = 0;
     for (unsigned f = 0; f < frames && !harness; f++) {
         const uint64_t c0 = threadNs();
         raw::CommandBuffer *cb = dev.begin();
+        if (filling) {
+            if (!f)
+                cb->clean(fills.cpu, frame::kFillBytes, true);
+            raw::BlitEncoder *be = cb->blit();
+            be->fillBytes(fills.va + frame::kFillFrom, frame::kFillBytes - frame::kFillFrom, frame::fillValue(f));
+            be->end();
+        }
         unsigned drawIndex = 0;
         for (const frame::Pass &pass : frame::passes(f, shape, blur.size(), uber.size())) {
             raw::PassDesc pd;
@@ -198,6 +208,10 @@ int main(int argc, char **argv)
                         continue;
                     }
                     e->setBytes(b.stage, b.slot, bytes.data(), b.length);
+                }
+                if (const int slot = filling ? frame::fillSlot(d) : -1; slot >= 0) {
+                    e->setBuffer(2, uint32_t(slot), &fills, 0);
+                    bound[2][slot] = false;
                 }
                 for (int t = 0; t < 16; t++)
                     if (d.textures[t] >= 0)

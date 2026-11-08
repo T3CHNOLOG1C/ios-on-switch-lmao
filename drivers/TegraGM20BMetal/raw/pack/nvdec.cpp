@@ -411,6 +411,10 @@ void Decoder::method(uint32_t subc, uint32_t mthd, uint32_t data, bool fromMme)
         barrier("SHINV");
         if (data & 1)  // INSTRUCTION
             barrier("ICINV");
+        if (data & 0x1000) {  // CONSTANT
+            barrier("CBINV");
+            constantStale_.clear();
+        }
         break;
     default:
         break;
@@ -539,6 +543,19 @@ void Decoder::copyEngine(uint32_t launch)
         return d;
     };
     const Side in = side(srcPitch, src, pitchIn, 0x728, srcElem), out = side(dstPitch, dst, pitchOut, 0x70c, elem);
+    // a constant buffer is pitch memory: block-linear destinations are images
+    if (dstPitch && length && lines) {
+        constantStale_.push_back({dst, dst + uint64_t(lines - 1) * pitchOut + uint64_t(length) * elem});
+        // one hull of them all: may see a stale read where there is none, never miss one
+        if (constantStale_.size() > 1024) {
+            uint64_t lo = ~0ull, hi = 0;
+            for (const auto &r : constantStale_) {
+                lo = std::min(lo, r.first);
+                hi = std::max(hi, r.second);
+            }
+            constantStale_.assign(1, {lo, hi});
+        }
+    }
     auto addr = [](const Side &d, uint32_t e, uint32_t y, uint32_t elemBytes) {
         if (!d.tiled)
             return d.base + uint64_t(y) * d.pitch + uint64_t(e) * elemBytes;
@@ -1232,11 +1249,39 @@ void Decoder::pushWords(uint32_t &mask, uint32_t words[32]) const
     }
 }
 
+// Whether a live stage's program reads a constant buffer (not the root table, which LOAD_CONSTANT_BUFFER writes in order) over
+// bytes in constantStale_
+bool Decoder::readsStaleConstants()
+{
+    for (int i = 0; i < 6; i++) {
+        const uint32_t group = r3(PIPELINE + 0x40 * i + 0x10);
+        if (!(r3(PIPELINE + 0x40 * i) & 1) || group >= 5)
+            continue;
+        std::string id;
+        const ProgramInfo *info = program(i, id);
+        const size_t slots = info ? info->cbufTypes.size() : 18;
+        for (size_t s = 0; s < slots; s++) {
+            const Bind &b = binds_[group][s];
+            const uint8_t type = info ? info->cbufTypes[s] & 7 : 0;
+            if (!b.valid || type == 1 || (type == 0 && s == 0))
+                continue;
+            for (const auto &r : constantStale_)
+                if (b.addr < r.second && r.first < b.addr + b.size)
+                    return true;
+        }
+    }
+    return false;
+}
+
 void Decoder::draw(const char *kind, uint32_t first, uint32_t count)
 {
     draws++;
     if (onDraw)
         onDraw(*this);
+    if (!constantStale_.empty() && readsStaleConstants()) {
+        staleConstantReads++;
+        barrier("CBSTALE");
+    }
     std::string bar;
     for (auto &b : pendingBarriers_)
         bar += (bar.empty() ? "" : ",") + b;
