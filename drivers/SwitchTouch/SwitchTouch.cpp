@@ -33,8 +33,9 @@
 // pixel (x, y) at portrait row 1279 - x, column y, upright in handheld use, as hekate's GUI). Portrait-native
 // (SwitchPortrait.h): iOS's screen is the portrait panel, so contacts are reported at that row and column (position).
 //
-// Failures panic with a one-line reason; there is no polled mode. A 10 s watchdog only checks that a latched INT
-// reached the CPU (tegra_gpio_check_delivery).
+// A panel that does not come up or stops answering is one log line and touch off until the screen next lights, whose
+// power-on brings it up from scratch; a lost interrupt panics (a 10 s watchdog checks that a latched INT reached the
+// CPU, tegra_gpio_check_delivery). There is no polled mode.
 #include <IOKit/IOFilterInterruptEventSource.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/IOService.h>
@@ -351,11 +352,11 @@ class SwitchTouch : public IOService {
     static void timerFired(OSObject *owner, IOTimerEventSource *sender);
     void logStats();
     bool anyDown() const;
-    static void powerUp();
-    void bringUp();
+    static bool powerUp();
+    bool bringUp();
     static bool checkPath(bool dma, const uint8_t *id, size_t size, char *why, size_t whySize);
     void checkPaths(const uint8_t *id, size_t size);
-    static void enableSensing();
+    static int enableSensing();
     void powerDown();
     void handle(const uint8_t *event);
     static void position(const uint8_t *event, int &x, int &y);
@@ -420,7 +421,7 @@ void SwitchTouch::free()
 }
 
 // hekate touch_power_on.
-void SwitchTouch::powerUp()
+bool SwitchTouch::powerUp()
 {
     if (tegra_gpio_output(TEGRA_GPIO_TOUCH_RESET, 0))
         panic("SwitchTouch: cannot drive the touch reset line (PJ7)");
@@ -439,8 +440,11 @@ void SwitchTouch::powerUp()
         ldo |= kLdoModeNormal;
         err = tegra_i2c_write(kPmicBus, kPmic, kLdo6Cfg, &ldo, 1);
     }
-    if (err)
-        panic("SwitchTouch: MAX77620 LDO6 (touch 2.9 V, I2C5 0x3c reg 0x2f) could not be enabled: I2C error %d", err);
+    if (err) {
+        IOLog("SwitchTouch: off: MAX77620 LDO6 (touch 2.9 V, I2C5 0x3c reg 0x2f) could not be enabled: I2C error %d\n",
+              err);
+        return false;
+    }
     IOSleep(1);
 
     err = tegra_i2c_init(kBus);
@@ -451,10 +455,11 @@ void SwitchTouch::powerUp()
     IOSleep(10);
     switch_als_supply(true);  // LDO6 on for 12 ms or more: L4T's bh1730 waits 10 ms after its supplies
     waitEvent(EvReady, 20);   // as hekate: the reset below waits for it again
+    return true;
 }
 
-// hekate touch_init (chip id, system reset, sensing), three attempts.
-void SwitchTouch::bringUp()
+// hekate touch_init (chip id, system reset, sensing), three attempts. LDO6 stays on after a failure: the ALS shares it.
+bool SwitchTouch::bringUp()
 {
     int err = 0;
     uint8_t id[7] = {};
@@ -467,15 +472,18 @@ void SwitchTouch::bringUp()
         IOSleep(10);
         if (err || !waitEvent(EvReady, 20))
             continue;
-        enableSensing();
+        err = enableSensing();
+        if (err)
+            continue;
         if (!announced)
             IOLog("SwitchTouch: started (FTM4 firmware %02x%02x, config %02x/%02x)\n", id[3], id[4], id[5], id[6]);
         announced = true;
-        return;
+        return true;
     }
-    panic("SwitchTouch: FTM4 on I2C3 0x49 did not come up: I2C error %d, chip id %02x%02x (expected 3670), "
-          "no controller-ready event after reset otherwise",
+    IOLog("SwitchTouch: off: FTM4 on I2C3 0x49 did not come up: I2C error %d, chip id %02x%02x (expected 3670), "
+          "no controller-ready event after reset or no sensing otherwise\n",
           err, id[1], id[2]);
+    return false;
 }
 
 // I2C3's never-booted paths (TegraI2C.h), once a boot, before any event read can use them: the chip ID block just read
@@ -529,7 +537,7 @@ void SwitchTouch::checkPaths(const uint8_t *id, size_t size)
 }
 
 // Finger sense mode, sensing on, empty event stack, interrupt on (Linux fts_init; hekate touch_sense_enable).
-void SwitchTouch::enableSensing()
+int SwitchTouch::enableSensing()
 {
     const uint8_t mode[2] = {CmdSenseMode, kFingerMode};
     const uint8_t on = CmdSenseOn;
@@ -542,8 +550,7 @@ void SwitchTouch::enableSensing()
         err = command(&clear, 1);
     if (!err)
         err = writeRegister(RegInterrupt, kInterruptEnable);
-    if (err)
-        panic("SwitchTouch: FTM4 sense/interrupt enable failed: I2C error %d", err);
+    return err;
 }
 
 void SwitchTouch::timerFired(OSObject *owner, IOTimerEventSource *sender)
@@ -552,8 +559,8 @@ void SwitchTouch::timerFired(OSObject *owner, IOTimerEventSource *sender)
     if (!self)
         return;
     if (!self->running) {
-        SwitchTouch::powerUp();
-        self->bringUp();
+        if (!SwitchTouch::powerUp() || !self->bringUp())
+            return;
         self->running = true;
         self->irq->enable();
     } else {
@@ -603,8 +610,11 @@ void SwitchTouch::interruptOccurred(OSObject *owner, IOInterruptEventSource *, i
         const uint8_t cmd = CmdReadAllEvents;
         err = tegra_i2c_transfer(kBus, kTouch, &cmd, 1, events, static_cast<size_t>(count) * kEventSize);
     }
-    if (err)
-        panic("SwitchTouch: reading the FTM4 event FIFO failed: I2C error %d", err);
+    if (err) {
+        IOLog("SwitchTouch: off: reading the FTM4 event FIFO failed: I2C error %d\n", err);
+        self->powerDown();
+        return;
+    }
     const uint64_t read = mach_absolute_time();
     self->reportStamp = irqAt && irqAt <= began ? irqAt : began;
     self->postTicks = 0;
@@ -628,7 +638,10 @@ void SwitchTouch::interruptOccurred(OSObject *owner, IOInterruptEventSource *, i
     } else if (++self->empty > kEmptyLimit) {
         char state[256];
         tegra_gpio_describe(TEGRA_GPIO_TOUCH_INT, state, sizeof(state));
-        panic("SwitchTouch: INT (PX1) fired %u times in a row with an empty event FIFO: %s", self->empty, state);
+        IOLog("SwitchTouch: off: INT (PX1) fired %u times in a row with an empty event FIFO: %s\n", self->empty, state);
+        self->empty = 0;
+        self->powerDown();
+        return;
     }
 
     ++st.irqs;
