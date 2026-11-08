@@ -156,7 +156,8 @@ void installDeviceAnswers(Class cls)
 {
     const uint64_t physical = NSProcessInfo.processInfo.physicalMemory;
 #if TARGET_OS_IPHONE
-    return std::min<uint64_t>(uint64_t([(id<MTLDevice>)self currentAllocatedSize]) + os_proc_available_memory(), physical);
+    return std::min<uint64_t>(uint64_t([(id<MTLDevice>)self currentAllocatedSize]) + os_proc_available_memory(),
+                              physical);
 #else
     return physical;
 #endif
