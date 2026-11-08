@@ -84,10 +84,14 @@ RawState *gRM;
     return (id<MTLDevice>)_device;
 }
 
-// A selector this class does not answer goes to the twin (an m2v object: its answer is today's). respondsToSelector: says what the
-// twin's class says, so Core Animation's optional paths choose as they do on m2v.
+// A selector this class does not answer goes to the twin (an m2v object: its answer is today's), unless the twin's class has no
+// method for it either: then it is answered zero here (forwardInvocation:), as m2v's object would, with no twin made for it.
+// respondsToSelector: says what the twin's class says, so Core Animation's optional paths choose as they do on m2v.
 - (id)forwardingTargetForSelector:(SEL)selector
 {
+    id carried = _twin;
+    if (!twinAnswers(carried ? object_getClass(carried) : [[self class] twinClass], selector))
+        return nil;
     id twin = [self rmTwin];
     if (!twin)
         SWITCH_REFUSE_DETAIL("raw", "twin.missing", uintptr_t(selector), "-[%s %s] with no m2v twin",
@@ -99,6 +103,19 @@ RawState *gRM;
     gRM->stats.twinForwards.fetch_add(1, std::memory_order_relaxed);
 #endif
     return twin;
+}
+
+- (NSMethodSignature *)methodSignatureForSelector:(SEL)selector
+{
+    if (NSMethodSignature *s = [super methodSignatureForSelector:selector])
+        return s;
+    const char *types = metalTypes(selector);
+    return types ? [NSMethodSignature signatureWithObjCTypes:types] : nil;
+}
+
+- (void)forwardInvocation:(NSInvocation *)invocation
+{
+    answerZero(self, invocation);
 }
 
 - (BOOL)respondsToSelector:(SEL)selector

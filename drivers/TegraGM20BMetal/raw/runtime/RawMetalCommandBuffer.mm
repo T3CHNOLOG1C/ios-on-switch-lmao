@@ -411,7 +411,8 @@ static void giveRecording(RMCommandBuffer *b)
 }
 #endif
 
-// A selector a command buffer does not answer here: recorded for m2v (the command buffer goes there), answered zero.
+// A selector a command buffer does not answer here: recorded for m2v (the command buffer goes there), answered zero; when m2v's
+// command buffer has no method for it either, only answered zero.
 - (NSMethodSignature *)methodSignatureForSelector:(SEL)selector
 {
     if (NSMethodSignature *s = [super methodSignatureForSelector:selector])
@@ -439,6 +440,10 @@ static void giveRecording(RMCommandBuffer *b)
 
 - (void)forwardInvocation:(NSInvocation *)inv
 {
+    if (!twinAnswers(NSClassFromString(@"NBCommandBuffer"), inv.selector)) {
+        answerZero(self, inv);
+        return;
+    }
     [inv retainArguments];
     if (!raw::keepPointedArguments(inv))
         SWITCH_REFUSE_DETAIL("raw", "call.pointer", uintptr_t(inv.selector),

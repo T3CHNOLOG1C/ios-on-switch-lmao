@@ -18,7 +18,8 @@
 }
 
 // A selector this encoder does not record itself (one the m2v encoder implements, or some MTL protocol declares): recorded as an
-// invocation (objects mapped to twins at replay) and the command buffer goes to m2v.
+// invocation (objects mapped to twins at replay) and the command buffer goes to m2v; answered zero here when the m2v encoder
+// has no method for it either (its answer is zero too).
 - (NSMethodSignature *)methodSignatureForSelector:(SEL)selector
 {
     if (NSMethodSignature *s = [super methodSignatureForSelector:selector])
@@ -38,6 +39,10 @@
 
 - (void)forwardInvocation:(NSInvocation *)inv
 {
+    if (!twinAnswers([[self class] twinClass], inv.selector)) {
+        answerZero(self, inv);
+        return;
+    }
     [inv retainArguments];
     if (!raw::keepPointedArguments(inv))
         SWITCH_REFUSE_DETAIL("raw", "call.pointer", uintptr_t(inv.selector),

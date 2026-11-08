@@ -20,6 +20,7 @@
 #include <set>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 #include "GpuMemoryRelease.h"
 #include "LimitsTable.h"
@@ -80,6 +81,7 @@ struct Stats {
     // command buffers completed before their submitting thread scheduled them (finish() ran their scheduled handlers)
     std::atomic<uint64_t> scheduledByFinish{0};
     std::atomic<uint64_t> twinForwards{0};  // selectors a facade object forwarded to its m2v twin (RMObject)
+    std::atomic<uint64_t> zeroAnswers{0};   // selectors answered zero, as m2v's objects answer them (answerZero)
 #endif
 };
 
@@ -151,6 +153,10 @@ extern RawState *gRM;
 
 // RawMetalPredicates.mm
 const char *metalTypes(SEL selector);
+// m2v's object of `twinClass` has a method for `selector`: else it answers zero (the frontend's forwardZero), and so does the
+// facade's object, with no twin made and nothing sent to m2v (answerZero)
+bool twinAnswers(Class twinClass, SEL selector);
+void answerZero(id object, NSInvocation *invocation);
 bool rawShape(MTLTextureDescriptor *d);
 bool chainShape(MTLTextureDescriptor *d);
 bool zetaDescriptor(MTLTextureDescriptor *d);

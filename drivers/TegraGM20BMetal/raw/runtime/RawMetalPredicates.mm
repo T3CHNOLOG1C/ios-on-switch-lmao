@@ -29,9 +29,17 @@ void logPred(RMPred p, uint64_t a, uint64_t b, NSString *detail)
 #endif
 }
 
-// The type encoding of a selector some MTL* protocol declares (the plugin's answerUnimplemented uses the same lookup).
+// The type encoding of a selector some MTL* protocol declares (the plugin's answerUnimplemented uses the same lookup), walked
+// once per selector: objc_copyProtocolList copies the shared cache's protocols (the frontend's forwardSignature, r14-maps)
 const char *metalTypes(SEL selector)
 {
+    static std::mutex lock;
+    static auto *known = new std::unordered_map<SEL, const char *>;
+    {
+        std::lock_guard<std::mutex> l(lock);
+        if (const auto it = known->find(selector); it != known->end())
+            return it->second;
+    }
     unsigned count = 0;
     Protocol *__unsafe_unretained *protocols = objc_copyProtocolList(&count);
     const char *types = nullptr;
@@ -45,7 +53,33 @@ const char *metalTypes(SEL selector)
         }
     }
     free(protocols);
+    std::lock_guard<std::mutex> l(lock);
+    known->emplace(selector, types);
     return types;
+}
+
+bool twinAnswers(Class twinClass, SEL selector)
+{
+    return twinClass && [twinClass instancesRespondToSelector:selector];
+}
+
+void answerZero(id object, NSInvocation *invocation)
+{
+    Class cls = object_getClass(object);
+    SWITCH_REFUSE_DETAIL("raw", "selector.zero", uintptr_t(invocation.selector) * 31 + uintptr_t(cls),
+                         "-[%s %s] answered zero, as m2v's object answers it", class_getName(cls),
+                         sel_getName(invocation.selector));
+#if SWITCH_FRAME_TIMELINE
+    if (gRM)
+        gRM->stats.zeroAnswers.fetch_add(1, std::memory_order_relaxed);
+#endif
+    if (const NSUInteger length = invocation.methodSignature.methodReturnLength) {
+        uint64_t small[8] = {};
+        void *zero = length <= sizeof small ? small : calloc(1, length);
+        [invocation setReturnValue:zero];
+        if (zero != small)
+            free(zero);
+    }
 }
 
 // A format the raw path has a header for. RGB10A8_2P_XR10 only private or memoryless: its texels are m2v's own layout, not the two
