@@ -34,6 +34,7 @@ METAL = '/System/Library/Frameworks/Metal.framework/Metal'
 CACHE_DIR = 'System/Library/Caches/com.apple.dyld'
 HDIUTIL = '/usr/bin/hdiutil'
 SCALARS = {'c': 1, 'C': 1, 'B': 1, 's': 2, 'S': 2, 'i': 4, 'I': 4, 'f': 4, 'q': 8, 'Q': 8, 'd': 8}
+INTEGER_FIELDS = ('I', 'Q')
 INTEGER_RETURNS = ('Q', 'I', 'L')
 JsonObject = dict[str, object]
 
@@ -55,6 +56,18 @@ def struct_fields(encoding: str) -> tuple[list[tuple[str, str, int]], int]:
     return fields, (offset + widest - 1) // widest * widest
 
 
+def metal_subclasses(reader: ObjcReader, classes: dict[str, int], name: str) -> list[str]:
+    """Return Metal's own classes below `name`, in name order."""
+    parents = {cls: reader.class_name(reader.superclass(at)) for cls, at in classes.items() if reader.superclass(at)}
+    below, pending = [], [name]
+    while pending:
+        parent = pending.pop()
+        children = sorted(cls for cls, of in parents.items() if of == parent)
+        below += children
+        pending += children
+    return sorted(below)
+
+
 def device_table(reader: ObjcReader, classes: dict[str, int], interface: JsonObject) -> JsonObject:
     device = reader.read_class(classes[interface['class']])
     ivar = next(i for i in device.ivars if i.name == interface['limits_ivar'])
@@ -62,6 +75,9 @@ def device_table(reader: ObjcReader, classes: dict[str, int], interface: JsonObj
     if size != ivar.size:
         raise SystemExit(f'{ivar.name}: its encoding lays out {size} bytes, the ivar is {ivar.size}')
     methods = {m.name: m.types for m in device.methods}
+    accessors = dict(methods)
+    for cls in metal_subclasses(reader, classes, device.name):
+        accessors |= {m.name: m.types for m in reader.read_class(classes[cls]).methods}
     return {
         'class': device.name,
         'superclass': device.superclass,
@@ -71,7 +87,7 @@ def device_table(reader: ObjcReader, classes: dict[str, int], interface: JsonObj
         'limits': {
             name: offset
             for name, kind, offset in fields
-            if kind == 'I' and methods.get(name, '').startswith(INTEGER_RETURNS)
+            if kind in INTEGER_FIELDS and accessors.get(name, '').startswith(INTEGER_RETURNS)
         },
         'limits_fields': {name: [offset, kind] for name, kind, offset in fields},
         'methods': dict(sorted(methods.items())),
@@ -163,7 +179,8 @@ def extract(cache_path: Path, kind: str) -> str:
         },
         'found': {
             'instance_size': "_MTLDevice's class_ro_t instanceSize",
-            'limits': "the _limits ivar's offset, size and type encoding; the integer fields _MTLDevice has methods of",
+            'limits': "the _limits ivar's offset, size and type encoding; the integer fields with an accessor in "
+            "_MTLDevice or a Metal class below it (maxBufferLength: MTLIOAccelDevice's only)",
             'sent': "each object's protocols' methods that some image's code sends (sends.py), Metal's own and the GPU "
             "drivers' and tools' aside (interface.json not_senders)",
         },

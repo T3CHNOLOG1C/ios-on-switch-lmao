@@ -27,6 +27,11 @@ struct BaseModel {
     {
         if (std::string(field.selector) == "minConstantBufferAlignmentBytes")
             return 4;
+        if (field.bytes == 8) {
+            uint64_t v;
+            memcpy(&v, table + field.offset, 8);
+            return v;
+        }
         return at(field.offset);
     }
 };
@@ -113,15 +118,27 @@ TEST(LimitsTable, AnAnswerPastThirtyTwoBitsIsLeftOut)
     EXPECT_EQ(f.reports[0].second, LimitFill::Overflow);
 }
 
-TEST(LimitsTable, OffsetsAreDistinctWordsInsideTheTable)
+TEST(LimitsTable, OffsetsAreDistinctAlignedFieldsInsideTheTable)
 {
     std::map<uint16_t, std::string> seen;
     for (const LimitField &field : kLimitFields) {
-        EXPECT_EQ(field.offset % 4, 0) << field.selector;
-        EXPECT_LE(field.offset + 4, kMTLDeviceLimitsBytes) << field.selector;
+        EXPECT_EQ(field.offset % field.bytes, 0) << field.selector;
+        EXPECT_LE(field.offset + field.bytes, kMTLDeviceLimitsBytes) << field.selector;
         EXPECT_TRUE(seen.emplace(field.offset, field.selector).second) << field.selector;
     }
-    EXPECT_EQ(seen.size(), 61u);
+    EXPECT_EQ(seen.size(), 62u);
+}
+
+// _MTLDevice's limits are 264 bytes in 21H461 and 24B119: maxBufferLength, a 64-bit field, at 0x100
+TEST(LimitsTable, TheTableRunsThroughMaxBufferLength)
+{
+    EXPECT_EQ(kMTLDeviceLimitsBytes, 0x108u);
+    Fill f({{"maxBufferLength", 3ull << 31}});
+    uint64_t v;
+    memcpy(&v, f.base.table + 0x100, 8);
+    EXPECT_EQ(v, 3ull << 31);
+    ASSERT_EQ(f.reports.size(), 1u);
+    EXPECT_EQ(f.reports[0].second, LimitFill::Filled);
 }
 
 }  // namespace

@@ -15,6 +15,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from tools.common import sudo
 from tools.install import progress
 
 TOOLS = {
@@ -39,8 +40,9 @@ class Log:
 
     def __init__(self, path: str | Path):
         self.path = Path(path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        sudo.user_directory(self.path.parent)
         self.file = self.path.open('a')
+        sudo.give_back(self.path)
 
     def __call__(self, *parts: object) -> None:
         line = ' '.join(str(p) for p in parts)

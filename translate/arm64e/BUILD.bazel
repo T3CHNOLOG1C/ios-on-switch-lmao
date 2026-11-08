@@ -123,7 +123,10 @@ filegroup(
 py_library(
     name = "prelink26",
     srcs = glob(["xnu/prelink26/*.py"]),
-    deps = ["//tools/prelink:native_prelink"],
+    deps = [
+        "//tools/common:macho",
+        "//tools/prelink:native_prelink",
+    ],
 )
 
 py_binary(

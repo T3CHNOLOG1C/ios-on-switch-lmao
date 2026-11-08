@@ -71,6 +71,38 @@ bool Pack::load(const char *path, uint64_t stack, std::string &err)
     return true;
 }
 
+uint32_t relocated(const PackInitMethod &m, const InitAddresses &a)
+{
+    switch (m.reloc) {
+    case RelocHeapHi:
+        return uint32_t(a.heap >> 32);
+    case RelocHeapLo:
+        return uint32_t(a.heap);
+    case RelocZeroHi:
+        return uint32_t(a.zero >> 32);
+    case RelocZeroLo:
+        return uint32_t(a.zero);
+    case RelocRootHi:
+        return uint32_t(a.root >> 32);
+    case RelocRootLo:
+        return uint32_t(a.root);
+    case RelocTicHi:
+        return uint32_t(a.tic >> 32);
+    case RelocTicLo:
+        return uint32_t(a.tic);
+    case RelocTicMax:
+        return a.ticMax;
+    case RelocTscHi:
+        return uint32_t(a.tsc >> 32);
+    case RelocTscLo:
+        return uint32_t(a.tsc);
+    case RelocTscMax:
+        return a.tscMax;
+    default:
+        return m.data;
+    }
+}
+
 const PackPipeline *Pack::find(uint64_t keyHash, PackForm form) const
 {
     const PackPipeline *p = section<PackPipeline>(PackPipelines);

@@ -34,6 +34,14 @@ def split(name: str) -> tuple[str, str]:
 
 def lifted(tables: caspec.Tables, fragment: str, fmt: int, blend: int) -> bool:
     """Pipeline::Spec::lift_blend_function: whether `blend` of `fragment` goes to the pipeline (hardware) blend."""
+    if tables.v27:
+        import caspec27  # noqa: PLC0415  (only a QuartzCore 27's tables need it)
+
+        return caspec27.lifted(tables.v27, fragment, fmt, blend)
+    return _lifted(tables, fragment, fmt, blend)
+
+
+def _lifted(tables: caspec.Tables, fragment: str, fmt: int, blend: int) -> bool:
     s = caspec.decode(tables, 'P0000Xm_' + fragment)
     if tables.tfi_flags(s.T) >> 3 & 1:
         return False
@@ -61,7 +69,7 @@ def with_fragment_blend(tables: caspec.Tables, fragment: str, blend: int) -> str
 
 def prefix_of(tables: caspec.Tables, fmt: str, blend: int, flags: str) -> str:
     code = {v: k for k, v in tables.dec['BlendFunction'].items()}
-    return 'P' + fmt + ('B' + code[blend] if blend != caspec.NONE_BLEND else '') + 'X' + flags
+    return 'P' + fmt + ('B' + code[blend] if blend != tables.none_blend else '') + 'X' + flags
 
 
 def _fragments(tables: caspec.Tables, seeds: list[str]) -> list[tuple[str, str]]:
@@ -69,7 +77,7 @@ def _fragments(tables: caspec.Tables, seeds: list[str]) -> list[tuple[str, str]]
     out: dict[str, str] = {}
     for name in seeds:
         prefix, fragment = split(name)
-        if caspec.decode(tables, name).fragB == caspec.NONE_BLEND:
+        if caspec.decode(tables, name).fragB == tables.none_blend:
             out.setdefault(fragment, prefix)
     return list(out.items())
 
@@ -85,7 +93,7 @@ def _blend_tier(tables: caspec.Tables, fragments: list[tuple[str, str]]) -> list
         flags = ''.join(sorted(caspec.decode(tables, prefix + '_' + fragment).pflags))
         for fmt in _formats(prefix):
             blends = [b for b in LIFTABLE if lifted(tables, fragment, codes[fmt], b)]
-            names += [prefix_of(tables, fmt, b, flags) + '_' + fragment for b in (caspec.NONE_BLEND, *blends)]
+            names += [prefix_of(tables, fmt, b, flags) + '_' + fragment for b in (tables.none_blend, *blends)]
     return names
 
 
@@ -97,15 +105,15 @@ def _fetch_tier(tables: caspec.Tables, fragments: list[tuple[str, str]]) -> list
             continue
         flags = ''.join(sorted(s.pflags))
         for fmt in _formats(prefix):
-            head = prefix_of(tables, fmt, caspec.NONE_BLEND, flags) + '_'
-            blends = [b for b in range(caspec.NONE_BLEND) if not lifted(tables, fragment, codes[fmt], b)]
+            head = prefix_of(tables, fmt, tables.none_blend, flags) + '_'
+            blends = [b for b in range(tables.none_blend) if not lifted(tables, fragment, codes[fmt], b)]
             names += [head + with_fragment_blend(tables, fragment, b) for b in blends]
     return names
 
 
 def labels(tables: caspec.Tables, corpus: list[str], tiers: tuple[str, ...] = TIERS) -> dict[str, list[str]]:
     """Give every tier's names, in order, each name in the first tier that has it."""
-    manifest = [m[0] for m in tables.t['manifest'] if not caspec.decode(tables, m[0]).flag('g')]
+    manifest = [m[0] for m in tables.t['manifest'] if m[0][0] == 'P' and not caspec.decode(tables, m[0]).flag('g')]
     fragments = _fragments(tables, list(corpus) + manifest)
     made = {
         'corpus': lambda: list(corpus),
@@ -121,20 +129,31 @@ def labels(tables: caspec.Tables, corpus: list[str], tiers: tuple[str, ...] = TI
     return out
 
 
-def corpus_names(path: str) -> list[str]:
+def corpus_names(path: str, tables: caspec.Tables | None = None) -> list[str]:
+    """Give the corpus's Core Animation names; with `tables`, only those whose line this QuartzCore makes of the name.
+
+    A corpus journaled under another IPSW's QuartzCore names states this one makes differently, or not at all.
+    """
     names: dict[str, None] = {}
     with open(path) as f:
         for line in f:
-            name, _ = caspec.corpus_fields(line)
-            if name:
+            name, fields = caspec.corpus_fields(line)
+            if name and (tables is None or _made_here(tables, name, fields)):
                 names[name] = None
     return list(names)
+
+
+def _made_here(tables: caspec.Tables, name: str, fields: str | None) -> bool:
+    try:
+        return caspec.state_fields(tables, name) == fields
+    except (KeyError, IndexError, ValueError):
+        return False
 
 
 def main() -> None:
     tables = caspec.Tables(sys.argv[1])
     tiers = tuple(sys.argv[3:]) or TIERS
-    for tier, names in labels(tables, corpus_names(sys.argv[2]), tiers).items():
+    for tier, names in labels(tables, corpus_names(sys.argv[2], tables), tiers).items():
         for name in names:
             print(caspec.state_line(tables, name))
         print(f'caset: {tier}: {len(names)} states', file=sys.stderr)

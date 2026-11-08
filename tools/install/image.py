@@ -22,6 +22,7 @@ from pathlib import Path
 
 if __package__ in (None, ''):
     sys.path.insert(0, str(Path(os.path.abspath(__file__)).parents[2]))
+from tools.common import paths
 from tools.install import (
     apfs,
     card as cards,
@@ -36,11 +37,6 @@ from tools.install import (
     space,
     stages,
 )
-
-try:
-    from python.runfiles import runfiles as rules_python_runfiles
-except ImportError:
-    rules_python_runfiles = None
 
 INPUTS = (
     'spec',
@@ -71,25 +67,13 @@ BAZEL_OUTPUTS = (
 )
 
 
-def runfiles() -> 'rules_python_runfiles.Runfiles | None':
-    return rules_python_runfiles.Create() if rules_python_runfiles else None
-
-
 def resolve_inputs(args: argparse.Namespace) -> None:
-    locate = runfiles()
-
-    def where(value: str) -> str:
-        return os.path.abspath(locate.Rlocation(value) or value if locate and not os.path.isabs(value) else value)
-
     for listing in args.inputs or []:
-        for name, value in json.loads(Path(where(listing)).read_text()).items():
+        for name, value in json.loads(Path(paths.located(listing)).read_text()).items():
             if not getattr(args, name, None):
                 setattr(args, name, value)
     for name in INPUTS:
-        value = getattr(args, name, None)
-        if value and not os.path.isabs(value) and locate:
-            value = locate.Rlocation(value) or value
-        setattr(args, name, os.path.abspath(value) if value else None)
+        setattr(args, name, paths.located(getattr(args, name, None)) or None)
     if args.gpu_base and os.path.isfile(args.gpu_base):
         args.gpu_base = os.path.dirname(args.gpu_base)
 
@@ -239,13 +223,10 @@ def main(argv: list[str] | None = None) -> int:
         parser.add_argument('--' + name.replace('_', '-'))
     args = parser.parse_args(argv)
     resolve_inputs(args)
-    workspace = os.environ.get('BUILD_WORKSPACE_DIRECTORY') or os.getcwd()
-    args.out = os.path.abspath(args.out or os.path.join(workspace, 'out/sd'))
+    args.out = os.path.abspath(args.out or paths.workspace() / 'out/sd')
     build = json.loads(Path(args.ipsw).read_text())['build']
     args.scratch = os.path.abspath(args.scratch or stages.default_scratch(build))
-    args.log = args.log or str(
-        Path.home() / 'Library/Logs/switch-ios/image-{}.log'.format(time.strftime('%Y%m%d-%H%M%S'))
-    )
+    args.log = args.log or str(paths.run_log('image'))
     log = host.Log(args.log) if not args.dry_run else PrintLog()
     try:
         host.check_tools(log)

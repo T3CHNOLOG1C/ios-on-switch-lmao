@@ -40,9 +40,11 @@
 #include <vector>
 #include "GpuMemoryRelease.h"
 #include "LimitsTable.h"
+#include "raw_invocation.h"
 #include "SwitchFrameTimeline.h"
 #include "../../../../kits/SwitchRefusal/SwitchRefusalSite.h"
 #include "RawAlias.h"
+#include "RawComplete.h"
 #include "raw_follow.h"
 #include "raw_gpu.h"
 #include "TegraGM20BLayout.h"
@@ -148,8 +150,9 @@ enum RMPred : uint8_t {
     PredPassOther,         // a = renderTargetArrayLength (layered), b = a rasterization rate map
     // states and calls
     PredStateForeign,
-    PredStateNotPackable,  // a state whose functions are not of one framework's default.metallib (never looked up in the pack)
+    PredStateNotPackable,  // a state whose functions are not this device's (neither in the pack nor made by the runtime)
     PredStateNotInPack,
+    PredStateBeingMade,  // a state the pack lacks whose record the runtime is making (its first uses: RawComplete.h)
     PredCallVisibility,
     PredCallBufForeign,      // a = stage << 8 | index (0xffff: an index buffer)
     PredCallSamplerForeign,  // a sampler the raw path does not express (its reason logged when it was made)
@@ -203,6 +206,7 @@ static constexpr const char *kPredNames[] = {"-",
                                              "state.foreign",
                                              "state.notpack",
                                              "state.pack",
+                                             "state.making",
                                              "call.vis",
                                              "call.buf",
                                              "call.sampler",
@@ -505,6 +509,7 @@ struct RawState {
     dispatch_queue_t handlers;               // where scheduled handlers run (in order, never inside commit)
     std::atomic<uint32_t> committed{0};      // command buffers committed and not finished (gRawRelease's drain)
     Stats stats;
+    std::unique_ptr<raw::Completion> completion;  // the states the pack lacks (raw_metal_complete_states)
 };
 
 static RawState *gRM;
@@ -548,6 +553,13 @@ static id twinPublish(id object, __strong id &slot, id made)
 }
 @property (nonatomic, copy) NSString *label;
 - (id)rmTwin;  // made now if needed; nil if it cannot be
+@end
+
+// The m2v device's Core Image filter-function linking (_MTLDevice's newLibraryWithImageFilterFunctionsSPI: sends it here)
+@protocol RMImageFilterLinking
+- (id<MTLLibrary>)newLibraryWithCIFilters:(NSArray *)functions
+                  imageFilterFunctionInfo:(const void *)info
+                                    error:(NSError **)error;
 @end
 
 @interface RMDevice : NSObject  // the methods the device class gets (raw_metal_device_open); no state of its own
@@ -1724,8 +1736,14 @@ static void refuseTexture(RMTexture *t, RMPred p, uint64_t a, uint64_t b, NSStri
 
 @interface RMPipeline : RMObject {
 @public
-    raw::Pipeline *_raw;  // null: not in the pack (every command buffer using it goes to m2v)
-    bool _packable;       // its functions are one framework's default library's (looked up in the pack)
+    // null: not in the pack (every command buffer using it goes to m2v), or not yet made by the runtime (completeLater: set once,
+    // released, from its queue)
+    raw::Pipeline *_raw;
+    bool _packable;     // its functions are one framework's default library's (looked up in the pack)
+    bool _completable;  // both its functions are this device's (the runtime makes its record if the pack has none)
+    bool _caTransform;
+    bool _asked;       // its record asked of the runtime (completeLater)
+    std::string _key;  // its pack key (completable states')
 }
 @end
 @implementation RMPipeline
@@ -2026,6 +2044,10 @@ static inline void hit(RMCommandBuffer *cb, RMPred p, uint64_t a = 0, uint64_t b
 - (void)forwardInvocation:(NSInvocation *)inv
 {
     [inv retainArguments];
+    if (!raw::keepPointedArguments(inv))
+        SWITCH_REFUSE_DETAIL("raw", "call.pointer", uintptr_t(inv.selector),
+                             "-[%s %s] recorded with a pointer argument of no known extent",
+                             class_getName(object_getClass(self)), sel_getName(inv.selector));
     [_cb retain:inv];
     Cmd c = cmd(OpInvocation);
     c.obj = (__bridge void *)inv;
@@ -2223,9 +2245,7 @@ static void forwardCall(RMEncoder *e, SEL selector, const void *argument)
         [_cb takeReason:WhyCall why:@"an index buffer not made by this device"];
         hit(_cb, PredCallBufForeign, 0xffff, 0);
     } else if ((indexType != MTLIndexTypeUInt16 && indexType != MTLIndexTypeUInt32) ||
-               offset % (indexType == MTLIndexTypeUInt16 ? 2 : 4) ||
-               offset + uint64_t(count) * (indexType == MTLIndexTypeUInt16 ? 2 : 4) >
-                   ((RMBuffer *)buffer)->_raw.length) {
+               !((RMBuffer *)buffer)->_raw.cpu) {
         [_cb takeReason:WhyEncode why:@"an indexed draw the raw path does not take"];
         hit(_cb, PredEncIndexedRange, offset, indexType == MTLIndexTypeUInt16 ? 2 : 4);
     }
@@ -2288,7 +2308,7 @@ static void forwardCall(RMEncoder *e, SEL selector, const void *argument)
         hit(_cb, PredStateForeign);
     } else if (!p->_raw) {
         [_cb takeReason:WhyState why:@"a state not in the pack (its label: the line it was made with)"];
-        hit(_cb, p->_packable ? PredStateNotInPack : PredStateNotPackable);
+        hit(_cb, !p->_completable ? PredStateNotPackable : p->_asked ? PredStateBeingMade : PredStateNotInPack);
     }
     _pipe = [(id)p isKindOfClass:[RMPipeline class]] ? p : nil;
     setBinding(_cb, OpPipeline, 0, 0, state, 0);
@@ -2737,6 +2757,82 @@ static id<MTLSamplerState> clampedSampler(id<MTLSamplerState> s, float lodMin, f
 {
     (void)heap;
     (void)stages;
+}
+
+- (void)useResources:(const id<MTLResource> __unsafe_unretained[])resources
+               count:(NSUInteger)count
+               usage:(MTLResourceUsage)usage
+              stages:(MTLRenderStages)stages
+{
+    for (NSUInteger k = 0; k < count; k++)
+        [self useResource:resources[k] usage:usage stages:stages];
+}
+
+- (void)useResources:(const id<MTLResource> __unsafe_unretained[])resources
+               count:(NSUInteger)count
+               usage:(MTLResourceUsage)usage
+{
+    [self useResources:resources count:count usage:usage stages:MTLRenderStageVertex | MTLRenderStageFragment];
+}
+
+- (void)useHeaps:(const id<MTLHeap> __unsafe_unretained[])heaps count:(NSUInteger)count
+{
+    (void)heaps;
+    (void)count;
+}
+
+- (void)useHeaps:(const id<MTLHeap> __unsafe_unretained[])heaps count:(NSUInteger)count stages:(MTLRenderStages)stages
+{
+    (void)heaps;
+    (void)count;
+    (void)stages;
+}
+
+// A barrier on some resources is the scope barrier over all of them
+- (void)memoryBarrierWithResources:(const id<MTLResource> __unsafe_unretained[])resources
+                             count:(NSUInteger)count
+                       afterStages:(MTLRenderStages)after
+                      beforeStages:(MTLRenderStages)before
+{
+    (void)resources;
+    (void)count;
+    // iOS has no MTLBarrierScopeRenderTargets; its texture scope covers render attachments
+    [self memoryBarrierWithScope:MTLBarrierScopeBuffers | MTLBarrierScopeTextures
+                     afterStages:after
+                    beforeStages:before];
+}
+
+// The count forms at one viewport or scissor are the single ones; more go to m2v with the call
+- (void)forwardCall:(SEL)selector pointer:(const void *)pointer count:(NSUInteger)count
+{
+    NSInvocation *inv = [NSInvocation invocationWithMethodSignature:[self methodSignatureForSelector:selector]];
+    inv.selector = selector;
+    [inv setArgument:&pointer atIndex:2];
+    [inv setArgument:&count atIndex:3];
+    [self forwardInvocation:inv];
+}
+
+- (void)setViewports:(const MTLViewport[])viewports count:(NSUInteger)count
+{
+    if (count == 1)
+        [self setViewport:viewports[0]];
+    else
+        [self forwardCall:_cmd pointer:viewports count:count];
+}
+
+- (void)setScissorRects:(const MTLScissorRect[])rects count:(NSUInteger)count
+{
+    if (count == 1)
+        [self setScissorRect:rects[0]];
+    else
+        [self forwardCall:_cmd pointer:rects count:count];
+}
+
+// Metal's default clips; clamping goes to m2v with the call
+- (void)setDepthClipMode:(MTLDepthClipMode)mode
+{
+    if (mode != MTLDepthClipModeClip)
+        forwardCall(self, _cmd, &mode);
 }
 
 - (void)updateFence:(id<MTLFence>)fence afterStages:(MTLRenderStages)stages
@@ -3748,6 +3844,10 @@ static void giveRecording(RMCommandBuffer *b)
 - (void)forwardInvocation:(NSInvocation *)inv
 {
     [inv retainArguments];
+    if (!raw::keepPointedArguments(inv))
+        SWITCH_REFUSE_DETAIL("raw", "call.pointer", uintptr_t(inv.selector),
+                             "-[MTLCommandBuffer %s] recorded with a pointer argument of no known extent",
+                             sel_getName(inv.selector));
     [self retain:inv];
     Cmd c = cmd(OpInvocation);
     c.obj = (__bridge void *)inv;
@@ -3865,9 +3965,7 @@ static void replayInvocation(NSInvocation *inv, id target)
 {
     NSMethodSignature *sig = inv.methodSignature;
     for (NSUInteger i = 2; i < sig.numberOfArguments; i++) {
-        const char *t = [sig getArgumentTypeAtIndex:i];
-        while (*t == 'r' || *t == 'n' || *t == 'N' || *t == 'o' || *t == 'O' || *t == 'R' || *t == 'V')
-            t++;
+        const char *t = raw::argumentType(sig, i);
         if (*t == '@') {
             __unsafe_unretained id arg = nil;
             [inv getArgument:&arg atIndex:i];
@@ -3877,20 +3975,11 @@ static void replayInvocation(NSInvocation *inv, id target)
                 [inv setArgument:&m atIndex:i];
             }
         } else if (t[0] == '^' && t[1] == '@') {
-            // an array of objects (set...s:withRange:, useResources:count:): mapped in place over a copy the invocation keeps
+            // an array of objects (set...s:withRange:, useResources:count:), the invocation's own copy
+            // (keepPointedArguments): mapped in place over another copy the invocation keeps
             id __unsafe_unretained *array = nullptr;
             [inv getArgument:&array atIndex:i];
-            NSUInteger count = 0;
-            for (NSUInteger k = i + 1; k < sig.numberOfArguments && !count; k++) {
-                const char *u = [sig getArgumentTypeAtIndex:k];
-                if (u[0] == '{') {  // NSRange
-                    NSRange r = {};
-                    [inv getArgument:&r atIndex:k];
-                    count = r.location + r.length;
-                } else if (u[0] == 'Q' || u[0] == 'L' || u[0] == 'I') {
-                    [inv getArgument:&count atIndex:k];
-                }
-            }
+            const NSUInteger count = raw::pointedElements(inv, i);
             if (array && count) {
                 NSMutableData *copy = [NSMutableData dataWithLength:count * sizeof(id)];
                 id __unsafe_unretained *out = (id __unsafe_unretained *)copy.mutableBytes;
@@ -5428,8 +5517,8 @@ static void commitBuffer(RMCommandBuffer *cb);
 
 // Alignments Core Animation lays its memory out by (QuartzCore 21H461), answered for what the raw path takes as it is; m2v takes
 // any multiple of 16 (its own answers), so the m2v twins of the same memory are unchanged in what they hold:
-//  - its buffer pool's suballocations (CA::OGL::MetalBufferPool::get_buffer: max(this, the argument's)): a uniform buffer the
-//    raw path binds at its address (a constant buffer's is a multiple of 256 on GM20B; m2v's residual is not in the pack);
+//  - its buffer pool's suballocations (CA::OGL::MetalBufferPool::get_buffer: max(this, the argument's)): the A10X's 4, a
+//    uniform buffer the raw path binds at the multiple of 256 below it with m2v's residual in its push word (raw::PackEntry);
 //  (not iosurfaceReadOnlyTextureAlignmentBytes: QuartzCore makes it the render server's needed IOSurface row alignment,
 //  CADeviceSetMinimumAlignment, and hands it to every client, CA::Context::connect_remote; MetalContext::update_surface then
 //  refuses every surface whose rows miss it, "Row bytes (N) not 128 aligned", and the layer draws nothing (r7p5: 3347 refusals
@@ -5440,7 +5529,7 @@ static void commitBuffer(RMCommandBuffer *cb);
 //  - the rows of its CPU readbacks (CAMetalTextureGetBytesPerRow).
 - (NSUInteger)minConstantBufferAlignmentBytes
 {
-    return 256;
+    return 4;
 }
 
 - (NSUInteger)deviceLinearReadOnlyTextureAlignmentBytes
@@ -5865,23 +5954,49 @@ static MTLRenderPipelineDescriptor *twinDescriptor(MTLRenderPipelineDescriptor *
     RMFunction *vf = [(id)d.vertexFunction isKindOfClass:[RMFunction class]] ? (RMFunction *)d.vertexFunction : nil;
     RMFunction *ff = [(id)d.fragmentFunction isKindOfClass:[RMFunction class]] ? (RMFunction *)d.fragmentFunction : nil;
     p->_packable = vf && ff && !vf->_framework.empty() && vf->_framework == ff->_framework;
+    p->_completable = vf && ff;
+    if (p->_completable)
+        p->_key = raw_metal_pipeline_key(d).UTF8String;
     if (p->_packable) {
-        NSString *key = raw_metal_pipeline_key(d);
-        const char *k = key.UTF8String;
-        p->_raw = gRM->raw->pipeline(raw::Pack::fnv(k, strlen(k)), raw::PackForm::Default,
-                                     vf->_framework == "QuartzCore" && [vf.name hasPrefix:@"fixed_vert_"] &&
-                                         [vf.name hasSuffix:@"_spc"]);
+        p->_caTransform =
+            vf->_framework == "QuartzCore" && [vf.name hasPrefix:@"fixed_vert_"] && [vf.name hasSuffix:@"_spc"];
+        p->_raw =
+            gRM->raw->pipeline(raw::Pack::fnv(p->_key.data(), p->_key.size()), raw::PackForm::Default, p->_caTransform);
     }
     if (!p->_raw) {
         const char *label = d.label.UTF8String ?: "-";
         SWITCH_REFUSE_DETAIL("raw", "state.unpacked", raw::Pack::fnv(label, strlen(label)),
-                             "state not in the pack (m2v draws it)%s: %s",
-                             !p->_packable              ? " (not one framework library's functions: never looked up)"
+                             "state not in the pack (m2v draws it until the runtime makes its record)%s: %s",
+                             !p->_completable           ? " (a function not this device's: never made)"
+                             : !p->_packable            ? " (not a framework library's: never in the pack)"
                              : gRM->raw->stats.heapFull ? " (or the shader heap is full)"
                                                         : "",
                              label);
     }
     return p;
+}
+
+// A state the pack lacks, of any library's functions, once its twin exists: the runtime makes its record off this thread
+// (RawComplete.h) and the raw path draws it from then on; m2v until then
+static void completeLater(RMPipeline *p, MTLRenderPipelineDescriptor *d)
+{
+    if (p->_raw || !p->_completable || !p->_twin || !gRM->completion)
+        return;
+    raw::Completion::Ask a;
+    a.twin = p->_twin;
+    a.descriptor = twinDescriptor(d);
+    a.key = p->_key;
+    a.caTransform = p->_caTransform;
+    a.own = !p->_packable;
+    p->_asked = true;
+    __weak RMPipeline *weak = p;
+    gRM->completion->ask(std::move(a), [weak](raw::Pipeline *pl) {
+        RMPipeline *strong = weak;
+        if (strong && pl)
+            __atomic_store_n(&strong->_raw, pl, __ATOMIC_RELEASE);
+        else if (strong)
+            strong->_asked = false;
+    });
 }
 
 // m2v's state over the twins, for a command buffer that has to go to m2v (made asynchronously in the render server:
@@ -5904,6 +6019,7 @@ static id<MTLRenderPipelineState> pipelineTwin(MTLRenderPipelineDescriptor *d, M
     p->_twin = pipelineTwin(d, MTLPipelineOptionNone, p->_raw, error);
     if (!p->_twin && !p->_raw)
         return nil;
+    completeLater(p, d);
     if (error && p->_raw)
         *error = nil;
     return (id<MTLRenderPipelineState>)p;
@@ -5921,10 +6037,12 @@ static id<MTLRenderPipelineState> pipelineTwin(MTLRenderPipelineDescriptor *d, M
                                                                                    reflection:reflection
                                                                                         error:error];
         RMPipeline *p = [self pipelineFor:d twin:twin];
+        completeLater(p, d);
         return !twin && !p->_raw ? nil : (id<MTLRenderPipelineState>)p;
     }
     RMPipeline *p = [self pipelineFor:d twin:nil];
     p->_twin = pipelineTwin(d, o, p->_raw, error);
+    completeLater(p, d);
     return !p->_twin && !p->_raw ? nil : (id<MTLRenderPipelineState>)p;
 }
 
@@ -5936,6 +6054,7 @@ static id<MTLRenderPipelineState> pipelineTwin(MTLRenderPipelineDescriptor *d, M
     [gRM->fallback newRenderPipelineStateWithDescriptor:twinDescriptor(d)
                                       completionHandler:^(id<MTLRenderPipelineState> twin, NSError *e) {
                                           RMPipeline *p = [me pipelineFor:copy twin:twin];
+                                          completeLater(p, copy);
                                           handler((!twin && !p->_raw) ? nil : (id<MTLRenderPipelineState>)p, e);
                                       }];
 }
@@ -5951,6 +6070,7 @@ static id<MTLRenderPipelineState> pipelineTwin(MTLRenderPipelineDescriptor *d, M
                                       completionHandler:^(id<MTLRenderPipelineState> twin,
                                                           MTLRenderPipelineReflection *r, NSError *e) {
                                           RMPipeline *p = [me pipelineFor:copy twin:twin];
+                                          completeLater(p, copy);
                                           handler((!twin && !p->_raw) ? nil : (id<MTLRenderPipelineState>)p, r, e);
                                       }];
 }
@@ -6005,6 +6125,49 @@ static id<MTLRenderPipelineState> pipelineTwin(MTLRenderPipelineDescriptor *d, M
                                                                              options:o
                                                                           reflection:r
                                                                                error:error]];
+}
+
+// The m2v device links these libraries from its own functions' bitcode: the functions here are their twins. Its methods, inherited
+// by this class, would be sent this device's functions.
+static NSArray *twinFunctions(NSArray *functions, NSError **error)
+{
+    NSMutableArray *twins = [NSMutableArray arrayWithCapacity:functions.count];
+    for (id f in functions) {
+        id twin = twinOf(f);
+        if (!twin) {
+            if (error)
+                *error = [NSError errorWithDomain:MTLLibraryErrorDomain
+                                             code:MTLLibraryErrorFunctionNotFound
+                                         userInfo:@{NSLocalizedDescriptionKey : @"a function with no m2v twin"}];
+            return nil;
+        }
+        [twins addObject:twin];
+    }
+    return twins;
+}
+
+- (id<MTLLibrary>)newLibraryWithStitchedDescriptor:(MTLStitchedLibraryDescriptor *)d error:(NSError **)error
+{
+    NSArray *twins = twinFunctions(d.functions, error);
+    if (!twins)
+        return nil;
+    MTLStitchedLibraryDescriptor *t = [d copy];
+    t.functions = twins;
+    return (id<MTLLibrary>)wrapLibrary(self, [gRM->fallback newLibraryWithStitchedDescriptor:t error:error], nil);
+}
+
+- (id<MTLLibrary>)newLibraryWithCIFilters:(NSArray *)functions
+                  imageFilterFunctionInfo:(const void *)info
+                                    error:(NSError **)error
+{
+    NSArray *twins = twinFunctions(functions, error);
+    if (!twins)
+        return nil;
+    return (id<MTLLibrary>)wrapLibrary(self,
+                                       [(id<RMImageFilterLinking>)gRM->fallback newLibraryWithCIFilters:twins
+                                                                                imageFilterFunctionInfo:info
+                                                                                                  error:error],
+                                       nil);
 }
 
 - (id<MTLHeap>)newHeapWithDescriptor:(MTLHeapDescriptor *)d
@@ -6748,11 +6911,12 @@ size_t raw_metal_rates(char *out, size_t size)
     // replay= and rclean= per m2v submission: whole command buffers and split ones' m2v segments
     const uint64_t aborts = s.aborted.load() - gRates.aborted, segs = s.splitM2v.load() - gRates.splitM2v,
                    m2vs = f + segs ? f + segs : 1;
+    const raw::Compiler::Stats made = gRM->completion ? gRM->completion->stats() : raw::Compiler::Stats();
     char diag[768];
     snprintf(diag, sizeof diag,
              " sp=%llu/%llu abortenc=%.0fus/a replay=%.0fus/m rclean=%.0fKB/m rt128=%llu(pitch %u va&255 %u) "
              "rtmix=%llu lvl=%llu "
-             "mir=%llu/%llu why=%s",
+             "mir=%llu/%llu states=%llu/%llu/%llu/%llu/%.0fms why=%s",
              (unsigned long long)sp, (unsigned long long)segs,
              (s.abortUs.load() - gRates.abortUs) / double(aborts ? aborts : 1),
              (s.replayUs.load() - gRates.replayUs) / double(m2vs),
@@ -6761,7 +6925,9 @@ size_t raw_metal_rates(char *out, size_t size)
              k.rtUnalignedVa.load(), (unsigned long long)(k.rtMixed.load() - gRates.rtMixed),
              (unsigned long long)(k.levelPasses.load() - gRates.levelPasses),
              (unsigned long long)(k.mirrorsOut.load() - gRates.mirrorsOut),
-             (unsigned long long)(k.mirrorsIn.load() - gRates.mirrorsIn), *preds ? preds : "-");
+             (unsigned long long)(k.mirrorsIn.load() - gRates.mirrorsIn), (unsigned long long)made.hits,
+             (unsigned long long)made.misses, (unsigned long long)made.refusals, (unsigned long long)made.failures,
+             made.makeUs / 1000.0, *preds ? preds : "-");
 #if SWITCH_FRAME_TIMELINE
     {
         const size_t used = strlen(diag);
@@ -6999,6 +7165,13 @@ void raw_metal_prepare(const char *packPath, uint64_t stack)
     });
 }
 
+void raw_metal_complete_states(const char *cacheDir)
+{
+    if (gRM && gRM->fallback && !gRM->completion)
+        gRM->completion =
+            std::make_unique<raw::Completion>(*gRM->raw, gRM->fallback, cacheDir, gRM->raw->pack().header()->stack);
+}
+
 id<MTLDevice> raw_metal_device_open(const char *packPath, uint64_t stack, id<MTLDevice> fallback, NSString **error)
 {
     static std::mutex once;
@@ -7082,7 +7255,7 @@ id<MTLDevice> raw_metal_device_open(const char *packPath, uint64_t stack, id<MTL
         const void *from = ((const void *(*)(id, SEL))objc_msgSend)(fallback, limits);
         void *to = ((void *(*)(id, SEL))objc_msgSend)(r->device, limits);
         if (from && to && from != to) {
-            memcpy(to, from, 0x100);  // kLimitFields' extent
+            memcpy(to, from, kMTLDeviceLimitsBytes);
             fillLimitsFromMethods(r->device, static_cast<uint8_t *>(to), [](const LimitField &field, LimitFill how) {
                 if (how != LimitFill::Filled)
                     SWITCH_REFUSE_DETAIL("raw", "limits.layout", field.offset,

@@ -13,7 +13,7 @@
 
 enum class LimitFill : uint8_t {
     Filled,
-    Overflow,  // the answer does not fit the table's 32 bits
+    Overflow,  // the answer does not fit the field's 32 bits
     NotRead,   // the base class's accessor does not read the field there: it is left as it was
 };
 
@@ -28,16 +28,20 @@ void fillLimitsTable(uint8_t *table, Answer answer, ReadBack readBack, Report re
         uint64_t value = 0;
         if (!answer(field, value))
             continue;
-        if (value > UINT32_MAX) {
+        if (field.bytes == 4 && value > UINT32_MAX) {
             report(field, LimitFill::Overflow);
             continue;
         }
-        uint32_t was;
-        memcpy(&was, table + field.offset, 4);
-        const uint32_t word = uint32_t(value);
-        memcpy(table + field.offset, &word, 4);
+        uint8_t was[8];
+        memcpy(was, table + field.offset, field.bytes);
+        if (field.bytes == 8) {
+            memcpy(table + field.offset, &value, 8);
+        } else {
+            const uint32_t word = uint32_t(value);
+            memcpy(table + field.offset, &word, 4);
+        }
         if (readBack(field) != value) {
-            memcpy(table + field.offset, &was, 4);
+            memcpy(table + field.offset, was, field.bytes);
             report(field, LimitFill::NotRead);
             continue;
         }

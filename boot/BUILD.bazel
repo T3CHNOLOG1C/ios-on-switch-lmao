@@ -273,7 +273,7 @@ py_binary(
     ],
     main = "//tools/package:snapshot.py",
     tags = ["manual"],
-    deps = ["@rules_python//python/runfiles"],
+    deps = ["//tools/common:paths"],
 )
 
 # The RAM metadata exporter (exporter.uimg, pinned in bazel/pinned/firmware and staged in bl33.bin): its builder and its

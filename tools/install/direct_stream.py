@@ -14,11 +14,8 @@ import fcntl
 import hashlib
 import os
 import struct
-import sys
-import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import TextIO
 
 from tools.install import apfs, manifest
 
@@ -26,7 +23,6 @@ F_NOCACHE = 48
 AHEAD = 4
 ZEROS = memoryview(bytes(manifest.HASH_CHUNK))
 SECTOR = 512
-MIB, GIB = 1 << 20, 1 << 30
 
 
 class StreamError(Exception):
@@ -148,36 +144,6 @@ class Body:
         return not self.view and next(self.source, None) is None
 
 
-class Progress:
-    """A live line on stderr: bytes written of the total, the rate and the time left."""
-
-    def __init__(self, total: int, out: TextIO = sys.stderr) -> None:
-        self.total, self.out = total, out
-        self.tty = out.isatty()
-        self.start = self.shown = time.monotonic()
-
-    def __call__(self, done: int) -> None:
-        now = time.monotonic()
-        if done < self.total and now - self.shown < (0.25 if self.tty else 30):
-            return
-        self.shown = now
-        self.out.write(f'\r{self.line(done, now)}\x1b[K' if self.tty else self.line(done, now) + '\n')
-        self.out.flush()
-
-    def line(self, done: int, now: float) -> str:
-        rate = done / max(now - self.start, 1e-6)
-        left = int((self.total - done) / rate) if rate else 0
-        return (
-            f'  {done / GIB:.2f} of {self.total / GIB:.2f} GiB  {rate / MIB:.1f} MiB/s  '
-            f'{left // 60}:{left % 60:02d} left'
-        )
-
-    def finish(self) -> None:
-        if self.tty:
-            self.out.write('\n')
-            self.out.flush()
-
-
 def _write(fd: int, offset: int, data: memoryview, limit: int) -> None:
     if offset < 0 or offset + len(data) > limit or (offset | len(data)) % SECTOR:
         raise StreamError(f'a write of {len(data)} bytes at {offset} is outside the partition ({limit} bytes)')
@@ -185,8 +151,11 @@ def _write(fd: int, offset: int, data: memoryview, limit: int) -> None:
         raise StreamError(f'short write at partition offset {offset}')
 
 
-def install(m: manifest.Manifest, stream: Stream, fd: int, partition_bytes: int, progress: Progress) -> int:
-    """Write the image's extents onto the partition open at `fd` (offset 0 its first byte); return the bytes written."""
+def install(m: manifest.Manifest, stream: Stream, fd: int, partition_bytes: int, advance: Callable[[int], None]) -> int:
+    """Write the image's extents onto the partition open at `fd` (offset 0 its first byte); return the bytes written.
+
+    `advance` (progress.advance) is told each write's bytes.
+    """
     end = max(at + n for at, _, n in m.extents)
     if end > partition_bytes or m.minimum_bytes > partition_bytes:
         raise StreamError(f'the image needs {max(end, m.minimum_bytes)} bytes; the partition has {partition_bytes}')
@@ -199,7 +168,7 @@ def install(m: manifest.Manifest, stream: Stream, fd: int, partition_bytes: int,
             _write(fd, at + done, data, partition_bytes)
             done += len(data)
             written += len(data)
-            progress(written)
+            advance(len(data))
     if not body.finished():
         raise StreamError("the image's body is longer than its extents")
     os.fsync(fd)

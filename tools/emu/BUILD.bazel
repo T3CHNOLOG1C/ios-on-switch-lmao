@@ -1,0 +1,63 @@
+load("@rules_python//python:py_binary.bzl", "py_binary")
+load("@rules_python//python:py_library.bzl", "py_library")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+# hekate's last steps on core 0 (hekate.py REGISTERS follow it in memory), a flat image at its IRAM address.
+genrule(
+    name = "regwrite",
+    srcs = [
+        "firmware/regwrite.S",
+        "@xcode//:xcode.env",
+    ],
+    outs = ["regwrite.bin"],
+    cmd = """
+export DEVELOPER_DIR="$$(/usr/bin/sed -n 's/^DEVELOPER_DIR=//p' $(execpath @xcode//:xcode.env))"
+/usr/bin/clang --target=aarch64-none-elf -c $(execpath firmware/regwrite.S) -o $(@D)/regwrite.o
+$(execpath @llvm//:bin/ld.lld) -Ttext=0x40010000 -e _start $(@D)/regwrite.o -o $(@D)/regwrite.elf
+$(execpath @llvm//:bin/llvm-objcopy) -O binary $(@D)/regwrite.elf $@
+""",
+    tags = [
+        "no-remote-exec",
+        "requires-darwin",
+    ],
+    tools = [
+        "@llvm//:bin/ld.lld",
+        "@llvm//:bin/llvm-objcopy",
+    ],
+)
+
+py_library(
+    name = "emu_lib",
+    srcs = [
+        "cache.py",
+        "hekate.py",
+        "machine.py",
+        "monitor.py",
+        "qemu.py",
+        "report.py",
+        "sdcard.py",
+    ],
+    data = glob(
+        ["patches/*.patch"],
+        allow_empty = True,
+    ) + [":regwrite"],
+    deps = ["//tools/install:lib"],
+)
+
+# bazel run //tools/emu:build: the patched tegra_qemu, built once per Mac (README.md).
+py_binary(
+    name = "build",
+    srcs = ["build.py"],
+    deps = [":emu_lib"],
+)
+
+# bazel run //tools/emu:boot -- --kind=ios17|ios27 [--sd IMAGE] [--seconds N] (README.md).
+py_binary(
+    name = "boot",
+    srcs = ["boot.py"],
+    deps = [":emu_lib"],
+)

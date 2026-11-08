@@ -55,6 +55,9 @@ import sys
 import tempfile
 from pathlib import Path
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import packfile
+
 HERE = Path(__file__).resolve().parent  # drivers/TegraGM20BMetal/raw/pack
 RAW = HERE.parent
 TREE = Path(os.environ.get('RAWPACK_TREE', RAW.parents[2]))  # tree/ (drivers/TegraGM20BMetal/raw -> tree)
@@ -127,7 +130,7 @@ def ca_corpus(qc: Path, corpus: Path, work: Path) -> Path:
     out = work / 'corpus.ca.log'
     with open(corpus) as src, open(out, 'w') as dst:
         dst.writelines(line for line in src if not caspec.corpus_fields(line)[0])
-        for tier, names in caset.labels(tables, caset.corpus_names(str(corpus)), CA_TIERS).items():
+        for tier, names in caset.labels(tables, caset.corpus_names(str(corpus), tables), CA_TIERS).items():
             dst.writelines(caspec.state_line(tables, n) + '\n' for n in names)
             print(f'rawpack: Core Animation states, {tier}: {len(names)}')
     return out
@@ -152,10 +155,6 @@ def build(work: Path, bridge: Path) -> None:
     run(['xcrun', 'clang', *cflags, '-c', HERE / 'mock_iokit.c', '-o', work / 'mock_iokit.o'])
     run(['xcrun', 'clang++', *cflags, '-std=c++17', '-c', HERE / 'cap.cpp', '-o', work / 'cap.o'])
     run(['xcrun', 'clang++', *cflags, '-std=c++17', '-c', HERE / 'nvdec.cpp', '-o', work / 'nvdec.o'])
-    for src in ('raw_capture.cpp', 'raw_pack.cpp'):  # the mock's RAWCAP_CAPTURE (cap.cpp)
-        obj = work / Path(src).with_suffix('.o')
-        run(['xcrun', 'clang++', *cflags, '-std=c++17', '-c', RAW / 'runtime' / src, '-o', obj])
-        objs.append(obj)
     run(
         [
             'xcrun',
@@ -239,7 +238,7 @@ def split_buckets(corpus: Path, work: Path, count: int) -> list[Path]:
     with open(corpus) as f:
         for line in f:
             if line.startswith('R ') and (' label=com.apple.coreanimation.' in line or FRAMEWORK.search(line)):
-                lines[fnv(line.split(' ', 3)[3].encode()) % count].append(line)
+                lines[packfile.fnv(line.split(' ', 3)[3].encode()) % count].append(line)
                 warm = warm or (line if 'f downsample_4_frag' in line else '')
     dirs = []
     for i, part in enumerate(lines):
@@ -248,13 +247,6 @@ def split_buckets(corpus: Path, work: Path, count: int) -> list[Path]:
         (d / 'corpus.log').write_text(warm + ''.join(part))
         dirs.append(d)
     return dirs
-
-
-def fnv(b: bytes) -> int:
-    h = 0xCBF29CE484222325
-    for x in b:
-        h = ((h ^ x) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
-    return h
 
 
 def state_key(line: str) -> str:

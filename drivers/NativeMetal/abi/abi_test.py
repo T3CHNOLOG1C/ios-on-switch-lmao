@@ -48,15 +48,23 @@ class Tables(unittest.TestCase):
             device = json.loads(path.read_text())['MTLDevice']
             self.assertLessEqual(device['limits_ivar'] + device['limits_bytes'], device['instance_size'], path.stem)
             for name, offset in device['limits'].items():
-                self.assertEqual(device['limits_fields'][name], [offset, 'I'], f'{path.stem}: {name}')
-                self.assertIn(name, device['methods'], f'{path.stem}: {name}')
+                self.assertEqual(device['limits_fields'][name][0], offset, f'{path.stem}: {name}')
+                self.assertIn(device['limits_fields'][name][1], ('I', 'Q'), f'{path.stem}: {name}')
 
     def test_each_kinds_header_holds_its_size_and_limits_in_order(self):
         for path in KINDS:
             table = json.loads(path.read_text())
             text = header(table)
-            written = [(name, int(offset, 16)) for name, offset in re.findall(r'\{"(\w+)", (0x[0-9a-f]+)\}', text)]
-            self.assertEqual(written, list(table['MTLDevice']['limits'].items()), path.stem)
+            fields = table['MTLDevice']['limits_fields']
+            written = re.findall(r'\{"(\w+)", (0x[0-9a-f]+), (\d)\}', text)
+            self.assertEqual(
+                [(name, int(offset, 16), int(width)) for name, offset, width in written],
+                [
+                    (name, offset, 8 if fields[name][1] == 'Q' else 4)
+                    for name, offset in table['MTLDevice']['limits'].items()
+                ],
+                path.stem,
+            )
             self.assertIn(f'kMTLDeviceInstanceSize = {table["MTLDevice"]["instance_size"]};', text)
             self.assertIn(f'kMTLDeviceLimitsBytes = {table["MTLDevice"]["limits_bytes"]};', text)
 

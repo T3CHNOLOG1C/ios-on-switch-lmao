@@ -17,7 +17,8 @@ import stat
 from collections.abc import Callable
 from pathlib import Path
 
-from tools.install import card as cards, delta, host, overlay_index, owners as ownership, progress, renamed
+from tools.common import files, hashing
+from tools.install import delta, host, overlay_index, owners as ownership, progress, renamed
 
 OVERLAY = renamed.DATA_FOLDER + '/pretranslated'
 OVERLAY_MANIFEST = OVERLAY + '.json'
@@ -38,13 +39,11 @@ def _place(root: Path, e: dict, original: os.stat_result) -> Path:
     """Copy e's translated file to its System path below root, with the System file's mode."""
     target = root / e['path'].lstrip('/')
     target.parent.mkdir(parents=True, exist_ok=True)
-    partial = target.with_name('.partial-' + target.name)
-    shutil.copyfile(e['source'], partial)
-    progress.advance(partial.stat().st_size)
-    if cards.sha256_file(partial, progress.advance) != e['sha256_out']:
-        partial.unlink()
-        raise host.HostError(f'{e["path"]}: the translated file does not match its manifest')
-    os.replace(partial, target)
+    with files.replacing(target) as partial:
+        shutil.copyfile(e['source'], partial)
+        progress.advance(partial.stat().st_size)
+        if hashing.sha256_file(partial, progress.advance) != e['sha256_out']:
+            raise host.HostError(f'{e["path"]}: the translated file does not match its manifest')
     target.chmod(original.st_mode & 0o7777)
     return target
 
@@ -88,7 +87,9 @@ class Deltas:
         """
         kept = {p.name: p for p in self.artifacts()}
         wrong = [
-            name for name, digest in sorted(pins.items()) if name not in kept or cards.sha256_file(kept[name]) != digest
+            name
+            for name, digest in sorted(pins.items())
+            if name not in kept or hashing.sha256_file(kept[name]) != digest
         ]
         if wrong:
             raise host.HostError(

@@ -68,11 +68,6 @@ def flip(root: Path, stream_offset: int, name: str = 'IOS99') -> None:
         f.write(bytes([byte[0] ^ 0xFF]))
 
 
-class Quiet(io.StringIO):
-    def isatty(self) -> bool:
-        return False
-
-
 class WriterTest(unittest.TestCase):
     def setUp(self):
         self.root = Path(tempfile.mkdtemp())
@@ -85,7 +80,7 @@ class WriterTest(unittest.TestCase):
         stream = streams.Stream(self.root / folder.SII_DIR, m)
         fd = os.open(self.partition, os.O_RDWR)
         try:
-            return streams.install(m, stream, fd, size, streams.Progress(m.write_bytes, Quiet()))
+            return streams.install(m, stream, fd, size, lambda _n: None)
         finally:
             os.close(fd)
             stream.close()

@@ -28,6 +28,7 @@ from typing import NoReturn
 
 if __package__ in (None, ''):
     sys.path.insert(0, str(Path(os.path.abspath(__file__)).parents[2]))
+from tools.common import files, paths, sudo
 from tools.install import (
     card as cards,
     compose,
@@ -36,6 +37,7 @@ from tools.install import (
     gpt,
     host,
     manifest,
+    progress,
     target as targets,
 )
 
@@ -119,7 +121,8 @@ class Direct:
         if not self.args.yes:
             self.log('dry run: nothing written (add --yes)')
             return 0
-        confirm(self.args, self.card.disk)
+        disk = self.card.disk
+        cards.confirm(self.args, disk, f"This replaces {disk}'s iOS partition and everything on it.")
         if not self.privileged():
             if os.geteuid() == 0:
                 raise host.HostError(f'{self.card.raw} cannot be opened for writing')
@@ -142,7 +145,7 @@ class Direct:
         snapshot = cards.table_snapshot(self.card)
         path = Path(str(self.log.path) + '.partition-table.bin')
         path.write_bytes(snapshot)
-        give_back(path)
+        sudo.give_back(path)
         self.log('partition table backed up to', path)
         return snapshot
 
@@ -228,14 +231,13 @@ class Direct:
         if host.container_on(self.slice):
             raise host.HostError(f'macOS has a container attached on {self.slice}: refusing to write under it')
         self.log(f'writing {self.m.write_bytes / GB:.2f} GB onto {self.slice}')
-        progress = streams.Progress(self.m.write_bytes)
         start = time.monotonic()
         fd = os.open('/dev/r' + self.slice, os.O_RDWR)
         try:
-            written = streams.install(self.m, self.stream, fd, self.target.bytes, progress)
+            with progress.step(f'write: {self.slice}', self.m.write_bytes):
+                written = streams.install(self.m, self.stream, fd, self.target.bytes, progress.advance)
         finally:
             os.close(fd)
-            progress.finish()
         took = time.monotonic() - start
         self.log(f'write: {written} bytes in {took:.1f} s ({written / max(took, 1e-6) / (1 << 20):.1f} MiB/s)')
 
@@ -330,61 +332,29 @@ def read(path: Path) -> bytes:
 
 def replace(path: Path, data: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    partial = path.with_name('.switch-partial-' + path.name)
-    with open(partial, 'wb') as f:
-        f.write(data)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(partial, path)
+    files.write_bytes(path, data, sync=True)
     double = path.with_name('._' + path.name)
     if double.exists():
         double.unlink()
 
 
-def give_back(path: Path) -> None:
-    """Give a file made under sudo back to the user who ran the command."""
-    uid, gid = os.environ.get('SUDO_UID'), os.environ.get('SUDO_GID')
-    if os.geteuid() == 0 and uid:
-        os.chown(path, int(uid), int(gid))
-
-
 def resolve_tool(value: str | None) -> str:
     """Return apfs_tool's absolute path from its runfiles path (`bazel run`) or a path, so a sudo rerun finds it."""
-    if value and not os.path.isabs(value):
-        try:
-            from python.runfiles import runfiles  # noqa: PLC0415  only under `bazel run`
-
-            value = runfiles.Create().Rlocation(value) or value
-        except ImportError:
-            pass
+    value = paths.located(value)
     if not value or not os.access(value, os.X_OK):
         raise host.HostError(f'no apfs_tool at {value!r}: run through `bazel run //:image_to_card`')
-    return os.path.abspath(value)
-
-
-def confirm(args: argparse.Namespace, disk: str) -> None:
-    if args.confirm:
-        if args.confirm != disk:
-            raise cards.RefusedError(f'--confirm={args.confirm} does not name the target {disk}')
-        return
-    if not sys.stdin.isatty():
-        raise cards.RefusedError(f'type-to-confirm needs a terminal (or pass --confirm={disk})')
-    answer = input(f"This replaces {disk}'s iOS partition and everything on it. Type {disk} to continue: ")
-    if answer.strip() != disk:
-        raise cards.RefusedError('not confirmed')
-    args.confirm = disk
+    return value
 
 
 def reexec_as_root(args: argparse.Namespace) -> NoReturn:
-    command = ['sudo', '--', sys.executable, os.path.abspath(__file__), args.disk, '--yes']
+    argv = [args.disk, '--yes']
     for key in ('confirm', 'out', 'image', 'partition', 'apfs_tool', 'log'):
         value = getattr(args, key)
         if value:
-            command.append(f'--{key.replace("_", "-")}={value}')
+            argv.append(f'--{key.replace("_", "-")}={value}')
     if args.no_eject:
-        command.append('--no-eject')
-    print('running under sudo:', ' '.join(command), flush=True)
-    os.execvp('sudo', command)
+        argv.append('--no-eject')
+    sudo.rerun(__file__, argv)
 
 
 def parse(argv: list[str]) -> argparse.Namespace:
@@ -399,11 +369,8 @@ def parse(argv: list[str]) -> argparse.Namespace:
     parser.add_argument('--no-eject', action='store_true')
     parser.add_argument('--log')
     args = parser.parse_args(argv)
-    workspace = os.environ.get('BUILD_WORKSPACE_DIRECTORY') or os.getcwd()
-    args.out = os.path.abspath(args.out or os.path.join(workspace, 'out/sd'))
-    args.log = os.path.abspath(
-        args.log or Path.home() / 'Library/Logs/switch-ios/direct-{}.log'.format(time.strftime('%Y%m%d-%H%M%S'))
-    )
+    args.out = os.path.abspath(args.out or paths.workspace() / 'out/sd')
+    args.log = os.path.abspath(args.log or paths.run_log('direct'))
     return args
 
 
