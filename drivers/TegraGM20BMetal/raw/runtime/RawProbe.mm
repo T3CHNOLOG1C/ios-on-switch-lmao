@@ -117,10 +117,11 @@ Probe::~Probe()
         CFRelease(framebufferSurface_);
 }
 
-// probe.mm's target(): one 64x64 texture per format, memoryless for a writeMask-0 attachment (Core Animation's second)
-id<MTLTexture> Probe::target(MTLPixelFormat format, bool memoryless)
+// probe.mm's target(): one 64x64 texture per format, memoryless for a writeMask-0 attachment (Core Animation's second) and
+// for a multisampled state's attachments (of its sample count)
+id<MTLTexture> Probe::target(MTLPixelFormat format, bool memoryless, NSUInteger samples)
 {
-    NSString *k = [NSString stringWithFormat:@"%lu.%d", (unsigned long)format, memoryless];
+    NSString *k = [NSString stringWithFormat:@"%lu.%d.%lu", (unsigned long)format, memoryless, (unsigned long)samples];
     if (!targets_[k]) {
         MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:format
                                                                                       width:kTargetSide
@@ -128,6 +129,10 @@ id<MTLTexture> Probe::target(MTLPixelFormat format, bool memoryless)
                                                                                   mipmapped:NO];
         td.usage = MTLTextureUsageRenderTarget | (memoryless ? 0 : MTLTextureUsageShaderRead);
         td.storageMode = memoryless ? MTLStorageModeMemoryless : MTLStorageModePrivate;
+        if (samples > 1) {
+            td.textureType = MTLTextureType2DMultisample;
+            td.sampleCount = samples;
+        }
         id<MTLTexture> t = [device_ newTextureWithDescriptor:td];
         if (!t && memoryless) {
             td.storageMode = MTLStorageModePrivate;
@@ -147,15 +152,16 @@ MTLRenderPassDescriptor *Probe::pass(MTLRenderPipelineDescriptor *d)
     MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
     const bool depthStencil = d.depthAttachmentPixelFormat != MTLPixelFormatInvalid ||
                               d.stencilAttachmentPixelFormat != MTLPixelFormatInvalid;
-    bool usedFramebuffer = depthStencil;
+    const NSUInteger samples = std::max<NSUInteger>(d.rasterSampleCount, 1);
+    bool usedFramebuffer = depthStencil || samples > 1;
     for (NSUInteger c = 0; c < 8; c++) {
         MTLRenderPipelineColorAttachmentDescriptor *ca = d.colorAttachments[c];
         if (ca.pixelFormat == MTLPixelFormatInvalid)
             continue;
-        const bool memoryless = ca.writeMask == 0;
+        const bool memoryless = ca.writeMask == 0 || samples > 1;
         id<MTLTexture> t = (!memoryless && !usedFramebuffer && ca.pixelFormat == MTLPixelFormatBGRA8Unorm)
                                ? framebuffer_
-                               : target(ca.pixelFormat, memoryless);
+                               : target(ca.pixelFormat, memoryless, samples);
         usedFramebuffer |= t == framebuffer_;
         pass.colorAttachments[c].texture = t;
         const bool loose = memoryless || ca.pixelFormat == kRGB8_444_2P || extendedRange(ca.pixelFormat);
@@ -163,9 +169,9 @@ MTLRenderPassDescriptor *Probe::pass(MTLRenderPipelineDescriptor *d)
         pass.colorAttachments[c].storeAction = loose ? MTLStoreActionDontCare : MTLStoreActionStore;
     }
     if (depthStencil && d.depthAttachmentPixelFormat != MTLPixelFormatInvalid)
-        pass.depthAttachment.texture = target(d.depthAttachmentPixelFormat, true);
+        pass.depthAttachment.texture = target(d.depthAttachmentPixelFormat, true, samples);
     if (d.stencilAttachmentPixelFormat != MTLPixelFormatInvalid)
-        pass.stencilAttachment.texture = target(d.stencilAttachmentPixelFormat, true);
+        pass.stencilAttachment.texture = target(d.stencilAttachmentPixelFormat, true, samples);
     return pass;
 }
 

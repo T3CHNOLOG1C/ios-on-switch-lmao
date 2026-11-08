@@ -256,8 +256,10 @@ int main(int argc, char **argv)
             fb = [dev newTextureWithDescriptor:td iosurface:fbSurface plane:0];
         }
         NSMutableDictionary<NSString *, id<MTLTexture>> *targets = [NSMutableDictionary dictionary];
-        auto target = [&](MTLPixelFormat f, bool memoryless) -> id<MTLTexture> {
-            NSString *k = [NSString stringWithFormat:@"%lu.%d", (unsigned long)f, memoryless];
+        // (samples > 1: a memoryless multisampled target, as a multisampled state renders only into one of its count)
+        auto target = [&](MTLPixelFormat f, bool memoryless, NSUInteger samples = 1) -> id<MTLTexture> {
+            NSString *k =
+                [NSString stringWithFormat:@"%lu.%d.%lu", (unsigned long)f, memoryless, (unsigned long)samples];
             if (!targets[k] && f == kRGB8_444_2P) {
                 targets[k] = planarTarget(dev, 64, 64);
                 return targets[k];
@@ -269,6 +271,10 @@ int main(int argc, char **argv)
                                                                                           mipmapped:NO];
                 td.usage = MTLTextureUsageRenderTarget | (memoryless ? 0 : MTLTextureUsageShaderRead);
                 td.storageMode = memoryless ? MTLStorageModeMemoryless : MTLStorageModePrivate;
+                if (samples > 1) {
+                    td.textureType = MTLTextureType2DMultisample;
+                    td.sampleCount = samples;
+                }
                 id<MTLTexture> t = [dev newTextureWithDescriptor:td];
                 if (!t && memoryless) {
                     td.storageMode = MTLStorageModePrivate;
@@ -591,15 +597,16 @@ int main(int argc, char **argv)
             // dispatches (metal2vulkan linear_attachment.rs): such a state draws into private colors, which NVK renders in place
             const bool depthStencil = s.d.depthAttachmentPixelFormat != MTLPixelFormatInvalid ||
                                       s.d.stencilAttachmentPixelFormat != MTLPixelFormatInvalid;
-            bool usedFb = depthStencil;
+            const NSUInteger samples = std::max<NSUInteger>(s.d.rasterSampleCount, 1);
+            bool usedFb = depthStencil || samples > 1;
             for (NSUInteger c = 0; c < 8; c++) {
                 MTLRenderPipelineColorAttachmentDescriptor *ca = s.d.colorAttachments[c];
                 if (ca.pixelFormat == MTLPixelFormatInvalid)
                     continue;
-                const bool memoryless = ca.writeMask == 0;
+                const bool memoryless = ca.writeMask == 0 || samples > 1;
                 id<MTLTexture> t = (!memoryless && !usedFb && ca.pixelFormat == MTLPixelFormatBGRA8Unorm)
                                        ? fb
-                                       : target(ca.pixelFormat, memoryless);
+                                       : target(ca.pixelFormat, memoryless, samples);
                 usedFb |= t == fb;
                 pass.colorAttachments[c].texture = t;
                 // a 542 snapshot renders into the frontend's RGBA16Float stand-in, which a load or store would draw from or
@@ -612,9 +619,9 @@ int main(int argc, char **argv)
             // a state with depth or stencil formats draws into a memoryless attachment of them (Metal's default Clear load and
             // DontCare store, its default depth/stencil state), so its registers are those NVK writes beside one
             if (depthStencil && s.d.depthAttachmentPixelFormat != MTLPixelFormatInvalid)
-                pass.depthAttachment.texture = target(s.d.depthAttachmentPixelFormat, true);
+                pass.depthAttachment.texture = target(s.d.depthAttachmentPixelFormat, true, samples);
             if (s.d.stencilAttachmentPixelFormat != MTLPixelFormatInvalid)
-                pass.stencilAttachment.texture = target(s.d.stencilAttachmentPixelFormat, true);
+                pass.stencilAttachment.texture = target(s.d.stencilAttachmentPixelFormat, true, samples);
             id<MTLCommandBuffer> cb = [queue commandBuffer];
             id<MTLRenderCommandEncoder> enc = [cb renderCommandEncoderWithDescriptor:pass];
             [enc setRenderPipelineState:state];
