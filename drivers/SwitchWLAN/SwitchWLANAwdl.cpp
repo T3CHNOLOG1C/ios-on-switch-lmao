@@ -124,6 +124,17 @@ void refuseOnce(const char *reason)
     IOLog("SwitchWLAN: AWDL: refused for %s: %s\n", process, reason);
 }
 
+// The address our AWDL frames leave with: awdl0's, unless the radio sends them through actframe, which takes the
+// station's whatever awdl0 is (said once: peers then know us by the station's address).
+const uint8_t *airAddress()
+{
+    if (!gSoft || !gCaps || gCaps->can_inject)
+        return gMac;
+    if (memcmp(gMac, gCaps->self_mac, 6))
+        refuseOnce("awdl0's address stays on awdl0: actframe sends AWDL frames with the station's address");
+    return gCaps->self_mac;
+}
+
 uint64_t hostNs()
 {
     uint64_t ns = 0;
@@ -150,7 +161,9 @@ void armTimer(uint64_t tsf)
     uint64_t deadline = 0;
     uint64_t leeway = 0;
     nanoseconds_to_absolutetime(awdl_tsf_clock_host(&gClock, tsf), &deadline);
-    nanoseconds_to_absolutetime(50000, &leeway);
+    // AWDL accepts 3 ms of synchronisation error and a slot opens 2 ms in (awdl_internal.h AWDL_SLOT_GUARD_US): a
+    // millisecond of leeway lets the timer coalesce with others at no cost to either
+    nanoseconds_to_absolutetime(1000000, &leeway);
     thread_call_enter_delayed_with_leeway(gTimer, nullptr, deadline, leeway, THREAD_CALL_DELAY_LEEWAY);
 }
 
@@ -691,13 +704,8 @@ errno_t ifIoctl(ifnet_t ifp, unsigned long cmd, void *arg)
         const uint8_t *mac = reinterpret_cast<const uint8_t *>(ifr->ifr_addr.sa_data);
         if (!memcmp(mac, gMac, 6))
             return 0;
-        // The soft backend's frames leave with the station's address (actframe takes no other), so awdl0 keeps it;
-        // while AWDL runs on the firmware, its awdl_if and payload carry the address: changed only while off
-        if (gSoft) {
-            refuseOnce("awdl0's address is the station's: the soft backend's frames carry no other");
-            return EBUSY;
-        }
-        if (gCore && awdl_core_running(gCore)) {
+        // While AWDL runs on the firmware, its awdl_if and payload carry the address: changed only while off
+        if (!gSoft && gCore && awdl_core_running(gCore)) {
             refuseOnce("awdl0's address changes only while AWDL is off");
             return EBUSY;
         }
@@ -707,7 +715,7 @@ errno_t ifIoctl(ifnet_t ifp, unsigned long cmd, void *arg)
         IOLockLock(gLock);
         memcpy(gMac, mac, 6);
         if (gCore)
-            awdl_core_set_addr(gCore, mac);
+            awdl_core_set_addr(gCore, airAddress());
         if (gRxStarted)
             swlan_awdl_rx_filter(gMac, awdl_bssid, 0);
         IOLockUnlock(gLock);
@@ -1252,13 +1260,9 @@ extern "C" int switch_wlan_awdl_vif_create(void *payload, size_t length)
         gUnit = r->unit < 8 ? r->unit : 0;
         snprintf(gName, sizeof gName, "awdl%u", gUnit);
         static const uint8_t zero[6] = {};
-        if (memcmp(r->mac, zero, 6) && gSoft && memcmp(r->mac, gMac, 6)) {
-            refuseOnce("awdl0 takes the station's address, not the one asked for: the soft backend's frames carry no "
-                       "other");
-        } else if (memcmp(r->mac, zero, 6)) {
+        if (memcmp(r->mac, zero, 6))
             memcpy(gMac, r->mac, 6);
-        }
-        awdl_core_set_addr(gCore, gMac);
+        awdl_core_set_addr(gCore, airAddress());
         uint8_t caps[12] = {0x4c, 0x46, 0x0a, 0, 0x01};  // en0's bitmap (SwitchWLANNet kCardCaps) plus bit 32
         const a80211_awdl_ops ops = {nullptr, opStart, opStop, opPost, opLog};
         a80211_awdl_init(&gFacade, gCore, &ops, gName, "en0", caps);

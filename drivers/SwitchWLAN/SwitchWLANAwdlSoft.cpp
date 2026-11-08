@@ -306,8 +306,8 @@ extern "C" int swlan_awdl_rx_start(swlan_rx_fn fn, void *ctx)
         return -ENXIO;
     __atomic_store_n(&gRxCtx, ctx, __ATOMIC_RELEASE);
     __atomic_store_n(&gRxFn, fn, __ATOMIC_RELEASE);
-    if (gTrial >= 2 && !gMonitorOn)
-        enqueue(kMonitorOn, nullptr);
+    if (gTrial >= 2)
+        enqueue(kMonitorOn, nullptr);  // again after a chip recovery, which took the firmware's monitor mode with it
     return 0;
 }
 
