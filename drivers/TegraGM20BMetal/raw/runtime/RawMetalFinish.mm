@@ -20,13 +20,11 @@ void forEachWritten(RMCommandBuffer *cb, size_t from, size_t to, void (*written)
     for (size_t at = from; at < to; at++) {
         const Cmd &c = cb->_tape[at];
         switch (c.op) {
-        case OpRender: {
-            MTLRenderPassDescriptor *pass = (__bridge MTLRenderPassDescriptor *)c.obj;
-            for (unsigned j = 0; j < 8; j++)
-                if (id<MTLTexture> t = pass.colorAttachments[j].texture)
-                    written((__bridge void *)t);
+        case OpRender:
+            for (const RMPass::Color &a : cb->_passes[c.x].color)
+                if (a.texture)
+                    written((__bridge void *)a.texture);
             break;
-        }
         case OpCompute:
             compute = true;
             break;
@@ -148,8 +146,7 @@ void finish(RMCommandBuffer *cb, NSError *error)
             cb->_scheduledDone = true;
         }
         cb->_changed.notify_all();
-        cb->_owners.clear();  // the resources may die now: no submission uses them any more
-        cb->_owners.shrink_to_fit();
+        cb->_owners.clear();  // the resources may die now: no submission uses them any more (its capacity is recycled)
         if (gRM->committed.fetch_sub(1, std::memory_order_acq_rel) == 1)
             gRawRelease.drained();
 #if SWITCH_FRAME_TIMELINE

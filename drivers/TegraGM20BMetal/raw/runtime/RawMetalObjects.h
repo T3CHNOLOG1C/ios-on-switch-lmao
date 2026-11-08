@@ -209,6 +209,25 @@ inline Cmd cmd(Op op, uint8_t stage = 0, uint16_t index = 0)
 }
 @end
 
+// What the raw encode reads of a render pass, taken from the descriptor's copy as its encoder is made (the copy itself is what
+// m2v's replay encodes): no Metal getter, no attachment object Metal makes on a first read, per encode. Objects unretained: the
+// command buffer's owners hold them.
+struct RMPass {
+    struct Color {
+        __unsafe_unretained id texture;
+        NSUInteger level;
+        MTLLoadAction load;
+        MTLStoreAction store;
+        MTLClearColor clear;
+    } color[8];
+
+    __unsafe_unretained id depth;
+    MTLLoadAction depthLoad, stencilLoad;
+    double clearDepth;
+    uint32_t clearStencil;
+    NSUInteger width, height;
+};
+
 // A part of a command buffer submitted on its own (RMCommandBuffer::_segs): tape [from, to), on the raw path or m2v
 struct RMSegment {
     uint32_t from, to;
@@ -234,6 +253,7 @@ struct RMSegment {
         _sampledShadows;  // it binds a texture sampled through a pool image (raw::Texture::sampled): encodeRaw refreshes them
     bool _standIns;  // it binds an extended-range texture (raw::Texture::standIn): encodeRaw draws its stand-in
     std::vector<Cmd> _tape;
+    std::vector<RMPass> _passes;  // OpRender's (Cmd::x)
     std::vector<uint8_t> _bytes;
     std::vector<uint64_t> _extra;
     std::vector<id> _owners;  // everything the tape names, retained until completion
@@ -303,6 +323,7 @@ static inline void hit(RMCommandBuffer *cb, RMPred p, uint64_t a = 0, uint64_t b
     uint32_t _formats[8];  // the pass's color attachments' formats as the raw path holds them (0: none)
     uint32_t _count;       // its attachment count (the last attachment's index + 1)
     uint32_t _zeta;        // its depth/stencil attachment's format as the raw path holds it (0: none)
+    uint32_t _passAt;      // its pass's RMPass (the command buffer's _passes)
     raw::DepthStencilDesc _ds;
     MTLRenderPassDescriptor *_pass;  // the command buffer's copy, which the raw encode and m2v's replay read
 }

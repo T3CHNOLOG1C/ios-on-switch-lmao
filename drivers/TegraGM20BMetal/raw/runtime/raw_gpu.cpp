@@ -231,32 +231,42 @@ uint8_t *Device::alloc(Ring &r, uint32_t bytes, uint32_t align, uint64_t &va)
     uint64_t at = (r.head + align - 1) & ~uint64_t(align - 1);
     if (at + bytes > r.bo.bytes)
         at = 0;  // wrap: the tail [head, end) counts as used by the open command buffer
-    if (overflowing_ || (ownWords(r, at, bytes) && !outgrow(r, bytes, at))) {
+    // Below Ring::clear no span is in flight, the open command buffer's own included: no look at them there
+    if (overflowing_ || ((at < r.head || at + bytes > r.clear) && ownWords(r, at, bytes) && !outgrow(r, bytes, at))) {
         overflowing_ = true;  // no larger ring: the command buffer is written to nowhere, and its commit refused
         if (overflow_.size() < bytes)
             overflow_.resize(bytes);
         va = 0;
         return overflow_.data();
     }
-    // [at, at + bytes) may still be read by an earlier submission: retire what the GPU finished (the fence page, no call) and
-    // block in the kernel (WaitFence: the fence interrupt) for what overlaps. Sized so a Core Animation frame never waits.
-    for (auto it = r.inflight.begin(); it != r.inflight.end();) {
-        if (it->seqno && done(it->seqno)) {
-            it = r.inflight.erase(it);
-            continue;
+    if (at < r.head || at + bytes > r.clear) {
+        // [at, at + bytes) may still be read by an earlier submission: retire what the GPU finished (the fence page, no call)
+        // and block in the kernel (WaitFence: the fence interrupt) for what overlaps. Sized so a Core Animation frame never
+        // waits.
+        for (auto it = r.inflight.begin(); it != r.inflight.end();) {
+            if (it->seqno && done(it->seqno)) {
+                it = r.inflight.erase(it);
+                continue;
+            }
+            if (it->begin < at + bytes && at < it->end && it->seqno) {
+                stats.ringWaits++;
+                r.waited = true;
+                wait(it->seqno);
+                it = r.inflight.erase(it);
+                continue;
+            }
+            ++it;
         }
-        if (it->begin < at + bytes && at < it->end && it->seqno) {
-            stats.ringWaits++;
-            r.waited = true;
-            wait(it->seqno);
-            it = r.inflight.erase(it);
-            continue;
+        if (at < r.head && r.since < r.head) {  // wrapped inside one command buffer: keep the part before the wrap
+            r.inflight.push_back({r.since, r.bo.bytes, 0});
+            r.since = 0;
         }
-        ++it;
-    }
-    if (at < r.head && r.since < r.head) {  // wrapped inside one command buffer: keep the part before the wrap
-        r.inflight.push_back({r.since, r.bo.bytes, 0});
-        r.since = 0;
+        // spans are added behind head only (retire, the wrap above), so the nearest one ahead bounds every allocation until
+        // the next wrap
+        r.clear = r.bo.bytes;
+        for (const Ring::Span &s : r.inflight)
+            if (s.begin >= at + bytes)
+                r.clear = std::min(r.clear, s.begin);
     }
     r.head = at + bytes;
     va = r.bo.va + at;
@@ -284,7 +294,7 @@ bool Device::outgrow(Ring &r, uint32_t bytes, uint64_t &at)
     stats.ringsOutgrown++;
     r.outgrown.push_back(r.bo);
     r.bo = larger;
-    r.head = r.since = 0;
+    r.head = r.since = r.clear = 0;
     r.inflight.clear();
     at = 0;
     return true;
@@ -295,6 +305,8 @@ void Device::retire(Ring &r, uint32_t seqno)
     for (const Bo &b : r.outgrown)
         grownOut_.push_back({b, seqno});
     r.outgrown.clear();
+    while (!r.inflight.empty() && r.inflight.front().seqno && done(r.inflight.front().seqno))
+        r.inflight.pop_front();
     for (auto &s : r.inflight)
         if (!s.seqno)
             s.seqno = seqno;
@@ -2166,7 +2178,7 @@ void Device::growRing(Ring &r, uint64_t most)
         return;
     grownOut_.push_back({r.bo, lastSeqno_});
     r.bo = larger;
-    r.head = r.since = 0;
+    r.head = r.since = r.clear = 0;
     r.inflight.clear();
 }
 
