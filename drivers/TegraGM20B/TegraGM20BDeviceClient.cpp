@@ -124,6 +124,7 @@ IOReturn TegraGM20BDeviceUserClient::externalMethod(uint32_t selector,
 	}
 }
 
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static): an IOTrap is an IOService member function
 IOReturn TegraGM20BDeviceUserClient::setDisplayParams(void *nextVblank, void *interval, void *,
 						      void *, void *, void *)
 {
@@ -131,6 +132,7 @@ IOReturn TegraGM20BDeviceUserClient::setDisplayParams(void *nextVblank, void *in
 	return kIOReturnSuccess;
 }
 
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static): an IOTrap is an IOService member function
 IOReturn TegraGM20BDeviceUserClient::refuseTrap(void *, void *, void *, void *, void *, void *)
 {
 	return kIOReturnUnsupported;
