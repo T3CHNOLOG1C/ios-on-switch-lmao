@@ -44,6 +44,7 @@ py_library(
         "to_card.py",
     ],
     imports = ["../.."],
+    deps = ["//tools/common:hashing"],
 )
 
 py_binary(
@@ -85,6 +86,7 @@ py_binary(
 py_binary(
     name = "artifacts",
     srcs = ["artifacts.py"],
+    deps = ["//tools/common:hashing"],
 )
 
 py_binary(

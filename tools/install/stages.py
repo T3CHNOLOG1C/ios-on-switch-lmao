@@ -10,6 +10,7 @@ import os
 import shutil
 from pathlib import Path
 
+from tools.common import hashing
 from tools.install import (
     card as cards,
     compose,
@@ -93,7 +94,7 @@ def key_inputs(args: argparse.Namespace, spec: dict, pins: dict) -> dict:
             'seed': keys.tree_digest(getattr(args, 'shader_seed', None)),
             'pretranslated_pins': keys.tree_digest(getattr(args, 'pretranslated_pins', None)),
             # A delta is its manifest (each replacement's sha256), a translated cryptex its sha256 (both Bazel's).
-            'deltas': {r: keys.file_digest(Path(d) / f'{r}.manifest.json') for r, d in deltas.items() if d},
+            'deltas': {r: hashing.sha256_file(Path(d) / f'{r}.manifest.json') for r, d in deltas.items() if d},
             'translated': [Path(t + '.sha256').read_text().strip() if t else None for t in translated],
         },
     }
@@ -283,5 +284,5 @@ def boot_record(args: argparse.Namespace) -> dict[str, str | None]:
     trust = Path(args.gpu_base) / 'TegraGM20BMetal.trustcache'
     return {
         'overlay': cards.tree_digest(package / 'overlay'),
-        'gpu_trustcache': cards.sha256_file(trust) if trust.is_file() else None,
+        'gpu_trustcache': hashing.sha256_file(trust) if trust.is_file() else None,
     }

@@ -27,23 +27,16 @@ from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import NamedTuple
 
+from tools.common import hashing
 from tools.trustcache.trustcache import trust_module
 
 CACHE_DIR = 'System/Library/Caches/com.apple.dyld'
 MACHO_MAGIC = (b'\xcf\xfa\xed\xfe', b'\xca\xfe\xba\xbe', b'\xca\xfe\xba\xbf')  # thin 64, fat BE, fat64 BE
 
 
-def sha256(path: Path) -> str:
-    h = hashlib.sha256()
-    with open(path, 'rb') as f:
-        for chunk in iter(lambda: f.read(1 << 20), b''):
-            h.update(chunk)
-    return h.hexdigest()
-
-
 def key_sha256(path: Path) -> str | None:
     try:
-        return sha256(path)
+        return hashing.sha256_file(path)
     except OSError:
         return None
 
@@ -141,7 +134,7 @@ class Memo(NamedTuple):
             if sha_out is None:
                 dst.unlink(missing_ok=True)
                 return kept
-            if data.is_file() and sha256(data) == sha_out:
+            if data.is_file() and hashing.sha256_file(data) == sha_out:
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(data, dst)
                 return kept
@@ -150,7 +143,7 @@ class Memo(NamedTuple):
         sha_out = None
         if dst.is_file():
             shutil.copyfile(dst, data)
-            sha_out = sha256(data)
+            sha_out = hashing.sha256_file(data)
         partial = record.with_suffix('.partial')
         partial.write_text(json.dumps(dict(result, _sha_out=sha_out)))
         os.replace(partial, record)
@@ -229,7 +222,7 @@ def main() -> None:
     def translate(src: Path) -> tuple[Path, Path, str, dict]:
         rel = src.relative_to(args.volume)
         dst = out / 'files' / rel
-        in_sha = sha256(src)
+        in_sha = hashing.sha256_file(src)
         record = work / (str(rel).replace('/', '_') + '.json')
         if memo:
             r = memo.run(
@@ -251,7 +244,7 @@ def main() -> None:
                 'path': '/' + str(rel),
                 'file': os.path.relpath(dst, out),
                 'sha256_in': in_sha,
-                'sha256_out': sha256(dst),
+                'sha256_out': hashing.sha256_file(dst),
                 'cdhash': [s['cdhash_out'] for s in translated],
             }
         )
@@ -304,31 +297,33 @@ def _translate_cache(
     names = ['dyld_shared_cache_arm64e'] + [f'dyld_shared_cache_arm64e{s}' for s in suffixes]
     sources = [cache / n for n in names if not n.endswith(('.symbols', '.atlas')) and (cache / n).exists()]
 
-    def apply(src: Path) -> tuple[Path, Path, str]:
+    def apply(src: Path) -> tuple[Path, Path, str, str, str]:
         dst = out / 'files' / CACHE_DIR / src.name
         dst.parent.mkdir(parents=True, exist_ok=True)
+        sha_in = hashing.sha256_file(src)
 
         def run() -> dict:
             line = run_tool(args.tool, 'dsc-apply', '-c', str(pairs_file), str(plan), str(src), str(dst))
             return {'cdhash': line.split()[0]}
 
         if memo:
-            parts = ['dsc', key_sha256(src), key_sha256(plan), key_sha256(pairs_file), version]
-            return src, dst, memo.run(parts, dst, run)['cdhash']
-        return src, dst, run()['cdhash']
+            cdhash = memo.run(['dsc', sha_in, key_sha256(plan), key_sha256(pairs_file), version], dst, run)['cdhash']
+        else:
+            cdhash = run()['cdhash']
+        return src, dst, cdhash, sha_in, hashing.sha256_file(dst)
 
     cdhashes = []
-    for src, dst, cdhash in _in_order(args, apply, sources, 'dyld cache files'):
+    for src, dst, cdhash, sha_in, sha_out in _in_order(args, apply, sources, 'dyld cache files'):
         cdhashes.append(bytes.fromhex(cdhash))
-        if sha256(dst) == sha256(src):
+        if sha_out == sha_in:
             dst.unlink()
             continue
         manifest['files'].append(
             {
                 'path': '/' + str(dst.relative_to(out / 'files')),
                 'file': os.path.relpath(dst, out),
-                'sha256_in': sha256(src),
-                'sha256_out': sha256(dst),
+                'sha256_in': sha_in,
+                'sha256_out': sha_out,
                 'cdhash': [cdhash],
             }
         )

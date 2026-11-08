@@ -17,7 +17,8 @@ import stat
 from collections.abc import Callable
 from pathlib import Path
 
-from tools.install import card as cards, delta, host, overlay_index, owners as ownership, progress, renamed
+from tools.common import hashing
+from tools.install import delta, host, overlay_index, owners as ownership, progress, renamed
 
 OVERLAY = renamed.DATA_FOLDER + '/pretranslated'
 OVERLAY_MANIFEST = OVERLAY + '.json'
@@ -41,7 +42,7 @@ def _place(root: Path, e: dict, original: os.stat_result) -> Path:
     partial = target.with_name('.partial-' + target.name)
     shutil.copyfile(e['source'], partial)
     progress.advance(partial.stat().st_size)
-    if cards.sha256_file(partial, progress.advance) != e['sha256_out']:
+    if hashing.sha256_file(partial, progress.advance) != e['sha256_out']:
         partial.unlink()
         raise host.HostError(f'{e["path"]}: the translated file does not match its manifest')
     os.replace(partial, target)
@@ -88,7 +89,9 @@ class Deltas:
         """
         kept = {p.name: p for p in self.artifacts()}
         wrong = [
-            name for name, digest in sorted(pins.items()) if name not in kept or cards.sha256_file(kept[name]) != digest
+            name
+            for name, digest in sorted(pins.items())
+            if name not in kept or hashing.sha256_file(kept[name]) != digest
         ]
         if wrong:
             raise host.HostError(

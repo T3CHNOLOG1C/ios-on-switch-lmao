@@ -51,4 +51,5 @@ py_binary(
 py_binary(
     name = "stage_manifest",
     srcs = ["stage_manifest.py"],
+    deps = ["//tools/common:hashing"],
 )

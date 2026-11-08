@@ -16,6 +16,7 @@ import os
 import shutil
 from pathlib import Path
 
+from tools.common import hashing
 from tools.install import card as cards, host, manifest, progress, renamed
 
 SII_DIR = cards.BOOT_ENTRY
@@ -188,7 +189,7 @@ def shared_plan(out: Path, fat_root: Path) -> list[str]:
     differ = []
     for relative in SHARED:
         source, target = Path(out) / relative, Path(fat_root) / relative
-        if source.is_file() and not (target.is_file() and cards.sha256_file(target) == cards.sha256_file(source)):
+        if source.is_file() and not (target.is_file() and hashing.sha256_file(target) == hashing.sha256_file(source)):
             differ.append(relative)
     return differ
 

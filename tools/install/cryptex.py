@@ -20,7 +20,8 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
-from tools.install import apfs, apfs_tree, card as cards, compose, delta, disks, host, owners, progress, room
+from tools.common import hashing
+from tools.install import apfs, apfs_tree, compose, delta, disks, host, owners, progress, room
 
 SEALER = '/System/Library/Filesystems/apfs.fs/Contents/Resources/apfs_prepare_cryptex'
 # The sealer writes every node of the tree again, hashed, before the old ones are freed, and adds file-info records
@@ -97,7 +98,7 @@ def _place(plan: Plan, source: Path, target: Path, what: str) -> None:
             e = plan.replacements[info.st_ino]
             shutil.copyfile(e['source'], at)
             progress.advance(os.path.getsize(at))
-            if cards.sha256_file(at, progress.advance) != e['sha256_out']:
+            if hashing.sha256_file(at, progress.advance) != e['sha256_out']:
                 raise delta.DeltaError(f'{e["path"]} does not hold the translated bytes after the write')
             os.utime(at, ns=(info.st_atime_ns, info.st_mtime_ns), follow_symlinks=False)
             placed[info.st_ino] = at
