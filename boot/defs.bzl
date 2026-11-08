@@ -8,7 +8,7 @@ only the steps it reaches:
     overlay.py trust (plan, Mach-Os) ........ overlay.trustcache
     trust.py         (IPSW, overlay, GPU, iOS 27 pretranslated) ... trustcache.bundle, all in one static module
     build_native_loader.py layout (kernel, ADT, bundle, seed, boot-args)
-                                         ...... plan.json, the window's 1 MiB LZ4 blocks in 96 shards (by the MiB
+                                         ...... plan.json, the window's 1 MiB LZ4 blocks in 128 shards (by the MiB
                                                 each starts in)
     lz4 -12, one action per shard ........... each shard's blocks compressed and checked (an unchanged shard is a
                                                cache hit: a driver edit recompresses the native kernel's few blocks,
@@ -87,10 +87,11 @@ def _run(ctx, tool, arguments, inputs, outputs, mnemonic, message):
     )
 
 # The kernel window's shards (tools/package/loader_abi.py WINDOW_SHARDS: the MiB of the window a block starts in).
-_WINDOW_SHARDS = 96
+_WINDOW_SHARDS = 128
 
-def _two_digits(i):
-    return ("0" + str(i))[-2:]
+# A shard's directory: its MiB, at least two digits (build_native_loader.py shard_of).
+def _shard_name(i):
+    return str(i) if i >= 10 else "0" + str(i)
 
 # One shard: lz4 -12 over each of its blocks (none, one, or a few small ones), each checked by decoding it again.
 _COMPRESS_SHARD = """set -e
@@ -263,7 +264,7 @@ def _boot_package_impl(ctx):
     # Layout and checks, then each shard of the window's LZ4 blocks compressed on its own (only the shards an edit
     # changed rerun), then the staged window and the loader's headers.
     window_plan = out("window/plan.json")
-    shards = [ctx.actions.declare_directory(name + "_work/window/blocks/" + _two_digits(i)) for i in range(_WINDOW_SHARDS)]
+    shards = [ctx.actions.declare_directory(name + "_work/window/blocks/" + _shard_name(i)) for i in range(_WINDOW_SHARDS)]
     args = ctx.actions.args()
     args.add("layout")
     args.add("--kernel", kernel)
@@ -282,7 +283,7 @@ def _boot_package_impl(ctx):
 
     compressed = []
     for i, shard in enumerate(shards):
-        lz4 = ctx.actions.declare_directory(name + "_work/window/lz4/" + _two_digits(i))
+        lz4 = ctx.actions.declare_directory(name + "_work/window/lz4/" + _shard_name(i))
         ctx.actions.run_shell(
             command = _COMPRESS_SHARD,
             arguments = [ctx.file.lz4.path, shard.path, lz4.path],

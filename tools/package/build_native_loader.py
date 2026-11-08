@@ -64,6 +64,7 @@ from loader_abi import (
     STAMPS_PROPERTY,
     VIDEO,
     WINDOW_BASE,
+    WINDOW_BYTES_MAX,
     WINDOW_SHARD_BYTES,
     WINDOW_SHARDS,
     WINDOW_SIZE,
@@ -71,8 +72,6 @@ from loader_abi import (
 )
 from native_oled_adt import root_matching
 from native_xnu_layout import LayoutRequest, build_layout, parse_adt, validate_data_seed, validate_trustcache
-
-LIMIT = 128 << 20
 
 
 def pack_window(payload: bytes) -> tuple[list[tuple[int, int]], bytes]:
@@ -303,7 +302,7 @@ def _check_layout(m: dict, payload: bytes) -> None:
         and hashlib.sha256(payload).hexdigest() == m['image']['sha256'],
         'layout image identity mismatch',
     )
-    _require(0 < len(payload) <= LIMIT and not len(payload) % 8, 'image exceeds aligned bounded staging region')
+    _require(0 < len(payload) <= WINDOW_BYTES_MAX and not len(payload) % 8, 'image exceeds the bounded window')
     _require(m['phys_base'] == WINDOW_BASE and m['owned_window_size'] == WINDOW_SIZE, 'not the root-boot window')
     _require(m['kernel_phys_base'] == KERNEL_PHYS_BASE, 'the kernel is not at boot_layout.h SWITCH_KERNEL_PHYS_BASE')
     for key in (
@@ -440,7 +439,7 @@ def _check_native_profile(m: dict, payload: bytes, pins: KindPins) -> None:
         'native experiment requires the exact reviewed exclusion ledger',
     )
     _require(
-        len(payload) <= 0x6000000 and m['video'] == VIDEO,
+        len(payload) <= WINDOW_BYTES_MAX and m['video'] == VIDEO,
         f'native staging or display contract mismatch (window {len(payload):#x} bytes)',
     )
     _require(not len(payload) % 0x1000, 'native cacheable copy requires a page-aligned payload')
@@ -687,7 +686,7 @@ def layout(args: argparse.Namespace) -> None:
     runs, _ = pack_window(payload)
     blocks = lz4_blocks(runs)
     shards = sorted(p.name for p in args.blocks.iterdir())
-    if shards != [f'{i:02d}' for i in range(WINDOW_SHARDS)]:
+    if shards != sorted(shard_of(i * WINDOW_SHARD_BYTES) for i in range(WINDOW_SHARDS)):
         raise SystemExit(f'{args.blocks}: not the {WINDOW_SHARDS} shard directories (boot/defs.bzl _WINDOW_SHARDS)')
     for at, length in blocks:
         (args.blocks / shard_of(at) / block_name(at)).write_bytes(payload[at : at + length])

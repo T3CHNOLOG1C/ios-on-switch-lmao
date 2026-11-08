@@ -60,7 +60,7 @@ enum {
 
 _Static_assert((LOAD_BYTES & 7) == 0, "copy requires complete aligned words");
 _Static_assert((LOAD_SOURCE & 7) == 0 && (LOAD_DEST & 7) == 0, "unaligned copy");
-_Static_assert(LOAD_BYTES > 0 && LOAD_BYTES <= 0x8000000, "bounded payload");
+_Static_assert(LOAD_BYTES > 0 && LOAD_BYTES <= LOADER_WINDOW_BYTES_MAX, "bounded payload");
 _Static_assert(LOAD_SOURCE + LOAD_BYTES <= LOAD_DEST || LOAD_DEST + LOAD_BYTES <= LOAD_SOURCE,
                "copy source and destination overlap");
 _Static_assert(LOAD_ARGS >= LOAD_DEST && LOAD_ARGS + 0x480 <= LOAD_DEST + LOAD_BYTES, "arguments outside payload");
