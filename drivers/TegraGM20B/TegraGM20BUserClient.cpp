@@ -31,6 +31,7 @@ using tgm_scan::PushCounts;
 using tgm_scan::PushParse;
 using tgm_scan::scanPush;
 #include "../TegraDisplayFlip/TegraScanoutCopy.h"
+#include "../../kits/SwitchDMA/SwitchDcache.h"
 
 namespace
 {
@@ -350,10 +351,7 @@ void cleanZeros(void *va, uint64_t bytes, bool zero)
 {
 	if (zero)
 		bzero(va, bytes);
-	for (uint64_t a = reinterpret_cast<uint64_t>(va) & ~63ULL;
-	     a < reinterpret_cast<uint64_t>(va) + bytes; a += 64)
-		__asm__ volatile("dc civac, %0" ::"r"(a) : "memory");
-	__asm__ volatile("dsb sy" ::: "memory");
+	switch_dcache_clean_invalidate(va, bytes);
 }
 
 // The page list of a wired kernel buffer.

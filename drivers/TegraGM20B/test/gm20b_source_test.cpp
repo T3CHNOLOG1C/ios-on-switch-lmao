@@ -149,7 +149,7 @@ TEST(GM20BPoolPolicySource, SystemBosTakeAndReturnSpares)
 		     "p->ready[c] = s;");
 	const std::string zeros =
 		flat(definition(client(), "void cleanZeros(void *va, uint64_t bytes, bool zero)"));
-	expectBefore(zeros, "bzero(va, bytes);", "dc civac");
+	expectBefore(zeros, "bzero(va, bytes);", "switch_dcache_clean_invalidate(va, bytes);");
 	// A spare is only ever a BO's pages once no task maps them, nothing imports them (the view's release waits for
 	// every import's UPL) and the freeing connection's channels finished (reap).
 	const std::string orphans = flat(definition(client(), "void releaseOrphans()"));
