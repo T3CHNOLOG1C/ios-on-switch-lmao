@@ -246,6 +246,23 @@ static inline int tgm_owed_turn(int held_last, uint64_t since_close, uint64_t pr
 	return (held_last != 0 && since_close < preempt) ? 1 : 0;
 }
 
+/* How a channel preempt nvkm asks for goes out (sched.c): a PFIFO_PREEMPT written while another is in flight is lost.
+ * nvkm's error path asks from the interrupt pass with interrupts off under the channel's spinlock (nvkm_chan_error),
+ * where nothing may wait: with one in flight there the channel's group goes to nvkm's recovery, which takes it off the
+ * engines and the runlist from its work item. */
+enum tgm_preempt_how {
+	TGM_PREEMPT_NOW,
+	TGM_PREEMPT_AFTER_WAIT,
+	TGM_PREEMPT_RECOVER,
+};
+
+static inline enum tgm_preempt_how tgm_preempt_how(int irqs_off, int pending)
+{
+	if (pending == 0)
+		return TGM_PREEMPT_NOW;
+	return irqs_off != 0 ? TGM_PREEMPT_RECOVER : TGM_PREEMPT_AFTER_WAIT;
+}
+
 /* nvkm's recovery uses the same enable bits as the hold (nvkm_chan_error blocks a channel for good, nvkm_runl_rc_cgrp
  * puts its group in recovery): a channel errored, being isolated (gpu.c's client fault isolation) or in a group under
  * recovery is never held or released here. */

@@ -5541,6 +5541,7 @@ static void sleep_power_down(void)
 	int ret = 0;
 
 	nvxnu_irq_suspend();
+	tgm_recover_suspend();
 	drained = tegra_gm20b_mc_flush(1); /* nvgpu's railgate order: the client drained first */
 	clk_disable_unprepare(tdev->clk_pwr);
 	clk_disable_unprepare(tdev->clk_ref);
@@ -5874,6 +5875,7 @@ int tgm_rail_down(void)
 	if (tgm_sleep_plan(gpu.stage, gpu.device != NULL) != TGM_SLEEP_FULL)
 		return -EBUSY;
 	sleep_gate();
+	tgm_deadline_suspend();
 	sleep_fences();
 	mutex_lock(&gpu.lock);
 	sleep_idle_off();
@@ -5910,6 +5912,7 @@ static void rail_up_locked(const void *site)
 	 * tgm_railed(), SwitchSuspend's tgm_rail_sc7_hold), so its close can never land before this open and be undone. */
 	gate_open();
 	__atomic_store_n(&gpu.railed, 0, __ATOMIC_SEQ_CST);
+	tgm_deadline_resume();
 	if (site) {
 		if (!rail_ups.demand++)
 			rail_ups.first_site = site;

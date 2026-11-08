@@ -125,18 +125,29 @@ static int sched_update(struct nvkm_runl *runl)
 }
 
 /* nvkm writes PFIFO_PREEMPT and waits for its own preempt to finish; one written over a high kick's preempt still in
- * flight (tgm_sched_kicked does not wait for its own) is lost, and nvkm would take the channel for preempted. */
+ * flight (tgm_sched_kicked does not wait for its own) is lost, and nvkm would take the channel for preempted
+ * (tgm_preempt_how). */
 static void sched_chan_preempt(struct nvkm_chan *chan)
 {
 	struct nvkm_device *device = chan->cgrp->runl->fifo->engine.subdev.device;
+	int pending = (nvkm_rd32(device, PFIFO_PREEMPT) & PFIFO_PREEMPT_PENDING) != 0;
 
-	/* nouveau's nvkm_wait_msec computes in int and widens the timeout. */
-	/* NOLINTBEGIN(bugprone-signed-bitwise) */
-	/* NOLINTBEGIN(bugprone-implicit-widening-of-multiplication-result) */
-	nvkm_wait_msec(device, chan->cgrp->runl->fifo->timeout.chan_msec, PFIFO_PREEMPT,
-		       PFIFO_PREEMPT_PENDING, 0);
-	/* NOLINTEND(bugprone-implicit-widening-of-multiplication-result) */
-	/* NOLINTEND(bugprone-signed-bitwise) */
+	switch (tgm_preempt_how(irqs_disabled(), pending)) {
+	case TGM_PREEMPT_RECOVER:
+		nvkm_runl_rc_cgrp(chan->cgrp);
+		return;
+	case TGM_PREEMPT_AFTER_WAIT:
+		/* nouveau's nvkm_wait_msec computes in int and widens the timeout. */
+		/* NOLINTBEGIN(bugprone-signed-bitwise) */
+		/* NOLINTBEGIN(bugprone-implicit-widening-of-multiplication-result) */
+		nvkm_wait_msec(device, chan->cgrp->runl->fifo->timeout.chan_msec, PFIFO_PREEMPT,
+			       PFIFO_PREEMPT_PENDING, 0);
+		/* NOLINTEND(bugprone-implicit-widening-of-multiplication-result) */
+		/* NOLINTEND(bugprone-signed-bitwise) */
+		break;
+	case TGM_PREEMPT_NOW:
+		break;
+	}
 	orig_chan_preempt(chan);
 }
 

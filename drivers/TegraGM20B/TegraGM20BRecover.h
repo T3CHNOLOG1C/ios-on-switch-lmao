@@ -12,6 +12,8 @@ void tgm_recover_init(struct nvkm_device *device);
 /* PFIFO's engine context-switch timeout, after every FIFO init (bring-up and each wake): each period an engine's switch
  * stays pending raises SCHED_ERROR CTXSW_TIMEOUT. */
 void tgm_recover_arm(struct nvkm_device *device);
+/* Power-down, once the GPU's interrupts are off: no tick's work runs until the next one. */
+void tgm_recover_suspend(void);
 /* gpu.c, from a tick (thread context): 1 if hardware channel chid is stuck and now being killed (a kernel channel's
  * panics), or is not one of gpu.c's; 0 to wait for the next tick. */
 int tgm_ctxsw_stuck(int chid);

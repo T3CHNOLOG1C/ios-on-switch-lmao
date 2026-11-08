@@ -741,6 +741,21 @@ TEST(GM20BChannelSource, SeqnoCursorsStartAtTheSlotsFence)
 			<< cursor;
 }
 
+// nvkm_chan_error preempts from the interrupt pass with interrupts off under the channel's spinlock: the wrapped preempt
+// decides by tgm_preempt_how and waits for a preempt in flight only in thread context.
+TEST(GM20BSchedSource, ThePreemptWaitsOnlyWithInterruptsOn)
+{
+	const std::string preempt =
+		flat(definition(SourceText("../sched.c"),
+				"static void sched_chan_preempt(struct nvkm_chan *chan)"));
+	EXPECT_THAT(preempt, HasSubstr("switch (tgm_preempt_how(irqs_disabled(), pending)) {"));
+	expectBefore(preempt, "case TGM_PREEMPT_RECOVER: nvkm_runl_rc_cgrp(chan->cgrp); return;",
+		     "case TGM_PREEMPT_AFTER_WAIT:");
+	expectBefore(preempt, "case TGM_PREEMPT_AFTER_WAIT:", "nvkm_wait_msec(");
+	expectBefore(preempt, "nvkm_wait_msec(", "case TGM_PREEMPT_NOW:");
+	EXPECT_EQ(Count(preempt, "nvkm_wait_msec("), 1u);
+}
+
 // Linux's work items, as XNU thread calls: never two runs of one at once (THREAD_CALL_OPTIONS_ONCE), a flush runs one
 // still queued, and irqs_disabled() answers.
 TEST(GM20BShimSource, WorkItemsKeepLinuxSemantics)
@@ -758,4 +773,20 @@ TEST(GM20BShimSource, WorkItemsKeepLinuxSemantics)
 			      "(!nvxnu_work_cancel_wait(w->thread_call)) return false; w->func(w); "
 			      "return true; }"));
 	EXPECT_THAT(os, HasSubstr("#define irqs_disabled() (!nvxnu_irqs_enabled())"));
+}
+
+// Rail-down stops what reaches the GPU from callouts as system sleep does: the deadline's holds released while the GPU
+// is up and its callouts stopped before the fences drain, back at the rail-up; a context-switch tick's work stopped once
+// interrupts are off.
+TEST(GM20BRailSource, RailDownStopsTheGpuCallouts)
+{
+	const std::string down = flat(definition(gpu(), "int tgm_rail_down(void)"));
+	expectBefore(down, "sleep_gate();", "tgm_deadline_suspend();");
+	expectBefore(down, "tgm_deadline_suspend();", "sleep_fences();");
+	expectBefore(flat(definition(gpu(), "static void rail_up_locked(const void *site)")),
+		     "__atomic_store_n(&gpu.railed, 0, __ATOMIC_SEQ_CST);",
+		     "tgm_deadline_resume();");
+	const std::string power = flat(definition(gpu(), "static void sleep_power_down(void)"));
+	expectBefore(power, "nvxnu_irq_suspend();", "tgm_recover_suspend();");
+	expectBefore(power, "tgm_recover_suspend();", "regulator_disable(");
 }

@@ -333,6 +333,20 @@ TEST(Deadline, HeldTimeNeverCountsTowardAStall)
 	EXPECT_EQ(tgm_unheld_ns(900 * kMs, 1000 * kMs, 0, 0), 0u);  // progress after now was read
 }
 
+// nvkm_chan_error's preempt runs in the interrupt pass with interrupts off: with another preempt in flight it never waits
+// (up to the FIFO's 10 s channel timeout with interrupts masked), the channel's group goes to nvkm's recovery instead.
+TEST(Preempt, NothingInFlightGoesOutAtOnce)
+{
+	EXPECT_EQ(tgm_preempt_how(0, 0), TGM_PREEMPT_NOW);
+	EXPECT_EQ(tgm_preempt_how(1, 0), TGM_PREEMPT_NOW);
+}
+
+TEST(Preempt, OneInFlightIsWaitedForOnlyByAThread)
+{
+	EXPECT_EQ(tgm_preempt_how(0, 1), TGM_PREEMPT_AFTER_WAIT);
+	EXPECT_EQ(tgm_preempt_how(1, 1), TGM_PREEMPT_RECOVER);
+}
+
 constexpr uint64_t kTick = 250 * kMs;  // recover.c's CTXSW_TIMEOUT_US
 
 TEST(Stuck, ALongDrainOfTheOutgoingChannelIsWaitedOut)
