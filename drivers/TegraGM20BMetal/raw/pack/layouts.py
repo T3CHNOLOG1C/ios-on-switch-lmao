@@ -30,6 +30,26 @@ def tic_kind(tic: tuple[str, list[int]], rts: dict[str, int]) -> tuple[str, int 
     return ('tic?', f'{name}:{width}x{height}')
 
 
+# MTLPixelFormat R8Unorm_sRGB, RG8Unorm_sRGB, RGBA8Unorm_sRGB, BGRA8Unorm_sRGB: m2v fetches one through a conversion
+# table it binds itself (Core Animation's generic states on such a target)
+SRGB8_FORMATS = {11, 31, 71, 81}
+
+
+def srgb_target(key: str) -> bool:
+    return any(
+        f.startswith('c') and f[1].isdigit() and int(f.split('=', 1)[1].split(':', 1)[0]) in SRGB8_FORMATS
+        for f in key.split(' | ', 1)[0].split()
+        if '=' in f
+    )
+
+
+def pointer_problem(key: str, at: int, word: int) -> str:
+    """Give why a set-0 pointer that is no probe payload of this state's keeps it off the raw path."""
+    if srgb_target(key):
+        return f"a buffer of m2v's own at {at} beside an 8-bit sRGB target ({word:x})"
+    return f'untagged pointer at {at} ({word:x})'
+
+
 def tsc_kind(t: list[int]) -> tuple[str, int | str]:
     # probe.mm tags fragment sampler slot s with max LOD 1 + s/2 under a nearest mip filter, linear filters when s&1 and
     # a repeating U when s&2. m2v hands Vulkan the level a nearest mip filter reads at the bound (metal/sampler.rs
@@ -70,7 +90,7 @@ def layout(p: dict) -> tuple[list[tuple], list[str]]:
             if (pw[0] >> 16) == 0xC0DE and pw[1] == i:
                 entries.append((o * 4, 'ubo', STAGES[(pw[0] >> 8) & 0xFF], pw[0] & 0xFF, words[o + 2]))
             else:
-                problems.append(f'untagged pointer at {o * 4} ({pw[0]:x})')
+                problems.append(pointer_problem(p['key'], o * 4, pw[0]))
             o += 4
             continue
         w = words[o]

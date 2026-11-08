@@ -13,6 +13,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'raw', 'pack'))
+import probelog
 import rawpack
 
 TAIL = (
@@ -46,6 +47,14 @@ class SplitTest(unittest.TestCase):
     def test_dispatch_lines_reach_one_bucket(self):
         corpus = WARM + DISPATCH + ''.join(state(i) for i in range(32))
         self.assertEqual(sum(text.count(DISPATCH) for text in self.split(corpus)), 1)
+
+
+class ProbeLogTest(unittest.TestCase):
+    def test_an_empty_submission_is_no_probes(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            log = Path(scratch) / 'probe.log'
+            log.write_text('S regs 0\nSUBMIT 1\nSUBMIT 2\nDRAW 4\nSUBMIT 3\n')
+            self.assertEqual(probelog._submissions(str(log)), [['S regs 0', 'SUBMIT 1'], ['DRAW 4', 'SUBMIT 3']])
 
 
 if __name__ == '__main__':

@@ -201,6 +201,8 @@ struct Texture {
     // A 3D texture's (fx_image.h): its depth and its blocks' depth in planes, log2 (0 for one made 2D-view compatible)
     uint32_t depth = 1;
     uint8_t blockDepth = 0;
+    // An array's or a cube's layers (six a cube), layerBytes apart
+    uint32_t layers = 1;
 
     // Depth32Float_Stencil8 (raw_zeta.h): block-linear zeta memory, bound with its own PTE kind; never sampled, copied or a
     // colour target
@@ -252,7 +254,7 @@ struct Pipeline {
         uint8_t group, slot, entry;
     };
 
-    UboCbuf ubos[16] = {};
+    UboCbuf ubos[2 * (sizeof(PackProgram::cbufType) - 1)] = {};  // constant buffers 1.. of each program
     uint8_t uboCount = 0;
     bool ubosNamed = true;
     uint8_t writeBits = 0;  // colors its draws write: SET_CT_WRITE(i) with a channel on
@@ -642,6 +644,11 @@ public:
         return (k_.info().flags & TegraGM20BInfoPriority) != 0;
     }
 
+    const TegraGM20BAbiInfo &kernelInfo() const
+    {
+        return k_.info();
+    }
+
     // `writes`: the texture is rendered into or stored to. A surface the kernel decides block-linear (the first texture over
     // it writes it: TegraGM20BLayout.h) has block-linear textures only, at the decided shape (false: another one)
     bool createSurfaceTexture(uint64_t surfaceId, void *base, uint64_t allocBytes, const void *surface, uint64_t offset,
@@ -681,6 +688,9 @@ public:
     // A 3D texture of one level: NIL's 3D image (fx_image.h) under a THREE_D header. `view2d`: one plane a block, as m2v makes
     // a 3D render target (2D-array compatible), so its twin over the same memory reads the same texels
     bool createVolume(uint32_t width, uint32_t height, uint32_t depth, uint32_t format, bool view2d, Texture &t);
+    // A 2D array, cube or cube array of one level: NIL's image of `layers` layers (fx_image.h) under a header of `type`
+    // (fx::kTexTwoDArray, kTexCube, kTexCubeArray)
+    bool createArray(uint32_t width, uint32_t height, uint32_t layers, uint32_t format, uint32_t type, Texture &t);
     // A mipmapped 2D texture of `levels` levels: level 0 of its block-linear chain (Texture::chain), its header the chain's.
     // False: not one the raw path keeps (not a render target format, extended range, no memory).
     bool createMipTexture(uint32_t width, uint32_t height, uint32_t format, uint32_t levels, Texture &t);

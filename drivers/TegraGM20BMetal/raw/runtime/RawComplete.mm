@@ -39,8 +39,8 @@ Completion::~Completion()
 }
 
 // The state's key: the build, both functions' AIR (their entries' HASH tags in the metallibs m2v made them from) and the pack
-// key, which a state of no framework's library gets both AIR hashes appended to. False: a function the raw path cannot name the
-// AIR of (made from no metallib's bytes, or not one of them)
+// key, which a state of no framework's library gets both AIR hashes appended to, and a state linking functions each linked
+// one's. False: a function the raw path cannot name the AIR of (made from no metallib's bytes, or not one of them)
 bool Completion::keyOf(Ask &a, CacheKey &k)
 {
     auto air = [](id<MTLFunction> function, uint8_t (&out)[32]) {
@@ -58,6 +58,25 @@ bool Completion::keyOf(Ask &a, CacheKey &k)
     };
     if (!air(a.descriptor.vertexFunction, k.vertexAir) || !air(a.descriptor.fragmentFunction, k.fragmentAir))
         return false;
+    // Linked functions: IconRendering's effects each link their own function under one name (custom_fn), so the key takes
+    // each one's AIR
+    std::string linked;
+    const std::pair<char, MTLLinkedFunctions *> stages[] = {{'v', a.descriptor.vertexLinkedFunctions},
+                                                            {'f', a.descriptor.fragmentLinkedFunctions}};
+    for (const auto &[stage, l] : stages)
+        for (NSArray *functions : {l.functions, l.privateFunctions})
+            for (id<MTLFunction> f in functions) {
+                uint8_t hash[32];
+                uint64_t h = 0;
+                if (!air(f, hash))
+                    return false;
+                memcpy(&h, hash, sizeof h);
+                char word[24];
+                snprintf(word, sizeof word, " %c%016llx", stage, (unsigned long long)h);
+                linked += word;
+            }
+    if (!linked.empty())
+        a.key += " | linked" + linked;
     if (a.own) {
         char tail[48];
         uint64_t v, f;

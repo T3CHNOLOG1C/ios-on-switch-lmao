@@ -148,6 +148,19 @@ macos_command_line_application(
     deps = [":media_lib"],
 )
 
+# The raw pack corpus's Core Animation states, which gpu.ca.sweep draws on the raw facade and on m2v.
+genrule(
+    name = "ca_states",
+    srcs = ["//drivers/TegraGM20BMetal:precompile/corpus.log"],
+    outs = ["ca_states.log"],
+    cmd = "grep '^R ok=1 label=com.apple.coreanimation[.]' $< > $@",
+)
+
+apple_resource_group(
+    name = "ca_states_resources",
+    resources = [":ca_states"],
+)
+
 apple_resource_group(
     name = "media_resources",
     strip_structured_resources_prefixes = ["hw_test_app"],
@@ -191,7 +204,10 @@ swift_library(
         "tests/*.swift",
     ]),
     copts = SWIFT_COPTS,
-    data = [":media_resources"],
+    data = [
+        ":ca_states_resources",
+        ":media_resources",
+    ],
     module_name = "HWTestKit",
     target_compatible_with = ["@platforms//os:ios"],
     deps = [

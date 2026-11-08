@@ -2,9 +2,9 @@
 // Shader local memory for the raw channel: the threads' scratch and the call/return stack's spill, sized as NVK sizes it
 // (nvk_slm_area_ensure). NVK sets it from its queue's state at a submission, which neither the pack's context init (NVK's
 // queue creation) nor a captured command buffer carries, so the raw path sets it itself before a program that asks for it
-// runs. A GM20B pixel program whose header asks for local memory the channel was never given traps at its bind (device boot
-// 7: DS_HWW_ESR 0xa0000040, SPH6_ERR at M_PIPE_STAGE PS, on runtime-made records). A runtime-made record is the first raw
-// program to ask: no program or kernel of the pack does.
+// runs, for the pack's programs and kernels and runtime-made records alike. A GM20B pixel program whose header asks for local
+// memory the channel was never given traps at its bind (device boot 7: DS_HWW_ESR 0xa0000040, SPH6_ERR at M_PIPE_STAGE PS).
+// The methods are the runtime's (raw_owned.h): a probe's command buffers carry its own process's area.
 #pragma once
 #include <cstdint>
 #include <cstring>

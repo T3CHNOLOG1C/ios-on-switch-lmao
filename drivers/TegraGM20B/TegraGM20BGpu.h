@@ -246,14 +246,17 @@ void tgm_fence_kill_clear(volatile uint32_t *fence);
  * 2^TEGRA_SCANOUT_TILED_BLOCK_HEIGHT_LOG2 GOBs) to a block-linear destination (dst_pitch bytes across, blocks one
  * GOB wide and 2^block_height_log2 GOBs high, 8-line GOBs), after the work submitted so far by the channels whose address
  * spaces import the source (every user channel's when none does), and
- * returns at once: 0, or -EBUSY (one in flight), -EINVAL, -ENODEV. done(arg) runs exactly once for an accepted copy,
- * from the GPU interrupt pass, when its bytes are in DRAM; one not done in 1 s panics. */
+ * returns at once: 0, or -EBUSY (one in flight), -EINVAL, -ENODEV. done(arg, status) runs exactly once for an accepted
+ * copy, from the GPU interrupt pass, when its bytes are in DRAM: status 0, or TEGRA_SCANOUT_SOURCE_LOST when a writer it
+ * waited for was killed before that work ended. One not done in 1 s is the present's deadline's (gpu.c present_deadline).
+ * tgm_present_outstanding: whether the copy accepted with `arg` is not completed yet (its callback not returned). */
 int tgm_present_open(struct tgm_vm **pvm);
 int tgm_present_map(uint64_t va, struct tgm_mem *mem, uint64_t bytes, uint8_t kind);
 int tgm_present_unmap(uint64_t va, uint64_t bytes);
 int tgm_present_copy(uint64_t src_va, uint64_t src_pa, uint64_t stride, int src_block,
 		     uint32_t width, uint32_t height, uint64_t dst_va, uint32_t dst_pitch,
-		     uint32_t block_height_log2, void (*done)(void *), void *arg);
+		     uint32_t block_height_log2, void (*done)(void *, int), void *arg);
+int tgm_present_outstanding(const void *arg);
 /* Host import bookkeeping for the present: `pa` is the import's first page; add 1 when made, 0 when released. The
  * present waits only for address spaces that import its surface (src_pa, the surface's first page), when any does. */
 void tgm_vm_import_note(struct tgm_vm *vm, uint64_t pa, int add);

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 MAGIC = b'GM20BPK1'
 # 2: the header's stack key (rawpack.py --stack) after the section table; 3: barrier-form records; 4: programs' shader
 # data and constant buffer types; 6: compute kernels (runtime/raw_pack.h PackKernel)
-VERSION = 6
+VERSION = 7
 SECTIONS = 9  # runtime/raw_pack.h PackSectionCount
 KERNEL_ENTRIES = 16  # PackKernel.entry's length
 PROGRAM_CBUFS = 11  # PackProgram.cbufType's length (runtime/raw_pack.h)
@@ -18,7 +18,13 @@ def fnv(b: bytes, h: int = 0xCBF29CE484222325) -> int:
     return h
 
 
+# raw_pack.h kPackEntries: the set-0 entries a PackPipeline holds
+PACK_ENTRIES = 32
+
+
 def entry_bytes(entries: list[dict]) -> bytearray:
+    if len(entries) > PACK_ENTRIES:
+        raise ValueError(f'{len(entries)} set-0 entries: a pipeline holds {PACK_ENTRIES}')
     ents = bytearray()
     for e in entries:
         if e['kind'] == 'ubo':
@@ -34,12 +40,12 @@ def entry_bytes(entries: list[dict]) -> bytearray:
         else:
             tk = e['tex']
             sk = e['smp']
-            tkind = 0 if tk is None else (2 if tk[0] == 'slot' else 3)
+            tkind = 0 if tk is None else {'slot': 2, 'fetch': 3, 'tex3d': 4}[tk[0]]
             skind = 0 if sk is None else (1 if sk[0] == 'slot' else 2)
             ents += struct.pack(
                 '<HBBBBBB', e['off'], tkind, 2, 0 if tk is None else tk[1], skind, 0 if sk is None else sk[1], 0
             )
-    ents += bytes(8 * (16 - len(entries)))
+    ents += bytes(8 * (PACK_ENTRIES - len(entries)))
     return ents
 
 

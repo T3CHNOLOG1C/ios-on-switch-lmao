@@ -3,12 +3,19 @@
 // GM20B (two TPCs), and the methods that give it to the raw channel's 3D and compute classes.
 #include <cstdint>
 #include <cstring>
+#include <string>
 #include <vector>
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "bazel/testing/source_text.h"
+#include "drivers/TegraGM20BMetal/raw/runtime/raw_owned.h"
 #include "drivers/TegraGM20BMetal/raw/runtime/raw_slm.h"
 
 namespace {
 using namespace raw;
+using switch_ios::test::Body;
+using switch_ios::test::SourceText;
+using testing::HasSubstr;
 
 constexpr uint32_t kTpcs = 2;
 
@@ -116,5 +123,44 @@ TEST(SlmEmit, TheChannelGetsTheAreaOnBothClassesAfterAnIdle)
     EXPECT_EQ(method(words[14]), 0x02f0u);  // THROTTLED_A..C
     EXPECT_EQ(words[16], 192u * 1024);
     EXPECT_EQ(words[17], 0xffu);
+}
+
+TEST(SlmOwned, TheAreaIsTheRuntimesNeverARecords)
+{
+    // iOS 27's pack carried its probe process's area in 396 records' blobs: 0x790=0x3e 0x794=0xfbf6c000 ...
+    for (uint32_t m = 0x0790; m < 0x07A4; m += 4)
+        EXPECT_TRUE(ownedMethod(m)) << std::hex << m;
+    EXPECT_FALSE(ownedMethod(0x077C));
+    EXPECT_FALSE(ownedMethod(0x07A4));
+}
+
+size_t at(const std::string &text, const std::string &what)
+{
+    const size_t found = text.find(what);
+    EXPECT_NE(found, std::string::npos) << what;
+    return found;
+}
+
+// Every program the raw path places asks for its area before its state can be bound, and a submission gives the channel
+// the area ahead of its prologue; a pack made before the methods were the runtime's has them dropped at the bind.
+TEST(SlmOwned, EveryPlacedProgramGetsTheAreaBeforeItsBind)
+{
+    const std::string gpu = SourceText("../raw/runtime/raw_gpu.cpp");
+    const std::string pack = Body(gpu, "Pipeline *Device::pipeline(uint64_t keyHash, PackForm form, bool caTransform)");
+    EXPECT_LT(at(pack, "slmNeed(std::max(slmPerWarpOfHeader(vs.header), slmPerWarpOfHeader(fs.header)))"),
+              at(pack, "build(pl, pp, vs, fs,"));
+    EXPECT_THAT(Body(SourceText("../raw/runtime/raw_completed.cpp"),
+                     "bool Device::placeCompleted(const CapturedProgram &p, PlacedProgram &out)"),
+                HasSubstr("slmNeed(slmPerWarpOfHeader(p.image.data()))"));
+    const std::string compute = SourceText("../raw/runtime/raw_compute.cpp");
+    EXPECT_THAT(Body(compute, "const ComputeState *computeState(Device &dev, uint64_t keyHash)"),
+                HasSubstr("dev.slmNeed(slmPerWarpOfQmd(k->qmd))"));
+    EXPECT_THAT(Body(compute, "const ComputeState *placeCompute(Device &dev, const ComputeRecord &r)"),
+                HasSubstr("dev.slmNeed(slmPerWarpOfQmd(r.kernel.qmd))"));
+    const std::string commit = Body(gpu, "bool CommandBuffer::commit(uint32_t &seqno)");
+    EXPECT_THAT(commit, HasSubstr("segments_.insert(segments_.begin(),"));
+    EXPECT_LT(at(commit, "emitSlm(p, slmVa,"), at(commit, "d.k_.exec("));
+    const std::string build = Body(gpu, "void Device::build(Pipeline &pl, const PackPipeline &pp,");
+    EXPECT_LT(at(build, "if (ownedMethod(m))"), at(build, "w.m(m, v);"));
 }
 }  // namespace

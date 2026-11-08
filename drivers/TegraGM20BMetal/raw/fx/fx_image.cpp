@@ -60,8 +60,18 @@ bool volumeLayout(uint32_t width, uint32_t height, uint32_t depth, uint32_t leve
     }
     const uint64_t tile0 = 512ull << z;
     at = (at + tile0 - 1) / tile0 * tile0;
+    out.arrayStride = at;
     out.align = std::max<uint64_t>(tile0, kChainAlign);
     out.bytes = (at + out.align - 1) / out.align * out.align;
+    return true;
+}
+
+bool arrayLayout(uint32_t width, uint32_t height, uint32_t layers, uint32_t levels, uint32_t bpp, MipChain &out)
+{
+    if (!layers || layers > 2048 || !mipChainLayout(width, height, levels, bpp, out))
+        return false;
+    out.layers = layers;
+    out.bytes = (out.arrayStride * layers + out.align - 1) / out.align * out.align;
     return true;
 }
 

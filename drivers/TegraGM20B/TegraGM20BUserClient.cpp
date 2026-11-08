@@ -2489,9 +2489,9 @@ PresentSurface gSurfaces[4];
 uint64_t gSurfaceUses;
 IOLock *gPresentLock;
 
-void presentDone(void *display)
+void presentDone(void *display, int status)
 {
-	native_legacy_gpu_complete(display, 0);
+	native_legacy_gpu_complete(display, status);
 }
 
 void dropSurface(PresentSurface &s, unsigned slot)
@@ -2649,4 +2649,9 @@ extern "C" int tegra_gm20b_scanout_copy(const struct TegraScanoutCopy *copy)
 			: -12;  // ENOMEM: the target or the surface could not be mapped
 	IOLockUnlock(gPresentLock);
 	return ret ? ioreturn(ret) : 0;
+}
+
+extern "C" int tegra_gm20b_scanout_outstanding(const void *display)
+{
+	return tgm_present_outstanding(display);
 }

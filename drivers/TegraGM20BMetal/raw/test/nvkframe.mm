@@ -301,85 +301,97 @@ int main(int argc, char **argv)
                           mipmapLevel:0
                             withBytes:row.data()
                           bytesPerRow:row.size()];
-            } else if (t == frame::IMAGE3 && getenv("FRAME_3D")) {
+            } else if (t == frame::IMAGE3 && (getenv("FRAME_3D") || getenv("FRAME_ARRAY") || getenv("FRAME_CUBE"))) {
                 // FRAME_3D=<MTLPixelFormat>: IMAGE3 a 17x17x17 colour cube, as Core Animation's colour matching samples one;
-                // FRAME_3D_BLIT: private, its planes copied in from a buffer by a blit, else shared and written by replaceRegion
-                const MTLPixelFormat cf = MTLPixelFormat(atoi(getenv("FRAME_3D")) ?: MTLPixelFormatRGBA8Unorm);
-                const NSUInteger side = 17, bpp = cf == MTLPixelFormatRGBA16Float ? 8 : 4, row = side * bpp;
+                // FRAME_ARRAY=<layers>: a 17x17 RGBA8 2D array of that many layers; FRAME_CUBE=<cubes>: a 16x16 RGBA8 cube
+                // (or cube array). FRAME_3D_BLIT: private, its planes or layers copied in from a buffer by a blit, else shared
+                // and written by replaceRegion
+                const bool volume = getenv("FRAME_3D") != nullptr, cubes = getenv("FRAME_CUBE") != nullptr;
+                const MTLPixelFormat cf = MTLPixelFormat(volume ? atoi(getenv("FRAME_3D")) ?: MTLPixelFormatRGBA8Unorm
+                                                                : MTLPixelFormatRGBA8Unorm);
+                const NSUInteger side = cubes ? 16 : 17, bpp = cf == MTLPixelFormatRGBA16Float ? 8 : 4,
+                                 row = side * bpp,
+                                 count = cubes    ? NSUInteger(std::max(atoi(getenv("FRAME_CUBE")), 1))
+                                         : volume ? side
+                                                  : NSUInteger(std::max(atoi(getenv("FRAME_ARRAY")), 1)),
+                                 images = cubes ? count * 6 : count;
                 MTLTextureDescriptor *cd = [MTLTextureDescriptor new];
-                cd.textureType = MTLTextureType3D;
+                cd.textureType = volume  ? MTLTextureType3D
+                                 : cubes ? (count > 1 ? MTLTextureTypeCubeArray : MTLTextureTypeCube)
+                                         : MTLTextureType2DArray;
                 cd.pixelFormat = cf;
-                cd.width = cd.height = cd.depth = side;
+                cd.width = cd.height = side;
+                cd.depth = volume ? side : 1;
+                cd.arrayLength = volume ? 1 : count;
                 cd.usage = MTLTextureUsageShaderRead;
                 const bool blit = getenv("FRAME_3D_BLIT") != nullptr;
                 cd.storageMode = blit ? MTLStorageModePrivate : MTLStorageModeShared;
                 tex[t] = [dev newTextureWithDescriptor:cd];
-                std::vector<uint8_t> cube(row * side * side);
+                std::vector<uint8_t> cube(row * side * images);
                 for (size_t i = 0; i < cube.size(); i++)
                     cube[i] = uint8_t(i * 13 + 5);
+                // (a 3D texture's box at once; an array's or cube's layers one slice at a time, as Metal moves them)
+                const NSUInteger moves = volume ? 1 : images, depth = volume ? side : 1, image = row * side;
                 if (blit) {
                     id<MTLBuffer> from = [dev newBufferWithBytes:cube.data()
                                                           length:cube.size()
                                                          options:MTLResourceStorageModeShared];
                     id<MTLCommandBuffer> up = [queue commandBuffer];
                     id<MTLBlitCommandEncoder> be = [up blitCommandEncoder];
-                    [be copyFromBuffer:from
-                               sourceOffset:0
-                          sourceBytesPerRow:row
-                        sourceBytesPerImage:row * side
-                                 sourceSize:MTLSizeMake(side, side, side)
-                                  toTexture:tex[t]
-                           destinationSlice:0
-                           destinationLevel:0
-                          destinationOrigin:MTLOriginMake(0, 0, 0)];
+                    for (NSUInteger k = 0; k < moves; k++)
+                        [be copyFromBuffer:from
+                                   sourceOffset:k * image
+                              sourceBytesPerRow:row
+                            sourceBytesPerImage:image
+                                     sourceSize:MTLSizeMake(side, side, depth)
+                                      toTexture:tex[t]
+                               destinationSlice:volume ? 0 : k
+                               destinationLevel:0
+                              destinationOrigin:MTLOriginMake(0, 0, 0)];
                     [be endEncoding];
                     [up commit];
                     [up waitUntilCompleted];
                 } else {
-                    [tex[t] replaceRegion:MTLRegionMake3D(0, 0, 0, side, side, side)
-                              mipmapLevel:0
-                                    slice:0
-                                withBytes:cube.data()
-                              bytesPerRow:row
-                            bytesPerImage:row * side];
+                    for (NSUInteger k = 0; k < moves; k++)
+                        [tex[t] replaceRegion:MTLRegionMake3D(0, 0, 0, side, side, depth)
+                                  mipmapLevel:0
+                                        slice:volume ? 0 : k
+                                    withBytes:cube.data() + k * image
+                                  bytesPerRow:row
+                                bytesPerImage:image];
                 }
                 // FRAME_3D_CHECK (with NVDEC_WRITETHROUGH, so the copy engine's writes reach the texture's memory): its
-                // texels read back as written, a box inside it too
-                if (getenv("FRAME_3D_CHECK") && !blit) {
+                // texels read back as written, on the CPU and (FRAME_3D_BLIT) through the copy engine
+                if (getenv("FRAME_3D_CHECK")) {
                     std::vector<uint8_t> back(cube.size());
-                    [tex[t] getBytes:back.data()
-                          bytesPerRow:row
-                        bytesPerImage:row * side
-                           fromRegion:MTLRegionMake3D(0, 0, 0, side, side, side)
-                          mipmapLevel:0
-                                slice:0];
-                    printf("CUBE %s\n", back == cube ? "match" : "differs");
-                } else if (getenv("FRAME_3D_CHECK")) {
-                    id<MTLBuffer> out = [dev newBufferWithLength:cube.size() options:MTLResourceStorageModeShared];
-                    id<MTLCommandBuffer> down = [queue commandBuffer];
-                    id<MTLBlitCommandEncoder> be = [down blitCommandEncoder];
-                    [be copyFromTexture:tex[t]
-                                     sourceSlice:0
-                                     sourceLevel:0
-                                    sourceOrigin:MTLOriginMake(0, 0, 0)
-                                      sourceSize:MTLSizeMake(side, side, side)
-                                        toBuffer:out
-                               destinationOffset:0
-                          destinationBytesPerRow:row
-                        destinationBytesPerImage:row * side];
-                    [be endEncoding];
-                    [down commit];
-                    [down waitUntilCompleted];
-                    printf("CUBE %s\n", !memcmp(out.contents, cube.data(), cube.size()) ? "match" : "differs");
+                    if (blit) {
+                        id<MTLBuffer> out = [dev newBufferWithLength:cube.size() options:MTLResourceStorageModeShared];
+                        id<MTLCommandBuffer> down = [queue commandBuffer];
+                        id<MTLBlitCommandEncoder> be = [down blitCommandEncoder];
+                        for (NSUInteger k = 0; k < moves; k++)
+                            [be copyFromTexture:tex[t]
+                                             sourceSlice:volume ? 0 : k
+                                             sourceLevel:0
+                                            sourceOrigin:MTLOriginMake(0, 0, 0)
+                                              sourceSize:MTLSizeMake(side, side, depth)
+                                                toBuffer:out
+                                       destinationOffset:k * image
+                                  destinationBytesPerRow:row
+                                destinationBytesPerImage:image];
+                        [be endEncoding];
+                        [down commit];
+                        [down waitUntilCompleted];
+                        printf("CUBE %s\n", !memcmp(out.contents, cube.data(), cube.size()) ? "match" : "differs");
+                    }
 #ifdef RAW_FACADE
-                    // the raw path's texture of private storage, read by the CPU in NIL's layout: the copy engine's planes
-                    std::vector<uint8_t> back(cube.size());
-                    [tex[t] getBytes:back.data()
-                          bytesPerRow:row
-                        bytesPerImage:row * side
-                           fromRegion:MTLRegionMake3D(0, 0, 0, side, side, side)
-                          mipmapLevel:0
-                                slice:0];
+                    // the raw path's texture, read by the CPU in NIL's layout (private storage too)
+                    for (NSUInteger k = 0; k < moves; k++)
+                        [tex[t] getBytes:back.data() + k * image
+                              bytesPerRow:row
+                            bytesPerImage:image
+                               fromRegion:MTLRegionMake3D(0, 0, 0, side, side, depth)
+                              mipmapLevel:0
+                                    slice:volume ? 0 : k];
                     printf("CUBE layout %s\n", back == cube ? "match" : "differs");
 #endif
                 }
@@ -521,8 +533,10 @@ int main(int argc, char **argv)
             }
             // (FRAME_1D, FRAME_3D: slot 9 that texture, so m2v's segment samples the raw path's memory through its twin)
             for (int t = 0; t < 16; t++)
-                [e setFragmentTexture:tex[t == 9 && (getenv("FRAME_1D") || getenv("FRAME_3D")) ? frame::IMAGE3
-                                                                                               : frame::IMAGE1]
+                [e setFragmentTexture:tex[t == 9 && (getenv("FRAME_1D") || getenv("FRAME_3D") ||
+                                                     getenv("FRAME_ARRAY") || getenv("FRAME_CUBE"))
+                                              ? frame::IMAGE3
+                                              : frame::IMAGE1]
                               atIndex:t];
             for (int s2 = 0; s2 < 16; s2++)
                 [e setFragmentSamplerState:smp[s2 & 1] atIndex:s2];

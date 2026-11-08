@@ -28,7 +28,7 @@ enum PackSectionId {
     PackSectionCount
 };
 
-constexpr uint32_t kPackVersion = 6;
+constexpr uint32_t kPackVersion = 7;
 
 struct PackHeader {
     char magic[8];                                    // "GM20BPK1"
@@ -62,8 +62,13 @@ enum PackEntryKind : uint8_t {
     EntrySamplerOnly = 0,
     EntryUbo = 1,
     EntryTexture = 2,
-    EntryFetch = 3
+    EntryFetch = 3,
+    // A texture3d argument (Core Animation's colour cubes): m2v binds its own 3D view there, so the record knows no Metal
+    // index (slot kNoSlot); the state draws on raw while it samples nothing there (RenderEncoder::prepare)
+    EntryTexture3d = 4
 };
+
+constexpr uint8_t kNoSlot = 0xFF;
 
 enum PackSamplerKind : uint8_t {
     SamplerNone = 0,
@@ -117,6 +122,9 @@ constexpr uint32_t cbufUboOffset(uint8_t type)
     return uint32_t(type >> 3) * 16;
 }
 
+// Set-0 entries a state may have: Core Animation's generic states (the uber shader) take 27
+constexpr uint32_t kPackEntries = 32;
+
 struct PackPipeline {
     uint64_t keyHash;    // FNV-1a 64 of the state key (the frontend journal's R-line fields but the label)
     uint32_t keyString;  // offset in the strings section: the key's fields before " | v" (attachments, vertex layout)
@@ -125,7 +133,7 @@ struct PackPipeline {
     uint8_t entries, pushes, vertexSlot, pad;
     uint16_t vertexStride, setBytes;
     uint32_t flags;
-    PackEntry entry[16];
+    PackEntry entry[kPackEntries];
     uint32_t
         pushMask;  // root-table words [0x700, 0x780) the state's push ranges write (m2v's windows, as NVK wrote them)
     uint32_t pushWords[32];
@@ -195,7 +203,7 @@ struct InitAddresses {
 };
 
 uint32_t relocated(const PackInitMethod &m, const InitAddresses &a);
-static_assert(sizeof(PackPipeline) == 36 + 16 * 8 + 4 + 32 * 4, "pack layout");
+static_assert(sizeof(PackPipeline) == 36 + kPackEntries * 8 + 4 + 32 * 4, "pack layout");
 static_assert(sizeof(PackProgram) == 32, "pack layout");
 static_assert(sizeof(PackKernel) == 16 + 256 + 8 + 128 + 128, "pack layout");
 

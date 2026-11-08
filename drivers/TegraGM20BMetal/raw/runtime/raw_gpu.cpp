@@ -8,6 +8,7 @@
 #include "raw_clear.h"
 #include "raw_follow.h"
 #include "raw_gpu.h"
+#include "raw_owned.h"
 #include "raw_slm.h"
 #include "raw_target.h"
 #include "raw_tiled_cache.h"
@@ -357,7 +358,8 @@ void Device::emitContext(Push &p)
     }
     const uint32_t *base = pack_.section<uint32_t>(PackBaseline);
     for (uint64_t i = 0; i < pack_.bytes(PackBaseline) / 8; i++)
-        p.m(base[2 * i], base[2 * i + 1]);
+        if (!ownedMethod(base[2 * i]))
+            p.m(base[2 * i], base[2 * i + 1]);
     tiledCacheInit(p, k_.info());
     // the depth/stencil registers (the runtime's, as NVK leaves them for Metal's default state in a pass without the attachment)
     {
@@ -674,6 +676,8 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
     memcpy(writes, ctWrite_, sizeof writes);
     for (uint32_t k = 0; k < pp.blobDwords; k += 2) {
         const uint32_t m = blob[k], v = blob[k + 1];
+        if (ownedMethod(m))
+            continue;  // a pack made before the method was the runtime's: the probe process's value
         if (m >= CT_WRITE && m < CT_WRITE + 32)
             writes[(m - CT_WRITE) / 4] = v;
         w.m(m, v);
@@ -1050,6 +1054,11 @@ void Device::writeTic(const Texture &t)
     const FormatInfo *f = formatInfo(t.format);
     uint32_t w[8] = {f->tic0};
     fx::MipChain one;
+    if (t.layers > 1 && fx::arrayLayout(t.width, t.height, t.layers, 1, t.bpp, one)) {
+        fx::mipChainTic(one, t.va, f->tic0, f->srgb, 0, 1, w, t.type);
+        memcpy(tic_.cpu + 32 * t.tic, w, 32);
+        return;
+    }
     if (t.type == fx::kTexThreeD && fx::volumeLayout(t.width, t.height, t.depth, 1, t.bpp, !t.blockDepth, one)) {
         fx::mipChainTic(one, t.va, f->tic0, f->srgb, 0, 1, w, t.type);
         memcpy(tic_.cpu + 32 * t.tic, w, 32);
@@ -1177,6 +1186,32 @@ bool Device::createVolume(uint32_t width, uint32_t height, uint32_t depth, uint3
     t.type = fx::kTexThreeD;
     t.depth = depth;
     t.blockDepth = c.zLog2;
+    if (!(t.tic = allocTic())) {
+        Lease *none = nullptr;
+        freeSpan(t.span, Memory::Bl, none);
+        return false;
+    }
+    writeTic(t);
+    return true;
+}
+
+bool Device::createArray(uint32_t width, uint32_t height, uint32_t layers, uint32_t format, uint32_t type, Texture &t)
+{
+    fx::MipChain c;
+    if (!shape(width, height, format, t) || xrForm(format) != XrForm::None ||
+        !fx::arrayLayout(width, height, layers, 1, t.bpp, c))
+        return false;
+    std::lock_guard<std::mutex> l(lock_);
+    if (!blAlloc(c.bytes, c.align, t.span))
+        return false;
+    t.va = t.span.va;
+    t.cpu = t.span.cpu;
+    t.pitch = c.level[0].rowBytes;
+    t.blockLinear = true;
+    t.blockHeight = c.level[0].yLog2;
+    t.layerBytes = c.arrayStride;
+    t.type = uint8_t(type);
+    t.layers = layers;
     if (!(t.tic = allocTic())) {
         Lease *none = nullptr;
         freeSpan(t.span, Memory::Bl, none);
@@ -1706,13 +1741,16 @@ uint64_t Device::wcChunkBytesHeld()
     return n;
 }
 
+// The caller's pages around [bytes, bytes + length): the frontend answers minBufferNoCopyAlignmentBytes with the kernel's 4 KiB
+// page, not getpagesize()'s 16 KiB, and Apple's own callers (iconservicesagent on 27) pass pointers inside a page; the import
+// binds whole kernel pages and the buffer's address is its first byte's inside them
 bool Device::createBufferNoCopy(void *bytes, uint64_t length, Buffer &b)
 {
     b = {};
-    if (!bytes || !length || (uintptr_t(bytes) & (pageSize() - 1)))
+    if (!bytes || !length)
         return false;
     std::lock_guard<std::mutex> l(lock_);
-    if (!(b.import = importSurface(0, bytes, (length + pageSize() - 1) & ~uint64_t(pageSize() - 1), nullptr)))
+    if (!(b.import = importSurface(0, bytes, length, nullptr)))
         return false;
     b.va = b.import->bo.va;
     b.cpu = static_cast<uint8_t *>(bytes);
@@ -2707,6 +2745,7 @@ void RenderEncoder::barrier()
 {
     if (p_.room() < 64)
         reserve();
+    tiledCacheDrain(p_, dev_->k_.info());
     p_.m(WAIT_FOR_IDLE, 0);
     p_.m(INVALIDATE_SHADER_CACHES, kBetweenPasses);
     p_.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
@@ -2904,6 +2943,22 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
     return true;
 }
 
+// The lowest fragment texture index with a texture bound that none of the state's 2D texture entries names, -1 when there
+// is none: what a texture3d argument (whose index the record does not know) may sample. Its handle stays 0 while it is -1.
+static int strayTexture(const PackPipeline &r, const Texture *const (&textures)[16])
+{
+    uint32_t named = 0;
+    for (uint32_t i = 0; i < r.entries; i++) {
+        if (r.entry[i].kind == EntryTexture && r.entry[i].slot < 16)
+            named |= 1u << r.entry[i].slot;
+    }
+    for (int k = 0; k < 16; k++) {
+        if (textures[k] && !(named >> k & 1))
+            return k;
+    }
+    return -1;
+}
+
 bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uint32_t vFirst, uint32_t vCount,
                             uint32_t baseInstance, bool indexed, const char **why)
 {
@@ -3058,6 +3113,13 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                 return false;
             }
             tic = t ? t->tic : 0;
+        } else if (e.kind == EntryTexture3d) {
+            const int stray = strayTexture(r, textures_);
+            if (stray >= 0) {
+                *why = "a texture bound where the state may take it as a texture3d argument";
+                cb_->refusal = {RefNoTic, uint32_t(stray), textures_[stray]->format, textures_[stray]->width};
+                return false;
+            }
         }
         const uint8_t map = e.kind == EntryTexture && textures_[e.slot] ? textures_[e.slot]->addressMap : 0;
         if (e.samplerKind == SamplerSlot) {
@@ -3358,10 +3420,13 @@ struct CopySide {
     uint8_t blockDepth = 0;
 };
 
+// z: a 3D texture's plane, or an array's layer (its own 2D image, layerBytes on: NVK's array_stride step)
 CopySide sideOf(const Texture &t, uint32_t x, uint32_t y, uint32_t z)
 {
     if (!t.blockLinear)
         return {t.va + uint64_t(y) * t.pitch + uint64_t(x) * t.bpp, t.pitch};
+    if (t.layers > 1)
+        return {t.va + z * t.layerBytes, t.pitch, x, y, t.pitch / t.bpp, t.height, true, t.blockHeight};
     return {t.va, t.pitch, x, y, t.pitch / t.bpp, t.height, true, t.blockHeight, t.depth, z, t.blockDepth};
 }
 
@@ -3549,6 +3614,8 @@ void RenderEncoder::end()
         p_.m(GLOBAL_BASE_VERTEX_INDEX, 0);
         p_.m(VERTEX_ID_BASE, 0);
     }
+    if (drew_)
+        tiledCacheDrain(p_, d.k_.info());
     checkRoom(p_, "a pass body");
     if (p_.at > bodyStart_)
         bodies_.push_back({bodyStart_, p_.at});

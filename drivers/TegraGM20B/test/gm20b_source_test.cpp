@@ -704,6 +704,23 @@ TEST(NvkImageSource, StencilCopyTempStartsOnTheBindAlignment)
 		    HasSubstr("const uint64_t va_align_B = plane->plane_align_B;"));
 }
 
+// At M2 the FIFO has no user: nvkm makes its runqueues and runlists and registers its interrupt handler at the first
+// channel (nvkm_fifo_oneinit), from its function table. What recover.c and sched.c take over goes into that table.
+TEST(GM20BSchedSource, HooksGoWhereTheFifosOneinitReadsThem)
+{
+	const std::string recover = flat(definition(
+		SourceText("../recover.c"), "void tgm_recover_init(struct nvkm_device *device)"));
+	EXPECT_THAT(recover, HasSubstr("func->intr = fifo_intr;"));
+	EXPECT_THAT(recover, HasSubstr("func->runq = &ctxsw.runq;"));
+	EXPECT_THAT(recover, HasSubstr("func->chan.func = &ctxsw.chan;"));
+	EXPECT_THAT(recover, HasSubstr("func->intr_ctxsw_timeout = ctxsw_tick;"));
+	const std::string sched = SourceText("../sched.c");
+	EXPECT_THAT(flat(definition(sched, "void tgm_sched_init(struct nvkm_device *device)")),
+		    HasSubstr("tgm_fifo_func(fifo)->runl_ctor = sched_runl_ctor;"));
+	EXPECT_THAT(flat(definition(sched, "static int sched_runl_ctor(struct nvkm_fifo *fifo)")),
+		    HasSubstr("interleave(fifo->engine.subdev.device, runl);"));
+}
+
 // Nouveau puts the SW engine on the runlist with id 15 and no status register: PFIFO_ENG_STATUS(15) (0x0026b8)
 // PRI-times out, and the GPU's bus error panics. Every per-engine status read is behind a context or a GR check.
 TEST(GM20BSchedSource, EngineStatusReadsSkipTheSoftwareEngine)
