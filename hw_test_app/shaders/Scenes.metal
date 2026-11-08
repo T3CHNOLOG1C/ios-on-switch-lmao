@@ -61,3 +61,17 @@ fragment float4 alpha_fragment(TexturedVertex in [[stage_in]], texture2d<float> 
     const float a = texture.sample(nearest, in.uv, level(0)).a;
     return float4(a, a, a, 1);
 }
+
+/// Each pair as loaded, then again after a multiply by a one the compiler cannot see: a half that is already the result
+/// of half arithmetic reaches the next operation as a half, which is the form the GPU's packed half ALU takes.
+kernel void half_arithmetic(device const half4 *a [[buffer(0)]], device const half4 *b [[buffer(1)]],
+                            constant half &one [[buffer(2)]], device half4 *out [[buffer(3)]],
+                            uint id [[thread_position_in_grid]])
+{
+    const half4 x = a[id], y = b[id];
+    const half4 rx = x * one, ry = y * one;
+    out[4 * id] = x + y;
+    out[4 * id + 1] = x * y;
+    out[4 * id + 2] = rx + ry;
+    out[4 * id + 3] = rx * ry;
+}

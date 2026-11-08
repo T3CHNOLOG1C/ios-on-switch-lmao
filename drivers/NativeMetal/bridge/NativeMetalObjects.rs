@@ -718,9 +718,9 @@ fn runtime_answer(device: &NmbDevice, selector: &str, arg: u64) -> Result<u64, S
         "supportsTextureSampleCount:" => gap(p.supports_texture_sample_count(arg))?,
         "supportsVertexAmplificationCount:" => gap(p.supports_vertex_amplification_count(arg))?,
         "supportsRasterizationRateMapWithLayerCount:" => gap(p.supports_rasterization_rate_map_with_layer_count(arg))?,
-        "supportsFamily:" => {
-            (d.supports_family(arg as i64) || crate::target::FAMILIES.iter().any(|f| f.raw() == arg as i64)) as u64
-        }
+        // The target's families and no others: a family the runtime meets that the target lacks (Metal3 on either target)
+        // would send the OS down paths no target device takes.
+        "supportsFamily:" => crate::target::FAMILIES.iter().any(|f| f.raw() == arg as i64) as u64,
         "supportsPrimitiveType:" => p.supports_primitive_type(arg) as u64,
         "supportsTextureWriteRoundingMode:" => p.supports_texture_write_rounding_mode(arg) as u64,
         _ => return Err(format!("{selector} is not a device query of the bridge")),

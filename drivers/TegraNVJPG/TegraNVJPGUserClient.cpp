@@ -97,7 +97,7 @@ struct {
 #endif
 
 IOLock *gStatsLock;
-bool gFirstLogged;
+uint32_t gFirstLogged;  // bit n: a decode into TEGRA_NVJPG_OUT_n has been logged
 
 // `why` is a literal: it is the refusal's key as well as its text.
 void refused(const char *why)
@@ -276,8 +276,10 @@ void engineThread(void *, wait_result_t)
         gStats.pixels += static_cast<uint64_t>(job->plan.extent.width) * job->plan.extent.height;
         gStats.bytes += job->engine.setup.bitstream_size;
 #endif
-        const bool first = (job->status == 0) && !gFirstLogged;
-        gFirstLogged = gFirstLogged || first;
+        const uint32_t format = 1u << job->plan.target.format;
+        const bool first = (job->status == 0) && (gFirstLogged & format) == 0u;
+        if (first)
+            gFirstLogged |= format;
         IOLockUnlock(gStatsLock);
         if (first) {
             IOLog("TegraNVJPG: first hardware decode done: %ux%u to %ux%u (format %u, 1/%u) in %llu us engine (%u "

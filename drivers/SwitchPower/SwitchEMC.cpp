@@ -54,6 +54,9 @@ class SwitchEMC : public OSObject {
 #if DEVELOPMENT || DEBUG
     uint64_t residency[SWITCH_EMC_MAX_RATES] = {}, since = 0;
     unsigned moves = 0;
+    // Hints that found the EMC below its top rate: from the first such hint to the BPMP's answer at the top rate.
+    uint64_t raiseAsked = 0, raiseTicks = 0, raiseMax = 0, bpmpMax = 0;
+    unsigned raises = 0;
 #endif
 
     static void actmonFired(OSObject *owner, IOInterruptEventSource *, int);
@@ -242,7 +245,21 @@ void SwitchEMC::signalFired(OSObject *owner, IOInterruptEventSource *, int)
     auto *self = static_cast<SwitchEMC *>(owner);
     if (!self->governing)
         return;
+#if DEVELOPMENT || DEBUG
+    const unsigned before = self->cur;
+    const uint64_t bpmp = mach_absolute_time();
+#endif
     self->moveTo(self->count - 1);
+#if DEVELOPMENT || DEBUG
+    const uint64_t asked = __atomic_exchange_n(&self->raiseAsked, 0, __ATOMIC_RELAXED);
+    if (before != self->cur && asked) {
+        const uint64_t now = mach_absolute_time();
+        self->raises++;
+        self->raiseTicks += now - asked;
+        self->raiseMax = now - asked > self->raiseMax ? now - asked : self->raiseMax;
+        self->bpmpMax = now - bpmp > self->bpmpMax ? now - bpmp : self->bpmpMax;
+    }
+#endif
     self->program();
 }
 
@@ -261,8 +278,14 @@ void SwitchEMC::hint()
     while (until > was &&
            !__atomic_compare_exchange_n(&hintUntil, &was, until, true, __ATOMIC_RELEASE, __ATOMIC_RELAXED)) {
     }
-    if (!__atomic_load_n(&gTopHeld, __ATOMIC_ACQUIRE))
+    if (!__atomic_load_n(&gTopHeld, __ATOMIC_ACQUIRE)) {
+#if DEVELOPMENT || DEBUG
+        uint64_t none = 0;
+        __atomic_compare_exchange_n(&raiseAsked, &none, mach_absolute_time(), false, __ATOMIC_RELAXED,
+                                    __ATOMIC_RELAXED);
+#endif
         signal->interruptOccurred(nullptr, nullptr, 0);
+    }
 }
 
 void SwitchEMC::startActmon()
@@ -352,9 +375,15 @@ size_t SwitchEMC::stats(char *line, size_t size)
         const unsigned pm = total ? static_cast<unsigned>(at[i] * 1000 / total) : 0;
         n += static_cast<size_t>(snprintf(line + n, size - n, " %u:%u.%u%%", khz[i] / 1000, pm / 10, pm % 10));
     }
+    if (n < size) {
+        n += static_cast<size_t>(
+            snprintf(line + n, size - n, ", %u raises: hint to top %llu/%llu us (BPMP max %llu us)", raises,
+                     raises ? raiseTicks / raises * 5 / 96 : 0, raiseMax * 5 / 96, bpmpMax * 5 / 96));
+    }
     memset(residency, 0, sizeof(residency));
     since = t;
-    moves = 0;
+    moves = raises = 0;
+    raiseTicks = raiseMax = bpmpMax = 0;
     return n;
 }
 #endif

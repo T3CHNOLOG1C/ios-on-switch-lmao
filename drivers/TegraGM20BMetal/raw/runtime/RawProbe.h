@@ -10,7 +10,7 @@
 #import <Metal/Metal.h>
 #include <memory>
 #include <string>
-#include "raw_cache.h"
+#include "raw_compiler.h"
 #include "raw_capture.h"
 #include "raw_record.h"
 

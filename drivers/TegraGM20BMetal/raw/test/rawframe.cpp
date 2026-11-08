@@ -88,12 +88,13 @@ int main(int argc, char **argv)
             CFDictionarySetValue(p, kIOSurfaceBytesPerRow, nr);
             CFDictionarySetValue(p, kIOSurfacePixelFormat, nf);
             IOSurfaceRef s = IOSurfaceCreate(p);
-            ok = dev.createSurfaceTexture(IOSurfaceGetID(s), IOSurfaceGetBaseAddress(s), IOSurfaceGetAllocSize(s), s, 0,
-                                          td.w, td.h, uint32_t(IOSurfaceGetBytesPerRow(s)), 80, tex[t]);
+            ok =
+                dev.createSurfaceTexture(IOSurfaceGetID(s), IOSurfaceGetBaseAddress(s), IOSurfaceGetAllocSize(s), s, 0,
+                                         td.w, td.h, uint32_t(IOSurfaceGetBytesPerRow(s)), 80, tex[t], td.renderTarget);
         } else if (td.memoryless) {
             ok = dev.createMemoryless(td.w, td.h, td.format, tex[t]);
-        } else {
-            ok = dev.createTexture(td.w, td.h, td.format, tex[t]);
+        } else {  // private in nvkframe: block-linear, as the facade makes a private texture (RawMetal.mm rmNewTexture)
+            ok = dev.createTexture(td.w, td.h, td.format, tex[t], false, true);
         }
         if (!ok) {
             fprintf(stderr, "texture %d failed\n", t);

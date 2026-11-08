@@ -21,7 +21,8 @@ MILESTONES = {
     'display': r'SwitchDisplay: vsync from the DC A vblank interrupt',
     'sd': r'SwitchSD: ADMA2 on',
     'root': r'BSD root: ',
-    'launchd': r'requested by: init \(pid 1\)',
+    # A process named after its exec: until launchd runs, pid 1 is init and its mounts are the kernel's.
+    'launchd': r'\[\d+\((?!init\)|kernel_task\))[^)]+\)\]|requested by: (?!init |kernel_task )\S+ \(pid \d+\)',
 }
 PANIC_TEXT = (report.RAMOOPS[0] + 0x180000, 0x80000)
 

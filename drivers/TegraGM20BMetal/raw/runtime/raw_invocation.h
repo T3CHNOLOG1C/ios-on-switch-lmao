@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: MIT
-// A Metal call the raw facade records as an invocation and replays on m2v at commit (RawMetal.mm forwardInvocation:): what its
+// A Metal call the raw facade records as an invocation and replays on m2v at commit (RawMetalEncoder.mm forwardInvocation:): what its
 // pointer arguments point to, and the copy of it the invocation keeps.
 #pragma once
 #import <Foundation/Foundation.h>
 #include <objc/runtime.h>
 #include <cstring>
+#include <utility>
+#include <vector>
 
 namespace raw {
 
@@ -84,6 +86,73 @@ inline bool keepPointedArguments(NSInvocation *inv)
         [inv setArgument:&to atIndex:i];
     }
     return known;
+}
+
+// Each object a recorded call names: its object arguments and the elements of its object arrays
+template <typename Visit> void forEachObject(NSInvocation *inv, Visit &&visit)
+{
+    NSMethodSignature *sig = inv.methodSignature;
+    for (NSUInteger i = 2; i < sig.numberOfArguments; i++) {
+        const char *t = argumentType(sig, i);
+        if (t[0] == '@') {
+            __unsafe_unretained id arg = nil;
+            [inv getArgument:&arg atIndex:i];
+            visit(arg);
+        } else if (t[0] == '^' && t[1] == '@') {
+            id __unsafe_unretained *array = nullptr;
+            [inv getArgument:&array atIndex:i];
+            const NSUInteger n = array ? pointedElements(inv, i) : 0;
+            for (NSUInteger k = 0; k < n; k++)
+                visit(array[k]);
+        }
+    }
+}
+
+// The recorded call made on `target` with each object it names replaced by map(object), its own arguments put back after:
+// the call keeps naming the objects it was recorded with (what a compute pass wrote is marked by them once it completes). An
+// array's mapped copy stays with the invocation, in case the target keeps the pointer.
+template <typename Map> void invokeMapped(NSInvocation *inv, id target, Map &&map)
+{
+    NSMethodSignature *sig = inv.methodSignature;
+    NSMutableArray *originals = [NSMutableArray array];  // alive while the invocation names their replacements
+    std::vector<std::pair<NSUInteger, void *>> arguments;
+    for (NSUInteger i = 2; i < sig.numberOfArguments; i++) {
+        const char *t = argumentType(sig, i);
+        if (t[0] == '@') {
+            __unsafe_unretained id arg = nil;
+            [inv getArgument:&arg atIndex:i];
+            id mapped = map(arg);
+            if (mapped == arg)
+                continue;
+            if (arg)
+                [originals addObject:arg];
+            arguments.push_back({i, (__bridge void *)arg});
+            __unsafe_unretained id m = mapped;
+            [inv setArgument:&m atIndex:i];
+        } else if (t[0] == '^' && t[1] == '@') {
+            id __unsafe_unretained *array = nullptr;
+            [inv getArgument:&array atIndex:i];
+            const NSUInteger count = array ? pointedElements(inv, i) : 0;
+            if (!count)
+                continue;
+            NSMutableData *copy = [NSMutableData dataWithLength:count * sizeof(id)];
+            id __unsafe_unretained *out = (id __unsafe_unretained *)copy.mutableBytes;
+            NSMutableArray *keep = [NSMutableArray array];
+            for (NSUInteger k = 0; k < count; k++) {
+                id m = map(array[k]);
+                if (m)
+                    [keep addObject:m];
+                out[k] = m;
+            }
+            objc_setAssociatedObject(inv, (__bridge const void *)copy, @[ copy, keep ], OBJC_ASSOCIATION_RETAIN);
+            arguments.push_back({i, (void *)array});
+            id __unsafe_unretained *p = out;
+            [inv setArgument:&p atIndex:i];
+        }
+    }
+    [inv invokeWithTarget:target];
+    for (auto [i, original] : arguments)
+        [inv setArgument:&original atIndex:i];
 }
 
 }  // namespace raw
