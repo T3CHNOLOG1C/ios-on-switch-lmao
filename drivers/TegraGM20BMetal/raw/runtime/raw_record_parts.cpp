@@ -286,6 +286,18 @@ uint64_t packKeyHash(const std::string &key)
     return Pack::fnv(key.data(), key.size());
 }
 
+PackRules PackRules::of(const Pack &pack)
+{
+    std::map<uint32_t, uint32_t> context;
+    const PackInitMethod *init = pack.section<PackInitMethod>(PackInit);
+    for (uint64_t i = 0; i < pack.bytes(PackInit) / sizeof(PackInitMethod); i++)
+        if (init[i].subc == 0 && init[i].reloc == RelocNone && init[i].data)
+            context[init[i].mthd] = init[i].data;
+        else if (init[i].subc == 0)
+            context.erase(init[i].mthd);
+    return of(pack, std::move(context));
+}
+
 PackRules PackRules::of(const Pack &pack, std::map<uint32_t, uint32_t> context)
 {
     PackRules r;

@@ -63,7 +63,7 @@ using BufferDescriptorSize = uint32_t (*)(void *device, int32_t type, uint64_t r
 constexpr uint64_t kLibraryBit = 0x800;
 constexpr uint32_t kRootPush = 0x700;
 constexpr int32_t kViewType3D = 2;  // VK_IMAGE_VIEW_TYPE_3D
-constexpr uint32_t kTagged = 16;  // probe.mm's fragment textures and samplers
+constexpr uint32_t kTagged = 16;    // probe.mm's fragment textures and samplers
 
 enum DescriptorType : int32_t {
     Sampler = 0,
@@ -127,17 +127,18 @@ public:
                 reinterpret_cast<StageFinish>(nvk_.stageFinish)(device_, &s);
     }
 
-    bool compile(const NmbDirectState &state, std::string &why)
+    // Refused: a state the raw path does not draw from a record; Failed: NVK could not compile a stage
+    Compiler::Outcome compile(const NmbDirectState &state, std::string &why)
     {
         if (state.stageCount != 2) {
             why = std::to_string(state.stageCount) + " stages";
-            return false;
+            return Compiler::Outcome::Refused;
         }
         for (uint32_t k = 0; k < 2; k++) {
             const NmbDirectStage &s = state.stages[k];
             if (s.flags) {
                 why = "a stage made with flags " + hex(s.flags);
-                return false;
+                return Compiler::Outcome::Refused;
             }
             SubgroupSize subgroup;
             subgroup.size = s.subgroupSize;
@@ -154,11 +155,11 @@ public:
             const int32_t result = reinterpret_cast<CompileStage>(nvk_.compileStage)(device_, &info, &made_[k]);
             if (result != 0) {
                 why = "NVK refused stage " + std::to_string(k) + " (VkResult " + std::to_string(result) + ")";
-                return false;
+                return Compiler::Outcome::Failed;
             }
             programs_[k] = programOf(made_[k]);
         }
-        return true;
+        return Compiler::Outcome::Made;
     }
 
     const CapturedProgram &program(int k) const
@@ -282,7 +283,8 @@ std::map<uint32_t, uint32_t> residualWords(const NmbDirectDraw &plain, const Nmb
     return out;
 }
 
-// raw_emit's registers the pack varies, over the pack's baseline
+// raw_emit's registers over the pack's baseline and context. One the hardware does not read keeps what pack states leave there
+// unless the pack varies it, so it never costs an extra.
 bool emitted(const std::string &key, const Stages &stages, const std::vector<uint32_t> &attributes, uint32_t blended,
              const PackRules &rules, std::map<uint32_t, uint32_t> &regs, std::string &why)
 {
@@ -293,9 +295,11 @@ bool emitted(const std::string &key, const Stages &stages, const std::vector<uin
     if (!emitState(fields, stages.emit(0), stages.emit(1), made, why, &blended) ||
         !emitVertexInput(fields, attributes, made, why))
         return false;
-    regs = rules.baseline;
+    regs = rules.context;
+    for (const auto &[m, v] : rules.baseline)
+        regs[m] = v;
     for (const EmitRegister &r : made)
-        if (rules.varying.count(r.method))
+        if (r.read || rules.varying.count(r.method))
             regs[r.method] = r.value;
     return true;
 }
@@ -336,8 +340,8 @@ Compiler::Outcome directRecord(const NmbDirectState &state, const DirectNvk &nvk
         return Compiler::Outcome::Refused;
     }
     Stages stages(nvk, device);
-    if (!stages.compile(state, why))
-        return Compiler::Outcome::Failed;
+    if (const Compiler::Outcome compiled = stages.compile(state, why); compiled != Compiler::Outcome::Made)
+        return compiled;
     RecordParts parts;
     parts.programs[0] = &stages.program(0);
     parts.programs[1] = &stages.program(1);

@@ -35,7 +35,7 @@ bool made(const NmbDirectState *state, void *ctx)
 }  // namespace
 
 Direct::Direct(const Pack &pack)
-    : rules_(PackRules::of(pack, {})),
+    : rules_(PackRules::of(pack)),
       nvk_(native_bridge_metal_nvk_symbol ? DirectNvk::find(native_bridge_metal_nvk_symbol) : DirectNvk{})
 {}
 

@@ -33,6 +33,8 @@ struct PackRules {
     std::vector<std::array<uint32_t, 8>> samplers;  // the pack's constexpr sampler headers
 
     static PackRules of(const Pack &pack, std::map<uint32_t, uint32_t> context);
+    // The context the pack's init template leaves: its 3D methods that take no address
+    static PackRules of(const Pack &pack);
 };
 
 struct RuntimeRecord {
