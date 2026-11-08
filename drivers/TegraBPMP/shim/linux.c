@@ -94,16 +94,16 @@ void memcpy_toio(volatile void *dst, const void *src, size_t n)
 	volatile u8 *d = dst;
 	const u8 *s = src;
 	while (n && ((uintptr_t)d & 3)) {
-		*d++ = *s++;
+		switch_mmio_write8(d++, 0, *s++);
 		n--;
 	}
 	for (; n >= 4; n -= 4, d += 4, s += 4) {
 		u32 w = 0;
 		memcpy(&w, s, 4);
-		*(volatile u32 *)d = w;
+		switch_mmio_write32(d, 0, w);
 	}
 	while (n--)
-		*d++ = *s++;
+		switch_mmio_write8(d++, 0, *s++);
 }
 
 void memcpy_fromio(void *dst, const volatile void *src, size_t n)
@@ -111,15 +111,15 @@ void memcpy_fromio(void *dst, const volatile void *src, size_t n)
 	u8 *d = dst;
 	const volatile u8 *s = src;
 	while (n && ((uintptr_t)s & 3)) {
-		*d++ = *s++;
+		*d++ = switch_mmio_read8(s++, 0);
 		n--;
 	}
 	for (; n >= 4; n -= 4, d += 4, s += 4) {
-		u32 w = *(const volatile u32 *)s;
+		u32 w = switch_mmio_read32(s, 0);
 		memcpy(d, &w, 4);
 	}
 	while (n--)
-		*d++ = *s++;
+		*d++ = switch_mmio_read8(s++, 0);
 }
 
 void *of_iomap(struct device_node *np, int index)

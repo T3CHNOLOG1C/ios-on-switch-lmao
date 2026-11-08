@@ -17,12 +17,12 @@
 #include <string.h>
 #include <sys/kdebug.h>
 #include "include/nvxnu.h"
+#include "../../../kits/SwitchMMIO/SwitchMMIOKernel.h"
 #include "../../ArmGIC/SwitchInterrupts.h"
 #include "../../TegraDisplayFlip/SwitchFrameTimeline.h"
 
 extern "C" {
 vm_offset_t phystokv(uint64_t pa);  // physical aperture (osfmk/arm64/arm_vm_init.c)
-vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 // NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
 boolean_t ml_get_interrupts_enabled(void);
 boolean_t switch_ram_gpu_pool(uint64_t *start, uint64_t *end);
@@ -190,13 +190,13 @@ volatile uint32_t gWakeSeq, gIrqRuns;
 uint64_t gIrqPasses[2];  // by line: stall, nonstall
 volatile int gIrqActive, gGpuOff;
 uint32_t gUnhandled;
-volatile uint32_t *gPmc;
+volatile uint8_t *gPmc;
 IOWorkLoop *gIrqLoop;
 IOInterruptEventSource *gIrqSources[2];
 
 uint32_t pmc(uint32_t offset)
 {
-	return gPmc[offset / 4];
+	return switch_mmio_read32(gPmc, offset);
 }
 
 // An enabled PMC tree with something pending drives its GIC line. A powered-down GPU has none (and no PMC to read).
@@ -361,7 +361,7 @@ extern "C" void nvxnu_irq_start(void)
 {
 	if (__atomic_load_n(&gIrqActive, __ATOMIC_ACQUIRE))
 		return;
-	gPmc = reinterpret_cast<volatile uint32_t *>(ml_io_map(kGpuBar0, 0x1000));
+	gPmc = switch_mmio_map(kGpuBar0, 0x1000);
 	gIrqLoop = IOWorkLoop::workLoop();
 	for (int i = 0; i < 2; i++) {
 		IOService *nub = switch_interrupt_nub(kGpuIntids[i], false);

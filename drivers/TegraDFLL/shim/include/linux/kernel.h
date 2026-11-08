@@ -15,6 +15,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "../../../../../kits/SwitchLinux/SwitchLinuxLock.h"
+#include "../../../../../kits/SwitchMMIO/SwitchMMIO.h"
 
 /* config: what the L4T build enables here */
 #define CONFIG_ARCH_TEGRA 1
@@ -216,22 +217,13 @@ static inline s64 ktime_to_ms(const ktime_t kt) { return kt / NSEC_PER_MSEC; }
 static inline s64 ktime_us_delta(const ktime_t later, const ktime_t earlier) { return ktime_to_us(later - earlier); }
 static inline s64 ktime_ms_delta(const ktime_t later, const ktime_t earlier) { return ktime_to_ms(later - earlier); }
 
-/* MMIO, with arm64 asm/io.h ordering */
-static inline u32 __raw_readl(const volatile void __iomem *addr) { return *(const volatile u32 *)addr; }
-static inline void __raw_writel(u32 val, volatile void __iomem *addr) { *(volatile u32 *)addr = val; }
+/* MMIO: kits/SwitchMMIO (load-acquire reads for the A57's erratum 832075, which also order what follows) */
+#define __raw_readl(a) switch_mmio_read32((const volatile u8 *)(a), 0)
+#define __raw_writel(v, a) switch_mmio_write32((volatile u8 *)(a), 0, (v))
 #define readl_relaxed(a) __raw_readl(a)
 #define writel_relaxed(v, a) __raw_writel((v), (a))
-static inline u32 readl(const volatile void __iomem *addr)
-{
-	u32 v = __raw_readl(addr);
-	__asm__ __volatile__("dmb oshld" ::: "memory");
-	return v;
-}
-static inline void writel(u32 val, volatile void __iomem *addr)
-{
-	__asm__ __volatile__("dmb oshst" ::: "memory");
-	__raw_writel(val, addr);
-}
+#define readl(a) __raw_readl(a)
+#define writel(v, a) switch_mmio_write32_publish((volatile u8 *)(a), 0, (v))
 
 /* spinlocks: kits/SwitchLinux */
 typedef switch_linux_spinlock spinlock_t;

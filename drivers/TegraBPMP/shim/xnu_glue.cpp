@@ -20,8 +20,7 @@
 #include <IOKit/IOFilterInterruptEventSource.h>
 #include "../../ArmGIC/SwitchInterrupts.h"
 #include "include/bpxnu.h"
-
-extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
+#include "../../../kits/SwitchMMIO/SwitchMMIOKernel.h"
 
 namespace
 {
@@ -51,18 +50,18 @@ Doorbell gDoorbells[kDoorbells];
 volatile uint8_t *lic()
 {
 	if (!gLic)
-		gLic = reinterpret_cast<volatile uint8_t *>(ml_io_map(kLicPA, 0x1000));
+		gLic = switch_mmio_map(kLicPA, 0x1000);
 	return gLic;
 }
 
 inline uint32_t licRead(uint32_t offset)
 {
-	return *reinterpret_cast<volatile uint32_t *>(lic() + offset);
+	return switch_mmio_read32(lic(), offset);
 }
 
 inline void licWrite(uint32_t offset, uint32_t value)
 {
-	*reinterpret_cast<volatile uint32_t *>(lic() + offset) = value;
+	switch_mmio_write32(lic(), offset, value);
 }
 }  // namespace
 

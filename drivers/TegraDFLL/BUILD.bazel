@@ -38,7 +38,10 @@ kernel_driver(
     ],
     c_copts = DFLL_C_FLAGS + LINUX_RELAXATIONS,
     c_recipe = ":freestanding_c",
-    hdr_deps = ["kits/SwitchLinux"],
+    hdr_deps = [
+        "kits/SwitchLinux",
+        "kits/SwitchMMIO",
+    ],
     object_names = "path",
 )
 
@@ -54,6 +57,7 @@ kernel_driver(
     hdr_deps = [
         "drivers/TegraI2C",
         "kits/SwitchLinux",
+        "kits/SwitchMMIO",
     ],
     object_names = "path",
 )

@@ -11,6 +11,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "../nvxnu.h"
+#include "../../../../../kits/SwitchMMIO/SwitchMMIO.h"
 
 #define CONFIG_NOUVEAU_PLATFORM_DRIVER 1
 #define CONFIG_ARCH_TEGRA 1
@@ -1306,25 +1307,20 @@ void __iomem *ioremap(phys_addr_t pa, size_t size);
 void __iomem *ioremap_wc(phys_addr_t pa, size_t size);
 void iounmap(volatile void __iomem *va);
 
+/* kits/SwitchMMIO's load-acquire: the A57's erratum 832075 workaround, and the ordering Linux's trailing dma_rmb gave. */
 static inline u8 ioread8(const volatile void __iomem *p)
 {
-	u8 v = *(const volatile u8 *)p;
-	dma_rmb();
-	return v;
+	return switch_mmio_read8((const volatile u8 *)p, 0);
 }
 
 static inline u16 ioread16(const volatile void __iomem *p)
 {
-	u16 v = *(const volatile u16 *)p;
-	dma_rmb();
-	return v;
+	return switch_mmio_read16((const volatile u8 *)p, 0);
 }
 
 static inline u32 ioread32(const volatile void __iomem *p)
 {
-	u32 v = *(const volatile u32 *)p;
-	dma_rmb();
-	return v;
+	return switch_mmio_read32((const volatile u8 *)p, 0);
 }
 
 static inline void iowrite8(u8 v, volatile void __iomem *p)
@@ -1336,19 +1332,18 @@ static inline void iowrite8(u8 v, volatile void __iomem *p)
 static inline void iowrite16(u16 v, volatile void __iomem *p)
 {
 	dma_wmb();
-	*(volatile u16 *)p = v;
+	switch_mmio_write16((volatile u8 *)p, 0, v);
 }
 
 static inline void iowrite32(u32 v, volatile void __iomem *p)
 {
-	dma_wmb();
-	*(volatile u32 *)p = v;
+	switch_mmio_write32_publish((volatile u8 *)p, 0, v);
 }
 
 #define readl(p) ioread32(p)
 #define writel(v, p) iowrite32(v, p)
-#define readl_relaxed(p) (*(const volatile u32 *)(p))
-#define writel_relaxed(v, p) (*(volatile u32 *)(p) = (v))
+#define readl_relaxed(p) switch_mmio_read32((const volatile u8 *)(p), 0)
+#define writel_relaxed(v, p) switch_mmio_write32((volatile u8 *)(p), 0, (v))
 #define ioread16_native ioread16
 #define iowrite16_native iowrite16
 #define ioread32_native ioread32

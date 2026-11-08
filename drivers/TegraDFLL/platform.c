@@ -48,6 +48,7 @@
 #include <soc/tegra/fuse.h>
 #include "linux/drivers/soc/tegra/fuse/fuse.h"
 #include "../TegraI2C/TegraI2C.h"
+#include "../../kits/SwitchMMIO/SwitchMMIO.h"
 
 #define CAR_PA 0x60006000ULL
 #define FUSE_PA 0x7000f800ULL
@@ -108,20 +109,6 @@ static volatile u8 *car, *fuse, *apbmisc, *i2c5, *dfll;
 static int init_err = 1; /* 1: not tried yet */
 static char init_why[96];
 static u32 hidrev;
-
-static u32 rd(const volatile u8 *base, u32 off)
-{
-	return *(volatile u32 *)(base + off);
-}
-
-static void wr(volatile u8 *base, u32 off, u32 v)
-{
-	__asm__ __volatile__("dmb oshst" ::: "memory");
-	*(volatile u32 *)(base + off) = v;
-	(void)*(volatile u32
-			*)(base +
-			   off); /* post the write before any delay that follows (L4T fence_udelay) */
-}
 
 static int fail(char *why, size_t len, int err, const char *fmt, ...) __printf(4, 5);
 
@@ -279,9 +266,10 @@ int tdfll_platform_vout_write(u8 code)
 
 static void dvco_reset_set(bool assert)
 {
-	u32 v = rd(car, RST_DFLL_DVCO);
+	u32 v = switch_mmio_read32(car, RST_DFLL_DVCO);
 
-	wr(car, RST_DFLL_DVCO, assert ? (v | DVCO_RESET) : (v & ~DVCO_RESET));
+	switch_mmio_write32_flush(car, RST_DFLL_DVCO,
+				  assert ? (v | DVCO_RESET) : (v & ~DVCO_RESET));
 }
 
 static struct reset_control dvco_reset = {.name = "dvco", .set = dvco_reset_set};
@@ -302,7 +290,8 @@ struct tegra_sku_info tegra_sku_info = {
 
 u32 tegra_fuse_read_early(unsigned int offset)
 {
-	return rd(fuse, FUSE_CACHE + offset); /* fuse-tegra30.c tegra30_fuse_read_early */
+	return switch_mmio_read32(fuse,
+				  FUSE_CACHE + offset); /* fuse-tegra30.c tegra30_fuse_read_early */
 }
 
 bool tegra_fuse_read_spare(unsigned int spare)
@@ -313,7 +302,7 @@ bool tegra_fuse_read_spare(unsigned int spare)
 
 u32 tegra_read_chipid(void)
 {
-	return rd(apbmisc, 4);
+	return switch_mmio_read32(apbmisc, 4);
 }
 
 /* tegra_fuse_get_subrevision's letter (1 p, 2 q, 3 r), 0 for none. */
@@ -359,7 +348,7 @@ static void init_revision(void)
 	major = tegra_hidrev_get_majorrev(hidrev);
 	minor = tegra_hidrev_get_minorrev(hidrev);
 	if (major) {
-		subrev = rd(fuse, FUSE_CACHE + FUSE_OPT_SUBREVISION_OFF) &
+		subrev = switch_mmio_read32(fuse, FUSE_CACHE + FUSE_OPT_SUBREVISION_OFF) &
 			 0xf; /* tegra_fuse_get_subrevision */
 		sub_type = subrev_type(subrev);
 		for (pass = sub_type ? 0 : 1; pass < 2 && revision == TEGRA_REVISION_UNKNOWN;
@@ -404,11 +393,11 @@ static struct clk_hw pllp_hw = {.init = &pllp_init};
 static unsigned long pllx_recalc(struct clk_hw *hw, unsigned long parent_rate)
 {
 	static const u8 qlin[15] = {1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 12, 16, 20, 24, 32};
-	u32 base = rd(car, PLLX_BASE);
+	u32 base = switch_mmio_read32(car, PLLX_BASE);
 	u32 m = base & 0xff;
 	u32 n = (base >> 8) & 0xff;
 	u32 pcode = (base >> 20) & 0x1f;
-	unsigned long ref = 38400000UL >> ((rd(car, OSC_CTRL) >> 26) & 3);
+	unsigned long ref = 38400000UL >> ((switch_mmio_read32(car, OSC_CTRL) >> 26) & 3);
 
 	if (!(base & PLL_ENABLE))
 		return 0;
@@ -425,13 +414,13 @@ static struct clk_hw pllx_hw = {.init = &pllx_init};
 
 bool tdfll_platform_pllx_locked(void)
 {
-	return (rd(car, PLLX_BASE) & (PLL_ENABLE | PLL_BYPASS | PLL_LOCK)) ==
+	return (switch_mmio_read32(car, PLLX_BASE) & (PLL_ENABLE | PLL_BYPASS | PLL_LOCK)) ==
 	       (PLL_ENABLE | PLL_LOCK);
 }
 
 static unsigned long clkm_rate(void)
 {
-	return 38400000UL / (((rd(car, SPARE_REG0) >> 2) & 3) + 1);
+	return 38400000UL / (((switch_mmio_read32(car, SPARE_REG0) >> 2) & 3) + 1);
 }
 
 /* dfll_soc / dfll_ref: one CAR source each, one shared gate (W27, refcounted as L4T's periph_clk_enb_refcnt) */
@@ -447,11 +436,11 @@ static int cl_dvfs_enable(struct clk_hw *hw)
 	/* L4T clk-periph-gate.c clk_periph_enable (64-99): gate on, then release the reset if it is held */
 	if (cl_dvfs_gate_refcnt++)
 		return 0;
-	wr(car, CLK_ENB_W_SET, W_DVFS);
+	switch_mmio_write32_flush(car, CLK_ENB_W_SET, W_DVFS);
 	udelay(2);
-	if (rd(car, RST_DEVICES_W) & W_DVFS) {
+	if (switch_mmio_read32(car, RST_DEVICES_W) & W_DVFS) {
 		udelay(5);
-		wr(car, RST_DEV_W_CLR, W_DVFS);
+		switch_mmio_write32_flush(car, RST_DEV_W_CLR, W_DVFS);
 		udelay(2);
 	}
 	return 0;
@@ -475,7 +464,7 @@ static unsigned long pllp_clkm_rate(u32 src)
 
 static unsigned long cl_dvfs_recalc(struct clk_hw *hw, unsigned long parent_rate)
 {
-	u32 v = rd(car, container_of(hw, struct cl_dvfs_clk, hw)->source);
+	u32 v = switch_mmio_read32(car, container_of(hw, struct cl_dvfs_clk, hw)->source);
 	u32 src = v >> 30;
 	unsigned long parent = pllp_clkm_rate(src);
 
@@ -498,7 +487,8 @@ static struct cl_dvfs_clk dfll_ref_clk = {.hw = {.init = &dfll_ref_init},
  * running (its integrated I2C master divides this clock, clk-dfll.c dfll_init_i2c_if) and never gates it. */
 static bool i2c5_running(void)
 {
-	return ((rd(car, CLK_OUT_ENB_H) & H_I2C5) && !(rd(car, RST_DEVICES_H) & H_I2C5)) != 0;
+	return ((switch_mmio_read32(car, CLK_OUT_ENB_H) & H_I2C5) &&
+		!(switch_mmio_read32(car, RST_DEVICES_H) & H_I2C5)) != 0;
 }
 
 static int i2c5_enable(struct clk_hw *hw)
@@ -506,13 +496,13 @@ static int i2c5_enable(struct clk_hw *hw)
 	if (i2c5_running())
 		return 0;
 	printk("I2C5 is not clocked (CLK_OUT_ENB_H %#x, RST_DEVICES_H %#x)\n",
-	       rd(car, CLK_OUT_ENB_H), rd(car, RST_DEVICES_H));
+	       switch_mmio_read32(car, CLK_OUT_ENB_H), switch_mmio_read32(car, RST_DEVICES_H));
 	return -ENODEV;
 }
 
 static unsigned long i2c5_recalc(struct clk_hw *hw, unsigned long parent_rate)
 {
-	u32 v = rd(car, CLK_SOURCE_I2C5);
+	u32 v = switch_mmio_read32(car, CLK_SOURCE_I2C5);
 	u32 src = v >> 30;
 	unsigned long parent = pllp_clkm_rate(src);
 
@@ -531,7 +521,7 @@ static const char *const cclk_g_parents[] = {
 
 static u8 cclk_g_get_parent(struct clk_hw *hw)
 {
-	u32 val = rd(car, CCLKG_BURST_POLICY);
+	u32 val = switch_mmio_read32(car, CCLKG_BURST_POLICY);
 	u32 state = val & (0xfu << 28);
 
 	BUG_ON(state != SUPER_STATE_RUN_BIT && state != SUPER_STATE_IDLE_BIT);
@@ -540,14 +530,14 @@ static u8 cclk_g_get_parent(struct clk_hw *hw)
 
 static int cclk_g_set_parent(struct clk_hw *hw, u8 index)
 {
-	u32 val = rd(car, CCLKG_BURST_POLICY);
+	u32 val = switch_mmio_read32(car, CCLKG_BURST_POLICY);
 	u32 state = val & (0xfu << 28);
 	unsigned int shift = state == SUPER_STATE_IDLE_BIT ? 0 : 4;
 
 	BUG_ON(state != SUPER_STATE_RUN_BIT && state != SUPER_STATE_IDLE_BIT);
 	val &= ~(0xfu << shift);
 	val |= (u32)(index & 0xf) << shift;
-	wr(car, CCLKG_BURST_POLICY, val);
+	switch_mmio_write32_flush(car, CCLKG_BURST_POLICY, val);
 	udelay(2);
 	return 0;
 }
@@ -565,9 +555,9 @@ static struct clk_hw cclk_g_hw = {.init = &cclk_g_init};
 
 int tdfll_platform_cpu_on_pllx(char *why, size_t len)
 {
-	u32 policy = rd(car, CCLKG_BURST_POLICY);
-	u32 alias = rd(car, CCLK_BURST_POLICY);
-	u32 div = rd(car, SUPER_CCLK_DIVIDER);
+	u32 policy = switch_mmio_read32(car, CCLKG_BURST_POLICY);
+	u32 alias = switch_mmio_read32(car, CCLK_BURST_POLICY);
+	u32 div = switch_mmio_read32(car, SUPER_CCLK_DIVIDER);
 
 	if (policy != alias) {
 		return fail(why, len, -ENODEV, "CCLKG_BURST_POLICY %#x != CCLK_BURST_POLICY %#x",
@@ -583,7 +573,7 @@ int tdfll_platform_cpu_on_pllx(char *why, size_t len)
 	}
 	if (!tdfll_platform_pllx_locked()) {
 		return fail(why, len, -EBUSY, "PLLX is not locked (PLLX_BASE %#x)",
-			    rd(car, PLLX_BASE));
+			    switch_mmio_read32(car, PLLX_BASE));
 	}
 	if ((div & BIT(31)) && ((div >> 8) & 0xff) != (div & 0xff)) {
 		return fail(why, len, -EBUSY, "the CCLK divider is in use (SUPER_CCLK_DIVIDER %#x)",
@@ -596,18 +586,18 @@ int tdfll_platform_i2c5_shareable(char *why, size_t len)
 {
 	if (!i2c5_running())
 		return fail(why, len, -ENODEV, "I2C5 is not clocked");
-	if (!(rd(i2c5, I2C_CNFG) & I2C_CNFG_MULTI_MASTER_MODE)) {
+	if (!(switch_mmio_read32(i2c5, I2C_CNFG) & I2C_CNFG_MULTI_MASTER_MODE)) {
 		return fail(why, len, -EBUSY,
 			    "I2C5 is not in multi-master mode (I2C_CNFG %#x), the DFLL would "
 			    "collide with it",
-			    rd(i2c5, I2C_CNFG));
+			    switch_mmio_read32(i2c5, I2C_CNFG));
 	}
 	return 0;
 }
 
 u32 tdfll_platform_dfll_readl(u32 offset)
 {
-	return rd(dfll, offset);
+	return switch_mmio_read32(dfll, offset);
 }
 
 /* bring-up: no CPU clock or VDD_CPU change */
@@ -628,8 +618,9 @@ static int platform_init(char *why, size_t len)
 		return fail(why, len, -ENOMEM, "cannot map CAR/FUSE/APB_MISC/I2C5/DFLL");
 
 	/* fuses: identity, speedo (vendored speedo-tegra210.c, as fuse-tegra30.c tegra30_fuse_init runs it) */
-	wr(car, CLK_ENB_H_SET, H_FUSE);
-	wr(car, MISC_CLK_ENB, rd(car, MISC_CLK_ENB) | MISC_FUSE_VISIBLE);
+	switch_mmio_write32_flush(car, CLK_ENB_H_SET, H_FUSE);
+	switch_mmio_write32_flush(car, MISC_CLK_ENB,
+				  switch_mmio_read32(car, MISC_CLK_ENB) | MISC_FUSE_VISIBLE);
 	init_revision();
 	if (tegra_sku_info.id_and_rev != TEGRA210B01_REVISION_A01)
 		return fail(why, len, -ENODEV, "not a T210B01 A01 (HIDREV %#x)", hidrev);
@@ -638,7 +629,8 @@ static int platform_init(char *why, size_t len)
 		return fail(why, len, -ENODEV, "CPU speedo not fused (value %d, process %d)",
 			    tegra_sku_info.cpu_speedo_value, tegra_sku_info.cpu_process_id);
 	}
-	vdd_cpu.client.addr = (rd(fuse, FUSE_ODM28_B01) & 1) ? MAX77812_PHASE211 : MAX77812_PHASE31;
+	vdd_cpu.client.addr = (switch_mmio_read32(fuse, FUSE_ODM28_B01) & 1) ? MAX77812_PHASE211
+									     : MAX77812_PHASE31;
 
 	/* VDD_CPU's PMIC must answer where the fuse says it is: the DFLL will address it blindly. Nothing above has
 	 * changed any state, so a transient failure (lost arbitration, timeout) is -EAGAIN and the next init retries. */
@@ -653,26 +645,26 @@ static int platform_init(char *why, size_t len)
 	if (!i2c5_running() || !i2c5_recalc(&i2c5_hw, 0)) {
 		return fail(why, len, -ENODEV,
 			    "I2C5 clock is off or unreadable (CLK_SOURCE_I2C5 %#x)",
-			    rd(car, CLK_SOURCE_I2C5));
+			    switch_mmio_read32(car, CLK_SOURCE_I2C5));
 	}
 
 	/* L4T init table: dfll_soc and dfll_ref from PLL_P at 51 MHz, enabled for good. Only change the dividers of an
 	 * idle DFLL (CTRL mode 0 = disabled), and read it only once its clock runs. */
 	cl_dvfs_enable(&dfll_soc_clk.hw);
-	if (rd(dfll, 0x00) & 3) {
+	if (switch_mmio_read32(dfll, 0x00) & 3) {
 		return fail(why, len, -EBUSY, "the DFLL is already running (DFLL_CTRL %#x)",
-			    rd(dfll, 0x00));
+			    switch_mmio_read32(dfll, 0x00));
 	}
-	wr(car, CLK_SOURCE_DFLL_SOC, (SRC_PLLP << 30) | DFLL_SRC_51MHZ);
-	wr(car, CLK_SOURCE_DFLL_REF, (SRC_PLLP << 30) | DFLL_SRC_51MHZ);
+	switch_mmio_write32_flush(car, CLK_SOURCE_DFLL_SOC, (SRC_PLLP << 30) | DFLL_SRC_51MHZ);
+	switch_mmio_write32_flush(car, CLK_SOURCE_DFLL_REF, (SRC_PLLP << 30) | DFLL_SRC_51MHZ);
 	udelay(2);
 
 	/* L4T's cclk_g mux BUG()s on a super clock state other than RUN or IDLE: refuse here instead of panicking */
-	if ((rd(car, CCLKG_BURST_POLICY) & (0xfu << 28)) != SUPER_STATE_RUN_BIT &&
-	    (rd(car, CCLKG_BURST_POLICY) & (0xfu << 28)) != SUPER_STATE_IDLE_BIT) {
+	if ((switch_mmio_read32(car, CCLKG_BURST_POLICY) & (0xfu << 28)) != SUPER_STATE_RUN_BIT &&
+	    (switch_mmio_read32(car, CCLKG_BURST_POLICY) & (0xfu << 28)) != SUPER_STATE_IDLE_BIT) {
 		return fail(why, len, -EBUSY,
 			    "CCLKG_BURST_POLICY %#x is in neither RUN nor IDLE state",
-			    rd(car, CCLKG_BURST_POLICY));
+			    switch_mmio_read32(car, CCLKG_BURST_POLICY));
 	}
 	for (i = 0; i < ARRAY_SIZE(hws); i++) {
 		if (IS_ERR(clk_register(NULL, hws[i]))) {
@@ -685,7 +677,7 @@ static int platform_init(char *why, size_t len)
 	if (clk_prepare_enable(cclk_g_hw.clk)) {
 		return fail(why, len, -ENODEV,
 			    "cclk_g could not be enabled (CCLKG_BURST_POLICY %#x)",
-			    rd(car, CCLKG_BURST_POLICY));
+			    switch_mmio_read32(car, CCLKG_BURST_POLICY));
 	}
 	return 0;
 }
@@ -696,21 +688,22 @@ int tdfll_platform_resume(char *why, size_t len)
 {
 	if (init_err)
 		return 0;
-	wr(car, CLK_ENB_W_SET, W_DVFS);
+	switch_mmio_write32_flush(car, CLK_ENB_W_SET, W_DVFS);
 	udelay(2);
-	if (rd(car, RST_DEVICES_W) & W_DVFS) {
+	if (switch_mmio_read32(car, RST_DEVICES_W) & W_DVFS) {
 		udelay(5);
-		wr(car, RST_DEV_W_CLR, W_DVFS);
+		switch_mmio_write32_flush(car, RST_DEV_W_CLR, W_DVFS);
 		udelay(2);
 	}
-	wr(car, CLK_SOURCE_DFLL_SOC, (SRC_PLLP << 30) | DFLL_SRC_51MHZ);
-	wr(car, CLK_SOURCE_DFLL_REF, (SRC_PLLP << 30) | DFLL_SRC_51MHZ);
+	switch_mmio_write32_flush(car, CLK_SOURCE_DFLL_SOC, (SRC_PLLP << 30) | DFLL_SRC_51MHZ);
+	switch_mmio_write32_flush(car, CLK_SOURCE_DFLL_REF, (SRC_PLLP << 30) | DFLL_SRC_51MHZ);
 	udelay(2);
 	if (!i2c5_running() || !i2c5_recalc(&i2c5_hw, 0)) {
 		return fail(
 			why, len, -ENODEV,
 			"I2C5 is not clocked after SC7 (CLK_SOURCE_I2C5 %#x, CLK_OUT_ENB_H %#x)",
-			rd(car, CLK_SOURCE_I2C5), rd(car, CLK_OUT_ENB_H));
+			switch_mmio_read32(car, CLK_SOURCE_I2C5),
+			switch_mmio_read32(car, CLK_OUT_ENB_H));
 	}
 	return 0;
 }
