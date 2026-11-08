@@ -1989,9 +1989,13 @@ IOReturn AGXDeviceUserClient::mapToken(const TegraGM20BAbiMap *in, TegraGM20BAbi
 	return kIOReturnSuccess;
 }
 
+// IOKit hands a second Map of the same token (no kIOMapUnique) the first one's IOMemoryMap, retained: every channel's Map of
+// the connection's one fence page, which NVK and the raw path share, is the same map. Unmap drops this caller's reference and
+// tears the map down only when no other Map holds it, or one channel's teardown unmaps every other channel's fence word.
 IOReturn AGXDeviceUserClient::unmapToken(const TegraGM20BAbiUnmap *in)
 {
 	Mapping *found = nullptr;
+	bool shared = false;
 	IOLockLock(lock_);
 	for (Mapping **p = &maps_; *p; p = &(*p)->next) {
 		if ((*p)->token == in->token && (*p)->address == in->address) {
@@ -2000,10 +2004,13 @@ IOReturn AGXDeviceUserClient::unmapToken(const TegraGM20BAbiUnmap *in)
 			break;
 		}
 	}
+	for (const Mapping *m = maps_; found && m && !shared; m = m->next)
+		shared = m->map == found->map;
 	IOLockUnlock(lock_);
 	if (!found)
 		return kIOReturnBadArgument;
-	found->map->unmap();
+	if (!shared)
+		found->map->unmap();
 	found->map->release();
 	IODelete(found, Mapping, 1);
 	return kIOReturnSuccess;
