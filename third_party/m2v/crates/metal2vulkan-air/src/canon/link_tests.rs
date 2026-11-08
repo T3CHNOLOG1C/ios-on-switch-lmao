@@ -233,6 +233,7 @@ fn linked(name: &str, module: Module, abi: AirAbi) -> LinkedModule {
     LinkedModule {
         functions: vec![LinkedName {
             name: name.as_bytes().into(),
+            symbol: name.as_bytes().into(),
             constants: Ok(BTreeMap::new()),
             handle: None,
         }],
@@ -314,6 +315,25 @@ fn an_unresolved_reference_needs_the_linked_function() {
         symbol: DiagName::new("g"),
     });
     assert_eq!(link(&[callee("f", &["g"])]).unwrap_err(), nested);
+}
+
+/// A function linked under its specialized name (`MTLFunctionDescriptor.specializedName`;
+/// RenderBox links each icon effect as `custom_fn`) resolves the references to that name, and its
+/// module's function of its own name defines it. Its own name resolves nothing.
+#[test]
+fn a_function_linked_under_its_specialized_name_resolves_that_name() {
+    let mut renamed = callee("effect_v1", &[]);
+    renamed.functions[0].name = b"f".as_slice().into();
+    let e = link(&[renamed]).unwrap_or_else(|e| panic!("{e}"));
+    let t = text(&e);
+    assert!(!t.contains("call "), "{t}");
+    assert!(t.contains("mul i32"), "{t}");
+    assert_eq!(
+        link(&[callee("effect_v1", &[])]).unwrap_err(),
+        Error::NeedsInput(MissingInput::LinkedFunction {
+            symbol: DiagName::new("f"),
+        })
+    );
 }
 
 /// A call that SCCP deletes needs nothing linked, and supplying functions nothing references

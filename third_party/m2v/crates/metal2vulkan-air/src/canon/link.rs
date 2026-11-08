@@ -3,7 +3,8 @@
 //! A module calls a `[[visible]]` function it does not define through a stub declaration, which
 //! `!air.visible_function_references` maps to the function's name, the Metal linker's symbol. A
 //! pipeline supplies the functions it links (`MTLLinkedFunctions`) as [`LinkedModule`]s. This step,
-//! run right after entry selection, resolves every stub whose name one linked function has: that
+//! run right after entry selection, resolves every stub whose name one linked function is linked
+//! under (its specialized name, `MTLFunctionDescriptor.specializedName`, or else its own): that
 //! function is imported into the module with everything it reaches (its helpers, globals,
 //! constants, types, and declarations; its own stubs are resolved in turn, against the same linked
 //! functions), and every direct call to the stub is redirected to the imported definition, which
@@ -70,12 +71,16 @@ pub struct LinkedModule {
 }
 
 /// One function the pipeline links: the name it links it under (its Metal function name, which a
-/// visible-function reference names) and the function-constant values it was specialized with by
-/// index, or why those values do not apply to its module (refused only at a surviving call).
+/// visible-function reference names), the function of its module that defines it, and the
+/// function-constant values it was specialized with by index, or why those values do not apply to
+/// its module (refused only at a surviving call).
 #[derive(Clone, Debug)]
 pub struct LinkedName {
-    /// The Metal function name it links under.
+    /// The Metal function name it links under: the specialized name it was made with, or else its
+    /// module's function's name.
     pub name: Box<[u8]>,
+    /// The name of the module's function that defines it (`MTLFunctionDescriptor.name`).
+    pub symbol: Box<[u8]>,
     /// The function-constant values it was specialized with, by index, or why they do not apply
     /// to its module.
     pub constants: Result<BTreeMap<u32, ConstValue>, Error>,
@@ -517,7 +522,7 @@ fn link_in(
                         Ok(def) => Ok(def),
                         Err(error) => Err(Unimported {
                             error,
-                            ty: source_type(l, &f.name, m)?.map(|t| (i, t)),
+                            ty: source_type(l, &f.symbol, m)?.map(|t| (i, t)),
                         }),
                     };
                     m.charge(std::mem::size_of::<Candidate>() + f.name.len())?;
@@ -784,6 +789,7 @@ fn plan(
     held: &mut usize,
 ) -> Result<Result<Plan, Error>, Error> {
     let name = &*f.name;
+    let symbol = &*f.symbol;
     if l.abi.linkage_signature.is_some() {
         return Ok(Err(not_implemented(name, "air.signature")));
     }
@@ -810,7 +816,7 @@ fn plan(
         l.module
             .func(v.func)
             .and_then(|f| l.module.symbols().get(f.name))
-            == Some(name)
+            == Some(symbol)
     });
     let Some(func) = visible.map(|v| v.func) else {
         return Ok(Err(link_problem(name, LinkProblem::NotVisible)));
