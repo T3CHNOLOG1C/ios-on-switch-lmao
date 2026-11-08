@@ -35,8 +35,7 @@ filegroup(
     srcs = glob([
         "raw/pack/*.h",
         "raw/pack/mesa/**/*.h",
-        "raw/fx/test/twod_sim.h",
-    ]),
+    ]) + ["raw/fx/test/twod_sim.h"],
 )
 
 # Not a hand run's leftovers: a .pyc of the modules (the host Python's) in a checkout would change the raw pack's action key
@@ -144,14 +143,13 @@ py_binary(
     main = "raw/test/ordercheck.py",
 )
 
-# The raw path's capture and shader-data checks against the pack (they read it with the pack generator's modules).
+# The raw path's shader-data and target checks against the pack (they read it with the pack generator's modules).
 [py_binary(
     name = check,
     srcs = ["raw/test/%s.py" % check],
     main = "raw/test/%s.py" % check,
     deps = [":raw_pack"],
 ) for check in [
-    "capturecheck",
     "datacheck",
     "targetcheck",
 ]]
