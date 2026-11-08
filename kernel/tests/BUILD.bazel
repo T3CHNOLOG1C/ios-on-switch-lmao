@@ -45,7 +45,7 @@
 #                            hw.optional.arm.FEAT_*, and its hook in both trees' commpage_init_arm_optional_features_isar0
 #   switch_spawn_test        <switch/spawn.h>: iOS 27's posix_spawn attribute block (xnu-13432's layout, 24B119's
 #                            libsystem_kernel offsets) read into the 12377 kernel's struct, its own size copied as
-#                            before, and the hook in 12377's posix_spawn
+#                            before, any other size refused, and the hook in 12377's posix_spawn
 #   switch_prefs_test        kernel/switch/boot/prefs.c takes keys out of plists CoreFoundation wrote and reads back
 #                            (binary, both count forms, wide references, damaged files; XML as the setup wrote it); no
 #                            boot-time setup in either tree or the 12377 port record sets SpringBoard's never-dim keys

@@ -1,9 +1,12 @@
 // <switch/spawn.h>: posix_spawn's attribute block from iOS 27's libsystem_kernel read into the 12377 kernel's struct
-// _posix_spawnattr, a block of the kernel's own size copied as before, and the hook in 12377's posix_spawn.
+// _posix_spawnattr, a block of the kernel's own size copied as before, any other size refused, and the hook in 12377's
+// posix_spawn.
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <cerrno>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <sstream>
@@ -133,6 +136,15 @@ TEST(SwitchSpawn, ThisKernelsOwnLayoutIsCopiedAsBefore)
     ASSERT_EQ(switch_spawn_copyin_attr(reinterpret_cast<user_addr_t>(own), sizeof(own), &psa, kPorts), 0);
 
     EXPECT_EQ(memcmp(&psa, own, kPorts), 0);
+}
+
+TEST(SwitchSpawn, AnUnknownLayoutIsRefused)
+{
+    uint8_t block[0x108] = {};
+    struct _posix_spawnattr psa = {};
+
+    EXPECT_EQ(switch_spawn_copyin_attr(reinterpret_cast<user_addr_t>(block), sizeof(block), &psa, kPorts), EINVAL);
+    EXPECT_EQ(switch_spawn_copyin_attr(reinterpret_cast<user_addr_t>(block), 0xf0, &psa, kPorts), EINVAL);
 }
 
 TEST(SwitchSpawn, PosixSpawnReadsTheAttributesThroughTheHook)

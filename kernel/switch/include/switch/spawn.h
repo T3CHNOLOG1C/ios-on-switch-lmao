@@ -2,8 +2,8 @@
 /*
  * posix_spawn(2)'s attribute block, read in the layout of the libsystem_kernel that sent it.
  *
- * Included by bsd/kern/kern_exec.c, after its own includes: struct _posix_spawnattr (sys/spawn_internal.h), copyin
- * and user_addr_t come from there.
+ * Included by bsd/kern/kern_exec.c, after its own includes: struct _posix_spawnattr (sys/spawn_internal.h), copyin,
+ * printf, EINVAL and user_addr_t come from there.
  */
 #ifndef SWITCH_SPAWN_H
 #define SWITCH_SPAWN_H
@@ -58,15 +58,24 @@ static inline void switch_spawn_attr_from_darwin27(struct _posix_spawnattr *psa,
     psa->psa_conclave_mem_limit = tail.conclave_mem_limit;
 }
 
-/* Fills psa up to its extension pointers (size bytes in this kernel's layout), as copyin(uaddr, psa, size) did. */
+/*
+ * Fills psa up to its extension pointers (size bytes in this kernel's layout), as copyin(uaddr, psa, size) did. A
+ * block of any other size is refused: read with the wrong offsets it would fail only later, in whatever its misread
+ * fields control.
+ */
 static inline int switch_spawn_copyin_attr(user_addr_t uaddr, uint64_t attr_size, struct _posix_spawnattr *psa,
                                            size_t size)
 {
     uint8_t darwin27[SWITCH_SPAWN_DARWIN27_PORTS];
     int error;
 
-    if (attr_size != SWITCH_SPAWN_DARWIN27_ATTR_SIZE) {
+    if (attr_size == sizeof(struct _posix_spawnattr)) {
         return copyin(uaddr, psa, size);
+    }
+    if (attr_size != SWITCH_SPAWN_DARWIN27_ATTR_SIZE) {
+        printf("posix_spawn: a %llu-byte attribute block, a layout this kernel does not know\n",
+               (unsigned long long)attr_size);
+        return EINVAL;
     }
     error = copyin(uaddr, darwin27, sizeof(darwin27));
     if (error == 0) {
