@@ -6,6 +6,10 @@ differs from the running one, or when /private/var/datamigrator/migrate exists: 
 forceMigrationOnNextReboot writes and removes once the migration has run. The deploy writes that sentinel when the
 overlay's /Applications changed, so the next boot registers the new bundles and drops the removed ones.
 
+From iOS 27 the migrator registers them only while lsd rebuilds its database ("no rebuild is in progress, so why is our
+migrator running?"), which an OS update starts by changing the build and a missing store starts as well. There a
+requested migration also removes LaunchServices' store, so the next boot rebuilds it as after an update.
+
 The kernel runs a migration once: its marker (MARKER) left from an earlier migration makes a sentinel it finds at boot
 read as a migration that never ended, which it deletes unrun. So a requested migration also removes the marker.
 
@@ -29,6 +33,8 @@ APPLICATIONS = 'overlay/Applications'
 STAGED = 'staged_system_apps'
 INSTALLED = 'containers/Bundle/Application'
 APP_STATES = 'installd/Library/MobileInstallation/BackedUpState/SystemAppInstallState.plist'
+LAUNCHSERVICES_STORES = 'mobile/Containers/Data/InternalDaemon/*/Library/Caches/com.apple.LaunchServices-*.csstore'
+REBUILDS_LAUNCHSERVICES_FROM = 27
 # MobileInstallation's state of an app its migration installs (24B119 marks Fitness 2, uninstalled, and Vision Pro 6).
 WANTED = 1
 MOBILE = 501
@@ -38,10 +44,19 @@ def digest(data_root: Path) -> str | None:
     return cards.tree_digest(Path(data_root) / renamed.DATA_FOLDER / APPLICATIONS)
 
 
-def request_migration(data_root: Path, before: str | None, log: host.Log, force: bool = False) -> bool:
+def rebuilds_launchservices(ios_version: str | None) -> bool:
+    """Return whether a migration on this iOS version (the pins' "27.2") registers system apps only in a rebuild."""
+    major = (ios_version or '').split('.')[0]
+    return major.isdigit() and int(major) >= REBUILDS_LAUNCHSERVICES_FROM
+
+
+def request_migration(
+    data_root: Path, before: str | None, log: host.Log, force: bool = False, rebuild: bool = False
+) -> bool:
     """Write the migration sentinel when the overlay's apps differ from `before`, or when `force`.
 
-    `before` is the apps' digest ahead of the sync.
+    `before` is the apps' digest ahead of the sync; `rebuild` (rebuilds_launchservices) also removes LaunchServices'
+    store.
     """
     if not force and digest(data_root) == before:
         return False
@@ -51,6 +66,11 @@ def request_migration(data_root: Path, before: str | None, log: host.Log, force:
     (Path(data_root) / MARKER).unlink(missing_ok=True)
     why = 'requested' if force else 'system apps changed'
     log(f'{why}: upgrade migration on the next boot (<Data>/{SENTINEL})')
+    if rebuild:
+        stores = sorted(Path(data_root).glob(LAUNCHSERVICES_STORES))
+        for store in stores:
+            store.unlink()
+        log(f'LaunchServices: {len(stores)} store(s) removed, lsd rebuilds its database on the next boot')
     return True
 
 

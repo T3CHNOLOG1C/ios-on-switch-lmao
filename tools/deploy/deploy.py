@@ -14,7 +14,8 @@ Steps:
                    when the card's iOS is another kind than the build's (its System volume is not the IPSW's)
   3 overlay        <Data>/Switch/overlay := the package's overlay/; when its /Applications changed, writes
                    <Data>/datamigrator/migrate so the next boot registers the apps (system_apps.py; --rerun-migration
-                   writes it regardless, e.g. after a migration the power cut short); copies back from the System
+                   writes it regardless, e.g. after a migration the power cut short; from iOS 27 it also removes
+                   LaunchServices' store, whose rebuild is what registers the apps there); copies back from the System
                    volume the staged system apps MobileInstallation still wants that the last migration consumed
                    without installing, and asks for the migration that installs them; also removes the
                    r3 Wi-Fi bring-up's configd Debug logging profile (STALE_LOGGING_PROFILES) if a card still has
@@ -98,6 +99,10 @@ def launchd_check(data: Path, labels: list[str], log: host.Log) -> bool:
     if missing:
         log(f'launchd: NOT disabled: {missing} (add them to native_switch_watchdog_policy in kern_exec.c)')
     return not missing
+
+
+def _ios_version(ipsw: str | None) -> str | None:
+    return json.loads(Path(ipsw).read_text()).get('version') if ipsw else None
 
 
 def check_kind(card: cards.Card, ipsw: str | None) -> None:
@@ -224,7 +229,8 @@ def _write(args: argparse.Namespace, data_root: Path, volumes: Volumes, pairing:
     apps = system_apps.digest(data_root)
     cards.sync_overlay(data_root, args.boot_package, log)
     restaged = _restage_system_apps(volumes.system, data_root, log)
-    system_apps.request_migration(data_root, apps, log, force=args.rerun_migration or restaged)
+    rebuild = system_apps.rebuilds_launchservices(_ios_version(args.ipsw))
+    system_apps.request_migration(data_root, apps, log, force=args.rerun_migration or restaged, rebuild=rebuild)
     remove_stale_logging_profiles(data_root, log)
     if not args.no_joycon_pairing:
         joycon_pairing.stage(data_root, pairing, log)
