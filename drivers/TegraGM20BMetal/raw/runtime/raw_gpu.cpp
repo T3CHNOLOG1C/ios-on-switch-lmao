@@ -2180,6 +2180,7 @@ CommandBuffer *Device::begin()
     cb.surfaces_.clear();
     cb.draws = cb.passes = cb.blits = 0;
     cb.refusal = {};
+    cb.partial = false;
     cb.pushStart_ = push_.head;
     cb.uploadStart_ = upload_.head;
     memcpy(cb.rootPush_, rootPush_, sizeof rootPush_);
@@ -2384,6 +2385,11 @@ bool CommandBuffer::commit(uint32_t &seqno)
             if (!at && invalidates) {  // its prologue never reached the GPU: the next submission's invalidates
                 std::lock_guard<std::mutex> l(d.lock_);
                 d.heapInvalidated_ = invalidatedBefore;
+            }
+            if (at) {  // its first batches run on: abandon() may give their ring words back only once they completed
+                partial = true;
+                d.wait(d.lastSeqno_);
+                d.contextless_ = true;
             }
             return false;
         }

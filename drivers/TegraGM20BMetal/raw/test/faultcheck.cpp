@@ -9,6 +9,8 @@
 //   from VA 0 with no limit.
 // - A pass with an empty color slot below a target disables the slot, as NVK does, and counts through the target.
 // - A freed texture header is the null descriptor, never zeroes (a buffer texture at VA 0).
+// - A commit whose later Exec the kernel refuses leaves nothing of its rings in flight, and the next command buffer a new
+//   channel.
 // - A channel the kernel killed is made again with its context before any command buffer is encoded for it: one whose
 //   ChannelCreate or context Exec the kernel refused gives no command buffer, and the next begin() tries again.
 // - Programs placed in the shader heap are behind an instruction-cache invalidate before any draw runs them, even when the
@@ -32,6 +34,7 @@ extern "C" bool cap_read(uint64_t va, void *out, uint64_t bytes);
 extern "C" uint64_t cap_instruction_invalidates(void);
 extern "C" void mock_iokit_kill_next(uint32_t error);
 extern "C" void mock_iokit_fail_next(unsigned method, unsigned count, int kr);
+extern "C" void mock_iokit_fail_after(unsigned method, unsigned skip, unsigned count, int kr);
 extern "C" unsigned long mock_iokit_calls(unsigned method);
 
 namespace {
@@ -227,6 +230,39 @@ uint32_t copy(raw::Device &dev, const raw::Buffer &from, const raw::Buffer &to)
     return seqno;
 }
 
+// A command buffer of more segments than one Exec takes, whose second Exec the kernel refuses: the first batch has completed
+// when commit returns (abandon gives its ring words back), and the next command buffer runs on a new channel with its context
+void partialCommit(raw::Device &dev, const Expect &expect)
+{
+    raw::Buffer a, b;
+    if (!dev.createBuffer(4096, a) || !dev.createBuffer(4096, b)) {
+        expect(false, "two buffers");
+        return;
+    }
+    raw::CommandBuffer *cb = dev.begin();
+    if (!cb) {
+        expect(false, "a command buffer");
+        return;
+    }
+    for (int i = 0; i < 300; i++) {
+        raw::BlitEncoder *e = cb->blit();
+        e->copyBytes(a.va, b.va, 64);
+        e->end();
+    }
+    const uint64_t reopens = dev.stats.reopens.load();
+    mock_iokit_fail_after(TegraGM20BMethodExec, 1, 1, kIOReturnNoMemory);
+    uint32_t seq = 0;
+    expect(!cb->commit(seq), "the commit fails at its second Exec");
+    const bool settled = dev.done(dev.submitted());
+    cb->abandon();
+    expect(settled, "its first batch completed before commit returned");
+    const uint32_t next = copy(dev, a, b);
+    expect(next && dev.wait(next) && dev.stats.reopens.load() == reopens + 1,
+           "the next command buffer ran on a new channel");
+    dev.destroyBuffer(a);
+    dev.destroyBuffer(b);
+}
+
 void reopenRefused(raw::Device &dev, const Expect &expect)
 {
     raw::Buffer a, b;
@@ -360,6 +396,7 @@ int main(int argc, char **argv)
     unboundStream(dev, pass, expect);
     holeTarget(dev, pass, expect);
     freedHeader(dev, expect);
+    partialCommit(dev, expect);
     reopenRefused(dev, expect);
     invalidateRefused(dev, expect);
     waitRefused(dev, expect);

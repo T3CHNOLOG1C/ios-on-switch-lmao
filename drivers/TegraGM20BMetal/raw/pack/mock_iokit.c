@@ -71,6 +71,7 @@ static uint32_t kill_next;
 static uint64_t kill_next_va;
 static atomic_ulong calls[16];
 static atomic_uint fail_left[16]; /* mock_iokit_fail_next's, by method */
+static atomic_uint fail_skip[16]; /* mock_iokit_fail_after's calls that go through first */
 static atomic_int fail_kr[16];
 static atomic_ulong import_maps;    /* VmBind map ops onto imported pages */
 static atomic_ulong kind_maps[256]; /* VmBind map ops by PTE kind */
@@ -426,8 +427,12 @@ static kern_return_t mock_call(mach_port_t c, uint32_t sel, const void *in, size
     if (sel < 16)
         atomic_fetch_add(&calls[sel], 1);
     if (sel < 16 && atomic_load(&fail_left[sel])) {
-        atomic_fetch_sub(&fail_left[sel], 1);
-        return atomic_load(&fail_kr[sel]);
+        if (atomic_load(&fail_skip[sel])) {
+            atomic_fetch_sub(&fail_skip[sel], 1);
+        } else {
+            atomic_fetch_sub(&fail_left[sel], 1);
+            return atomic_load(&fail_kr[sel]);
+        }
     }
     switch (sel) {
     case TegraGM20BMethodGetInfo: {
@@ -779,14 +784,20 @@ void mock_iokit_kill_next_at(uint32_t error, uint64_t fault_va)
     pthread_mutex_unlock(&gpu_lock);
 }
 
-/* The next `count` calls of `method` answer `kr` and do nothing: the kernel refusing them (an Exec or a ChannelCreate, a
- * WaitFence that fails with no kill) */
-void mock_iokit_fail_next(unsigned method, unsigned count, int kr)
+/* The `count` calls of `method` after the next `skip` answer `kr` and do nothing: the kernel refusing them (an Exec or a
+ * ChannelCreate, a WaitFence that fails with no kill) */
+void mock_iokit_fail_after(unsigned method, unsigned skip, unsigned count, int kr)
 {
     if (method >= 16)
         return;
     atomic_store(&fail_kr[method], kr);
+    atomic_store(&fail_skip[method], skip);
     atomic_store(&fail_left[method], count);
+}
+
+void mock_iokit_fail_next(unsigned method, unsigned count, int kr)
+{
+    mock_iokit_fail_after(method, 0, count, kr);
 }
 
 unsigned long mock_iokit_calls(unsigned method)
