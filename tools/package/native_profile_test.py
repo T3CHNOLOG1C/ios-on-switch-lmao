@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 
 from build_native_loader import FULL_RAM_BANK, _check_exporter, boot_virt_base
-from loader_abi import EXPORTER_RUN, KERNEL_PHYS_BASE, WINDOW_BASE, WINDOW_SIZE
+from loader_abi import EXPORTER_RUN, KERNEL_PHYS_BASE, WINDOW_BASE, WINDOW_BYTES_MAX, WINDOW_SIZE
 from native_xnu_layout import kernel_phys_base
 
 BLOCK = 0x200000
@@ -72,6 +72,15 @@ class NativeProfileTest(unittest.TestCase):
                 self.assertEqual(kernel_phys_base(WINDOW_BASE, base, room), KERNEL_PHYS_BASE)
                 self.assertEqual(kernel_phys_base(WINDOW_BASE, base, room + 1), KERNEL_PHYS_BASE + BLOCK)
 
+    def test_the_loader_decodes_the_largest_window_into_its_copy_tables(self):
+        copy_h = checkout_file('boot/loader/copy.h').read_text()
+        self.assertEqual(
+            int(re.search(r'#define LOADER_WINDOW_BYTES_MAX UINT64_C\((0x[0-9a-f]+)\)', copy_h).group(1), 16),
+            WINDOW_BYTES_MAX,
+        )
+        self.assertLessEqual(WINDOW_BASE + WINDOW_BYTES_MAX, 0xC0000000)
+        self.assertLessEqual(WINDOW_BYTES_MAX, WINDOW_SIZE - 0x200000)
+
     def test_the_rule_reproduces_the_measured_21h461_boot_base(self):
         base = boot_virt_base(pinned_bases()['21H461'], KERNEL_PHYS_BASE, FULL_RAM_BANK[0])
         self.assertEqual(base, 0xFFFFFFEFD2200000)
@@ -103,7 +112,7 @@ class NativeProfileTest(unittest.TestCase):
 
 class ExporterTest(unittest.TestCase):
     def test_the_largest_window_the_loader_copies_clears_the_exporter(self):
-        _check_exporter(WINDOW_BASE, 0x6000000)
+        _check_exporter(WINDOW_BASE, WINDOW_BYTES_MAX)
 
     def test_a_window_over_the_exporter_is_refused(self):
         with self.assertRaises(ValueError):

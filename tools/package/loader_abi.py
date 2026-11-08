@@ -46,7 +46,9 @@ LZ4_BLOCK = 1 << 20
 # The packaging compresses the blocks in shards, one action each: a block's shard is the MiB of the window it starts in,
 # so a block keeps its shard (and an unchanged shard its cached compression) whatever changes elsewhere in the window.
 WINDOW_SHARD_BYTES = 1 << 20
-WINDOW_SHARDS = 0x6000000 // WINDOW_SHARD_BYTES  # the staged window's limit (build_native_loader.py window_checks)
+# The most the loader decodes into the kernel window (boot/loader/copy.h LOADER_WINDOW_BYTES_MAX).
+WINDOW_BYTES_MAX = 128 << 20
+WINDOW_SHARDS = WINDOW_BYTES_MAX // WINDOW_SHARD_BYTES
 LZ4_MAGIC = b'\x04\x22\x4d\x18'
 
 # /chosen/switch-boot-stamps: boot/loader/stamps.h SWITCH_STAMP_COUNT 64-bit words, zero until the loader fills it.
