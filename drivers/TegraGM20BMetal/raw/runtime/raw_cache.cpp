@@ -3,7 +3,6 @@
 #include "raw_cache.h"
 
 #include <dirent.h>
-#include <dispatch/dispatch.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <time.h>
@@ -212,11 +211,6 @@ void removeStale(const std::string &parent, const std::string &ours)
             unlink(f.path.c_str());
 }
 
-uint64_t nowUs()
-{
-    return clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1000;
-}
-
 }  // namespace
 
 uint64_t CacheKey::name() const
@@ -299,19 +293,36 @@ RecordCache::Found decodeEntry(const std::string &bytes, const CacheKey &k, Runt
 
 bool RecordCache::open(const std::string &dir, uint64_t stack, uint64_t capBytes)
 {
+    if (!attach(dir, stack, capBytes))
+        return false;
+    tidy();
+    return true;
+}
+
+bool RecordCache::attach(const std::string &dir, uint64_t stack, uint64_t capBytes)
+{
     std::lock_guard<std::mutex> l(lock_);
-    const std::string name = "raw-" + hex16(stack);
-    const std::string mine = dir + "/" + name;
+    const std::string mine = dir + "/raw-" + hex16(stack);
     if (dir.empty() || (mkdir(mine.c_str(), 0700) != 0 && errno != EEXIST) || access(mine.c_str(), W_OK) != 0)
         return false;
-    removeStale(dir, name);
+    parent_ = dir;
     dir_ = mine;
     stack_ = stack;
     cap_ = capBytes;
     bytes_ = 0;
-    for (const File &f : files(dir_, ".rec"))
-        bytes_ += f.bytes;
     return true;
+}
+
+void RecordCache::tidy()
+{
+    if (dir_.empty())
+        return;
+    removeStale(parent_, "raw-" + hex16(stack_));
+    uint64_t bytes = 0;
+    for (const File &f : files(dir_, ".rec"))
+        bytes += f.bytes;
+    std::lock_guard<std::mutex> l(lock_);
+    bytes_ = bytes;
 }
 
 std::string RecordCache::path(const CacheKey &k) const
@@ -336,6 +347,8 @@ bool RecordCache::store(const CacheKey &k, const RuntimeRecord *record, const st
         return false;
     const std::string bytes = encodeEntry(k, record, refusal), final = path(k);
     std::lock_guard<std::mutex> l(lock_);
+    if (cap_ && bytes.size() > cap_ / 4 * 3)
+        return false;
     if (cap_ && bytes_ + bytes.size() > cap_)
         evict(bytes.size());
     const std::string temporary = dir_ + "/" + std::to_string(getpid()) + "-" + std::to_string(serial++) + ".tmp";
@@ -370,125 +383,6 @@ void RecordCache::evict(uint64_t room)
         if (unlink(f.path.c_str()) == 0)
             bytes_ -= f.bytes;
     }
-}
-
-struct Compiler::Job {
-    Compiler *compiler;
-    CacheKey key;
-};
-
-Compiler::Compiler(RecordCache *cache, Make make, uint64_t retryUs)
-    : cache_(cache), make_(std::move(make)), retryUs_(retryUs),
-      queue_(dispatch_queue_create(
-          "com.brunostjohn.switch.raw.compile",
-          dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_BACKGROUND, 0)))
-{}
-
-Compiler::~Compiler()
-{
-    drain();
-    dispatch_release(static_cast<dispatch_queue_t>(queue_));
-}
-
-Compiler::State Compiler::ask(const CacheKey &k, Done done, const RuntimeRecord **record)
-{
-    std::lock_guard<std::mutex> l(lock_);
-    const auto [it, first] = entries_.try_emplace(k.name());
-    Entry &e = it->second;
-    uint64_t wait = 0;
-    if (first || (retryable(e, wait) && wait == 0)) {
-        e.state = State::Pending;
-        if (done)
-            e.waiters.push_back(std::move(done));
-        queue(k);
-        return State::Pending;
-    }
-    if (e.state == State::Pending && done)
-        e.waiters.push_back(std::move(done));
-    if (record)
-        *record = e.record.get();
-    return e.state;
-}
-
-// lock_ held: whether `e` failed and may be tried again, and in `wait` how long until then
-bool Compiler::retryable(const Entry &e, uint64_t &wait) const
-{
-    if (e.state != State::Failed || e.failures > kRetries)
-        return false;
-    const uint64_t due = e.failedUs + (retryUs_ << (2 * (e.failures - 1))), now = nowUs();
-    wait = due > now ? due - now : 0;
-    return true;
-}
-
-bool Compiler::retryAfter(const CacheKey &k, uint64_t &us) const
-{
-    std::lock_guard<std::mutex> l(lock_);
-    const auto it = entries_.find(k.name());
-    return it != entries_.end() && retryable(it->second, us);
-}
-
-// lock_ held
-void Compiler::queue(const CacheKey &k)
-{
-    queued_++;
-    dispatch_async_f(static_cast<dispatch_queue_t>(queue_), new Job{this, k}, run);
-}
-
-void Compiler::run(void *context)
-{
-    std::unique_ptr<Job> job(static_cast<Job *>(context));
-    Compiler &c = *job->compiler;
-    const uint64_t began = nowUs();
-    auto record = std::make_unique<RuntimeRecord>();
-    std::string why;
-    const RecordCache::Found found = c.cache_ ? c.cache_->load(job->key, *record, why) : RecordCache::Found::None;
-    Outcome outcome = found == RecordCache::Found::Record    ? Outcome::Made
-                      : found == RecordCache::Found::Refusal ? Outcome::Refused
-                                                             : c.make_(job->key, *record, why);
-    if (found == RecordCache::Found::None && outcome != Outcome::Failed && c.cache_)
-        c.cache_->store(job->key, outcome == Outcome::Made ? record.get() : nullptr, why);
-    const RuntimeRecord *made = nullptr;
-    std::vector<Done> waiters;
-    {
-        std::lock_guard<std::mutex> l(c.lock_);
-        Entry &e = c.entries_[job->key.name()];
-        waiters.swap(e.waiters);
-        e.why = why;
-        if (outcome == Outcome::Made) {
-            e.record = std::move(record);
-            made = e.record.get();
-        }
-        (found == RecordCache::Found::None ? c.stats_.misses : c.stats_.hits)++;
-        c.stats_.refusals += outcome == Outcome::Refused;
-        c.stats_.failures += outcome == Outcome::Failed;
-        c.stats_.makeUs += nowUs() - began;
-        if (outcome == Outcome::Failed) {
-            e.failures++;
-            e.failedUs = nowUs();
-        }
-        e.state = outcome == Outcome::Made      ? State::Ready
-                  : outcome == Outcome::Refused ? State::Refused
-                                                : State::Failed;
-    }
-    for (const Done &done : waiters)
-        done(made, why);
-    std::lock_guard<std::mutex> l(c.lock_);
-    c.queued_--;
-    c.idle_.notify_all();
-}
-
-void Compiler::drain()
-{
-    std::unique_lock<std::mutex> l(lock_);
-    idle_.wait(l, [&] {
-        return queued_ == 0;
-    });
-}
-
-Compiler::Stats Compiler::stats() const
-{
-    std::lock_guard<std::mutex> l(lock_);
-    return stats_;
 }
 
 }  // namespace raw

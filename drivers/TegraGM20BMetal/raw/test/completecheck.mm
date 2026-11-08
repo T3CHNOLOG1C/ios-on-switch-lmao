@@ -2,7 +2,8 @@
 // completecheck: the runtime's own probe (runtime/RawProbe.h) against the pack. Every Core Animation state of a corpus is made
 // through the frontend and m2v over the NVK twin (the mock GPU) and handed to raw::Probe, which draws it in three command buffers
 // it captures instead of committing and makes its record in process: every state the pack holds a default record for must come
-// out byte for byte the same, every one it set aside refused, a storage-form one as such.
+// out byte for byte the same, every one it set aside refused, a storage-form one refused as such or made as the pack's
+// barrier form.
 // usage: completecheck <nvk dylib> <cache dir> <default.metallib> <corpus.log> <pack.bin>
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
@@ -44,7 +45,7 @@ int main(int argc, char **argv)
         }
         NSRegularExpression *lib = [NSRegularExpression regularExpressionWithPattern:@" lib=\\S+" options:0 error:nil];
         raw::Probe probe(dev, pack);
-        uint32_t states = 0, same = 0, storage = 0, refused = 0, bad = 0;
+        uint32_t states = 0, same = 0, barriers = 0, storage = 0, refused = 0, bad = 0;
         double ms = 0;
         std::set<std::string> seen;
         for (NSString *l in [text componentsSeparatedByString:@"\n"]) {
@@ -56,7 +57,12 @@ int main(int argc, char **argv)
                                                               range:NSMakeRange(0, l.length)
                                                        withTemplate:@""];
             probe::State s;
-            if (!probe::parseState(qc, plain.UTF8String, s) || !seen.insert(s.key).second)
+            if (!probe::parseState(qc, plain.UTF8String, s))
+                continue;
+            // the key as the facade makes it (raw_metal_pipeline_key) and probelog.py reads it: no trailing space
+            while (!s.key.empty() && s.key.back() == ' ')
+                s.key.pop_back();
+            if (!seen.insert(s.key).second)
                 continue;
             id<MTLRenderPipelineState> twin = [dev newRenderPipelineStateWithDescriptor:s.d error:&error];
             if (!twin)
@@ -76,13 +82,20 @@ int main(int argc, char **argv)
                 verdict = outcome == raw::Compiler::Outcome::Made ? recordcompare::differences(pack, *pp, made)
                                                                   : " refused (" + why + ")";
                 same += verdict.empty();
+            } else if (barrier && outcome == raw::Compiler::Outcome::Made) {
+                verdict = recordcompare::differences(pack, *pp, made);
+                if (!verdict.empty())
+                    verdict = " barrier form:" + verdict;
+                barriers += verdict.empty();
             } else if (barrier) {
                 verdict = outcome == raw::Compiler::Outcome::Refused && why.rfind("storage form", 0) == 0
                               ? ""
-                              : " not refused as a storage form";
+                              : " not refused as a storage form (" + why + ")";
                 storage += verdict.empty();
             } else {
                 verdict = outcome == raw::Compiler::Outcome::Made ? " made, and the pack set it aside" : "";
+                if (!verdict.empty())
+                    verdict += pack.find(raw::packKeyHash(s.key), raw::PackForm::Barrier) ? " (barrier)" : "";
                 refused += verdict.empty();
             }
             if (!verdict.empty()) {
@@ -90,10 +103,10 @@ int main(int argc, char **argv)
                 printf("DIFFERS%s: %s\n", verdict.c_str(), s.key.substr(0, 140).c_str());
             }
         }
-        printf("completecheck: %u states probed in process: %u records the same as the pack's, %u storage forms "
-               "refused, %u "
-               "set aside and refused, %u differ; %.1f ms a state\n",
-               states, same, storage, refused, bad, states ? ms / states : 0.0);
+        printf(
+            "completecheck: %u states probed in process: %u records the same as the pack's, %u the same as its barrier "
+            "forms, %u storage forms refused, %u set aside and refused, %u differ; %.1f ms a state\n",
+            states, same, barriers, storage, refused, bad, states ? ms / states : 0.0);
         return bad || !states ? 1 : 0;
     }
 }

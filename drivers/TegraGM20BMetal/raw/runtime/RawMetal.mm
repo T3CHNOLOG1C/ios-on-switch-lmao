@@ -162,41 +162,6 @@ static raw::Device *openDevice(const char *packPath, uint64_t stack, raw::Device
     }
     if (role == raw::Device::Role::Client)
         return dev;
-    // the 2D engine's mip-chain self-test at open (raw/fx): one line, whichever way it went (each sampling candidate's bad bytes
-    // in the CPU's Tegra/Fermi views, the winner), and when the documented convention failed a second: what it got wrong
-    {
-        char counts[256] = "", name[48] = "none";
-        size_t at = 0;
-        for (uint32_t i = 0; i < raw::fx::kSamplings && at < sizeof counts; i++)
-            at += snprintf(counts + at, sizeof counts - at, "%s%u/%u", i ? " " : "", dev->selfTestTegra[i],
-                           dev->selfTestFermi[i]);
-        if (dev->selfTestChosen < raw::fx::kSamplings)
-            raw::fx::samplingName(raw::fx::sampling(dev->selfTestChosen), name, sizeof name);
-        os_log(rawLog(),
-               "raw: fx mip self-test: bad bytes tegra/fermi per sampling [%{public}s] -> %{public}s (sampling %u, "
-               "%{public}s view) -> chains %{public}s",
-               counts, name, dev->selfTestChosen, dev->selfTestFermiView ? "fermi" : "tegra",
-               dev->chainsOn() ? "on" : "off");
-        const raw::fx::SelfTestReport &r = dev->selfTestFirst;
-        if (r.bad) {
-            char firsts[160] = "", levels[96] = "";
-            size_t f = 0, l = 0;
-            for (uint32_t k = 0; k < r.firsts && f < sizeof firsts; k++)
-                f += snprintf(firsts + f, sizeof firsts - f, "%sL%u (%u,%u) c%u want %u got %u", k ? "; " : "",
-                              r.first[k].level, r.first[k].x, r.first[k].y, r.first[k].channel, r.first[k].want,
-                              r.first[k].got);
-            for (uint32_t k = 0; k < raw::fx::kMaxLevels && l < sizeof levels; k++)
-                if (r.levelBad[k])
-                    l += snprintf(levels + l, sizeof levels - l, "%sL%u:%u", l ? " " : "", k, r.levelBad[k]);
-            const uint8_t m = std::max({r.maxDiff[0], r.maxDiff[1], r.maxDiff[2], r.maxDiff[3]});
-            os_log(
-                rawLog(),
-                "raw: fx mip self-test, the documented sampling (centre, origin 0, tegra view): %u bytes off by more "
-                "than 1 [%{public}s], max |diff| b/g/r/a %u/%u/%u/%u (%{public}s), first: %{public}s",
-                r.bad, levels, r.maxDiff[0], r.maxDiff[1], r.maxDiff[2], r.maxDiff[3],
-                m <= 2 ? "rounding" : "positional", firsts);
-        }
-    }
     dev->warm();
     return dev;
 }
@@ -238,12 +203,12 @@ extern "C" dispatch_queue_global_t dispatch_pthread_root_queue_create(const char
 // workers, which XNU clamps to 37 in a daemon: below the fixed-priority render thread waiting on them.
 static dispatch_queue_t followingSerialQueue(const char *label)
 {
-    static dispatch_queue_global_t root =
+    static const dispatch_queue_global_t root =
         dispatch_pthread_root_queue_create("com.brunostjohn.switch.raw.following", 0, nullptr, ^{
             pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
             raw::followers().join();
         });
-    dispatch_queue_t queue =
+    const dispatch_queue_t queue =
         dispatch_queue_create(label, dispatch_queue_attr_make_initially_inactive(DISPATCH_QUEUE_SERIAL));
     dispatch_set_target_queue(queue, root);
     dispatch_activate(queue);

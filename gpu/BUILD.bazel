@@ -165,6 +165,7 @@ metal_plugin(
         GM20B_METAL + ":raw/runtime/raw_capture.cpp",
         GM20B_METAL + ":raw/runtime/raw_record.cpp",
         GM20B_METAL + ":raw/runtime/raw_cache.cpp",
+        GM20B_METAL + ":raw/runtime/raw_compiler.cpp",
         GM20B_METAL + ":raw/runtime/raw_metallib.cpp",
         GM20B_METAL + ":raw/runtime/raw_completed.cpp",
         GM20B_METAL + ":raw/pack/nvdec.cpp",

@@ -172,8 +172,6 @@ static bool rawDepthStencil(MTLRenderPassDescriptor *pass)
         [self retain:t];
         [self retain:pass.colorAttachments[c].resolveTexture];
         RMTexture *x = (RMTexture *)t;
-        if ([(id)x isKindOfClass:[RMTexture class]] && x->_raw.chain)
-            _chains = true;
         if ([(id)x isKindOfClass:[RMTexture class]])
             declareGpuWrites(x);
         if (![(id)x isKindOfClass:[RMTexture class]] || !x->_rawOk || !(x->_raw.renderable || x->_raw.shadowTarget)) {
