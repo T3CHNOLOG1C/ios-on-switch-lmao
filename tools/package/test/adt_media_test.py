@@ -107,5 +107,34 @@ class Capabilities(unittest.TestCase):
         self.assertEqual(properties(find(tree, 'product', 'maps'))['3d-maps'], struct.pack('<I', 0))
 
 
+def trust_module(uuid: bytes) -> bytes:
+    return struct.pack('<I', 2) + uuid + struct.pack('<I', 0)
+
+
+def im4p(kind: bytes, payload: bytes) -> bytes:
+    def der(tag: int, value: bytes) -> bytes:
+        assert len(value) < 0x80
+        return bytes([tag, len(value)]) + value
+
+    return der(0x30, der(0x16, b'IM4P') + der(0x16, kind) + der(0x16, b'1') + der(0x04, payload))
+
+
+class CryptexTrust(unittest.TestCase):
+    def test_lists_each_modules_uuid_whether_apples_im4p_or_a_module(self):
+        adt_edit = load_adt_edit()
+        system, translated, app = bytes(range(16)), bytes(range(16, 32)), bytes(range(32, 48))
+        adt = adt_edit.ipad_adt(switch_tree())
+        adt = adt_edit.with_cryptex_trust(adt, 'os', [im4p(b'trcs', trust_module(system)), trust_module(translated)])
+        adt = adt_edit.with_cryptex_trust(adt, 'app', [im4p(b'trca', trust_module(app))])
+        chosen = properties(find(adt_edit.adt_parse(adt)[0], 'chosen'))
+        self.assertEqual(chosen['switch-os-cryptex-trust'], system + translated)
+        self.assertEqual(chosen['switch-app-cryptex-trust'], app)
+
+    def test_refuses_what_is_not_a_trust_module(self):
+        adt_edit = load_adt_edit()
+        with self.assertRaises(SystemExit):
+            adt_edit.with_cryptex_trust(adt_edit.ipad_adt(switch_tree()), 'os', [b'\x01' * 24])
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -86,7 +86,7 @@
 #include <sys/time.h>
 #include <sys/disk.h>
 #include <sys/vnode_internal.h>
-#include <switch/pretranslated.h>
+#include <switch/auth_fs.h>
 #include <sys/stat.h>
 #include <sys/namei.h>
 #include <sys/ucred.h>
@@ -4164,7 +4164,7 @@ VNOP_IOCTL(vnode_t vp, u_long command, caddr_t data, int fflag, vfs_context_t ct
 		*data = 1;
 		return 0;
 	}
-	if (switch_pretranslated_authenticated(vp, command, data)) {
+	if (switch_auth_fs_answers(vp, command, data)) {
 		return 0;
 	}
 

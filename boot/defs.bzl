@@ -223,6 +223,14 @@ def _boot_package_impl(ctx):
     if os_trust:
         args.add("--switch-pretranslated-trust", os_trust[0])
         adt_inputs += os_trust
+    cryptexes = [
+        ("os", ctx.file.system_trust, "system_cryptex.trustcache"),
+        ("app", ctx.file.app_trust, "app_cryptex.trustcache"),
+    ]
+    for cryptex, apple, translated in cryptexes:
+        modules = [apple] + [f for f in pretranslated.trust if f.basename == translated]
+        args.add_all(modules, before_each = "--switch-%s-cryptex-trust" % cryptex)
+        adt_inputs += modules
     args.add("--out", adt)
     _run(ctx, ctx.executable._adt_edit, [args], adt_inputs, [adt], "BootAdt", "Giving the ADT its iPad identity")
 
@@ -391,6 +399,7 @@ boot_package = rule(
         "_apple_adt": attr.label(default = "//ipsw:device_tree", allow_single_file = True),
         "static_trust": attr.label(mandatory = True, allow_single_file = True),
         "app_trust": attr.label(mandatory = True, allow_single_file = True),
+        "system_trust": attr.label(mandatory = True, allow_single_file = True),
         "data_seed": attr.label(mandatory = True, allow_single_file = True),
         "script_template": attr.label(mandatory = True, allow_single_file = True),
         "bl31": attr.label(mandatory = True, allow_single_file = True),

@@ -7,7 +7,7 @@ The iPad's identity (model, board, SoC, /product) is read from Apple's device tr
 
     adt_edit.py --adt BASE --apple-adt APPLE --overlay-plan PLAN --bt-patch HCD --portrait-header H
                 --root-volume-uuid UUID [--smp] [--a64x-cache-pretranslated LIST] [--switch-pretranslated-trust MODULE]
-                --out ADT
+                [--switch-os-cryptex-trust MODULE]... [--switch-app-cryptex-trust MODULE]... --out ADT
 """
 
 import argparse
@@ -27,6 +27,7 @@ from loader_abi import (
 )
 from native_oled_adt import property_bytes, root_matching
 from native_xnu_layout import parse_adt
+from trust import im4p_payload
 
 # USB 2.0 device mode on the USB-C port (drivers/SwitchUSB): the USB function set configd's USBDeviceConfiguration
 # plug-in gives Apple's IOUSBDeviceFamily, by name from /System/Library/AppleUSBDevice/USBDeviceConfiguration.plist.
@@ -444,6 +445,24 @@ def with_switch_pretranslated_trust(data: bytes, module: bytes) -> bytes:
     return adt_serialize(tree)
 
 
+def with_cryptex_trust(data: bytes, cryptex: str, modules: Sequence[bytes]) -> bytes:
+    """Return the ADT with /chosen/switch-<cryptex>-cryptex-trust, the UUIDs of the trust modules of its code.
+
+    Each is Apple's IM4P of the cryptex's trust cache or iOS 27's pretranslated module of it. The kernel answers
+    FSIOC_AUTH_FS for a file of that cryptex's mount signed with a CDHash from one of them
+    (kernel/switch/vfs/auth_fs.c), as APFS does for a grafted cryptex's files.
+    """
+    uuids = b''
+    for data_or_im4p in modules:
+        module = im4p_payload(data_or_im4p) if data_or_im4p[:1] == b'\x30' else data_or_im4p
+        if len(module) < 24 or struct.unpack_from('<I', module)[0] not in (1, 2):
+            raise SystemExit(f'{cryptex} cryptex trust: {len(module)} bytes, not a version 1 or 2 trust module')
+        uuids += module[4:20]
+    tree, _ = adt_parse(data)
+    put(child(tree, 'chosen'), f'switch-{cryptex}-cryptex-trust', uuids)
+    return adt_serialize(tree)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     for name in ('adt', 'apple-adt', 'overlay-plan', 'bt-patch', 'portrait-header', 'out'):
@@ -453,6 +472,8 @@ def main() -> None:
     parser.add_argument('--boot-manifest-hash', action='store_true', help='a zeroed slot the layout step fills')
     parser.add_argument('--a64x-cache-pretranslated', type=Path)
     parser.add_argument('--switch-pretranslated-trust', type=Path)
+    for cryptex in ('os', 'app'):
+        parser.add_argument(f'--switch-{cryptex}-cryptex-trust', type=Path, action='append', default=[])
     args = parser.parse_args()
     dirs = [tuple(d) for d in json.loads(args.overlay_plan.read_text())['dirs']]
     adt = ipad_adt(
@@ -470,6 +491,9 @@ def main() -> None:
         adt = with_a64x_cache_pretranslated(adt, args.a64x_cache_pretranslated.read_bytes())
     if args.switch_pretranslated_trust:
         adt = with_switch_pretranslated_trust(adt, args.switch_pretranslated_trust.read_bytes())
+    for cryptex in ('os', 'app'):
+        if modules := getattr(args, f'switch_{cryptex}_cryptex_trust'):
+            adt = with_cryptex_trust(adt, cryptex, [path.read_bytes() for path in modules])
     if ('/filesystems', 'DoNotUseSEP') not in parse_adt(adt).properties:
         raise SystemExit('ADT patch failed')
     args.out.write_bytes(adt)
