@@ -1,0 +1,77 @@
+# tools/emu
+
+An emulated Switch OLED that boots this tree's real boot chain on yellows8's
+[tegra_qemu](https://github.com/yellows8/tegra_qemu) (`-machine tegrax1plus`), with the patches in `patches/`. It is
+for trying boot, storage and GPU changes before they go to the device, and its results carry less weight than the
+device's.
+
+```sh
+bazel run //tools/emu:boot -- --kind=ios27                   # build //:boot for iOS 27, boot it for 120 s
+bazel run //tools/emu:boot -- --kind=ios17 --sd none --seconds 60 --bootargs -v
+bazel run //tools/emu:build                                  # only the emulator: prints its path
+```
+
+`--kind` builds `//:boot` with `--//ipsw:kind` in the output base `bazel run` itself uses. `--bazel-flag` passes
+flags to that build (for example `--bazel-flag=--config=agent`). `--package DIR` boots an existing `//:boot` output
+instead, and `--kernel` names its prelinked kernel for the live log. `--icount` makes guest time follow executed
+instructions: slower, since it runs one host thread, but a busy Mac can no longer expire a driver's timeout before the
+device it waits for has run. The run directory is `out/emu/<kind>-<time>` unless `--out` names one:
+
+| File | What |
+|---|---|
+| `summary.txt` | How far it got: firmware, secondary cores, core PCs, the panic, the last kernel lines |
+| `uart-a.log` | bl31, U-Boot, the boot script, the exporter and the loader, on UART-A |
+| `kernel.log`, `panic.txt` | The kernel's log (XNU's msgbuf, read live through a core's MMU) and its panic record |
+| `screen.png`, `framebuffer.png` | What display controller A scans out, and hekate's framebuffer |
+| `registers.txt` | Every core's registers when the run stopped |
+
+## What runs
+
+Core 0 starts in `firmware/regwrite.S`, which replays the register writes in `hekate.py`: hekate's display bring-up,
+the memory controller's carveouts, the microsecond timer and the BL31 parameters in PMC scratch. It then enters
+switchroot's `bl31.bin` the way hekate's l4t launcher does. From there on everything is the real thing: bl31,
+switchroot's U-Boot (its console on UART-A, as hekate's `uart_port=1` sets it), the boot script, the SD exporter, the
+loader and XNU. Secondary cores start through bl31's PSCI and the flow controller, on Tegra's own GIC. Idle cores
+power down in C7 through bl31's CPU_SUSPEND, and the flow controller brings them back through their reset vector
+when the GIC (an SGI or SPI) or the legacy interrupt controller (TMR10-13) has something pending for them.
+
+The SD card is a 2 TiB VMDK of flat extents. It holds hekate's hybrid MBR and GPT, a FAT with the run's boot files
+and `bootargs.txt`, and the iOS partition, which maps straight onto the install image from `bazel run //:image`
+(`out/sd/switchroot/ios/IOS<NN>.SII.*` in this checkout or the main one, else
+`~/Library/Caches/switch-ios/sd-<build>/switchroot/ios/`). QEMU writes to a snapshot overlay, so a run
+never changes the image. The card is 2 TiB rather than the real 1 TB because QEMU only takes power-of-two cards.
+
+## Caches
+
+Every worktree and output base on the Mac shares these, under `~/Library/Caches/switch-ios`:
+
+- `tegra-qemu/entries/<key>` is the emulator. Its key covers the pinned commit, every patch byte and the configure
+  flags. A changed patch costs one rebuild on a shared ninja tree, which recompiles only the files the patch touches.
+- `sd-base/entries/<key>` is a card base per install image (APFS clones of its parts, the tables, an empty FAT),
+  keyed by the image's manifest. The clones keep an old image's blocks on disk after `//:image` replaces it; delete
+  old entries to get the space back.
+
+Each entry is built under a lock and renamed into place, so a second builder waits and then reuses it. Building the
+emulator needs Homebrew's glib, pixman, libgcrypt, dtc, pkgconf, ninja and mtools, and `uv`.
+
+## How far to trust it
+
+Modelled: the Cortex-A57 cores (CPUECTLR included), GICv2 behind the legacy interrupt controller, the flow
+controller, PMC, CAR, MC, fuses, I2C with the PMIC and its RTC, display controller A's registers and vblank, and
+SDMMC1 as an SD Host Controller 3.00 in Tegra's v4 mode.
+
+Different from the hardware:
+
+- Timing. CPU speed, DRAM and every device latency are QEMU's, not the Switch's.
+- The display controller scans out pitch-linear windows only, without blending or the CRC unit.
+- The SD card stays in U-Boot's 48 MHz mode. The controller reports no SDR104, so SwitchSD's SDR104 bring-up does not
+  run.
+- No BPMP firmware runs, so the EMC keeps its rate.
+- Missing: security engine keys, TSEC, audio, USB, and the Wi-Fi and Bluetooth radios behind their buses.
+
+A boot that gets further here is a hint. A panic here is a lead to check on the device.
+
+## Patches
+
+`patches/*.patch` change GPL-2.0-or-later QEMU files and are under that licence. The build copies QEMU's COPYING
+files next to the binary.
