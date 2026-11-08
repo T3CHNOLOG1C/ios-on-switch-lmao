@@ -206,6 +206,16 @@ struct NmbRenderPipelineDescriptor {
     uint64_t vertex_inputs; /* 0: no vertex descriptor */
     struct NmbVertexAttribute attributes[31];
     struct NmbVertexLayout layouts[31];
+    /* vertexLinkedFunctions and fragmentLinkedFunctions: each stage's functions and privateFunctions, as
+     * NmbComputePipelineDescriptor's linked functions are */
+    NmbFunction *const *vertex_linked;
+    uint64_t vertex_linked_count;
+    NmbFunction *const *vertex_private_linked;
+    uint64_t vertex_private_count;
+    NmbFunction *const *fragment_linked;
+    uint64_t fragment_linked_count;
+    NmbFunction *const *fragment_private_linked;
+    uint64_t fragment_private_count;
 };
 
 NmbRenderPipeline *nmb_render_pipeline_new(NmbDevice *, const struct NmbRenderPipelineDescriptor *);

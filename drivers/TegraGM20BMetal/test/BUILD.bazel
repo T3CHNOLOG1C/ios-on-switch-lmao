@@ -14,6 +14,8 @@
 #                     past its room the all-imports flag, its length
 #   raw_events_source_test  how a command buffer with a plain or shared Metal event stays raw (frontend, bridge, m2v,
 #                     RawMetal), and the cross-process shared event refusal line
+#   raw_linked_source_test  how a render pipeline's linked functions reach m2v (frontend, bridge, its C and Rust forms)
+#                     and how the raw path's twin and record key take them
 #   raw_follow_test   raw/runtime/raw_follow.h: the raw path's threads take a fixed-priority committer's policy, never a
 #                     lower one, and keep their own for a timeshare committer
 #   raw_slm_test      raw/runtime/raw_slm.h: the shader local memory a program's header or a kernel's QMD asks of a
@@ -138,6 +140,18 @@ host_test(
         "//drivers/TegraGM20BMetal:TegraGM20BMetalPlugin.mm",
         "//drivers/TegraGM20BMetal:raw/runtime/RawMetalEvents.mm",
         "//third_party/m2v/crates/metal2vulkan-runtime:sources",
+    ],
+)
+
+host_test(
+    name = "raw_linked_source_test",
+    srcs = ["raw_linked_source_test.cpp"],
+    data = [
+        "//drivers/NativeMetal:NativeBridgeMetalFrontend.mm",
+        "//drivers/NativeMetal:bridge/NativeMetalObjects.h",
+        "//drivers/NativeMetal:bridge/NativeMetalObjects.rs",
+        "//drivers/TegraGM20BMetal:raw/runtime/RawComplete.mm",
+        "//drivers/TegraGM20BMetal:raw/runtime/RawMetalStates.mm",
     ],
 )
 
