@@ -2796,7 +2796,9 @@ static id<MTLSamplerState> clampedSampler(id<MTLSamplerState> s, float lodMin, f
 {
     (void)resources;
     (void)count;
-    [self memoryBarrierWithScope:MTLBarrierScopeBuffers | MTLBarrierScopeTextures afterStages:after beforeStages:before];
+    [self memoryBarrierWithScope:MTLBarrierScopeBuffers | MTLBarrierScopeTextures
+                     afterStages:after
+                    beforeStages:before];
 }
 
 // The count forms at one viewport or scissor are the single ones; more go to m2v with the call

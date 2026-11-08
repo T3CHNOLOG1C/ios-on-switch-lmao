@@ -29,16 +29,20 @@ enum PackSectionId {
 
 struct PackHeader {
     char magic[8];                                    // "GM20BPK1"
-    uint32_t version, programs, pipelines, samplers;  // version 4
+    uint32_t version, programs, pipelines, samplers;  // version 5
     PackSection section[PackSectionCount];
     uint64_t stack;  // the build's stack key (build-tegra-gm20b-metal.py: the plugin is compiled with the same one)
 };
 
-// NVK's constant buffer types (nvk_shader.h nvk_cbuf_type) a raw draw binds
+// A program's constant buffer as the pack and the runtime's capture name it: its nvk_cbuf_type in bits 0-2, and for a uniform
+// buffer's descriptor (CbufUbo) its byte offset in set 0 / 16 in bits 3-7. A uniform buffer of another set, or past 496 bytes,
+// is CbufUnbindable: no raw draw binds it.
 enum PackCbufType : uint8_t {
     CbufRoot = 1,
     CbufShaderData = 2,
-    CbufSet = 3
+    CbufSet = 3,
+    CbufUbo = 5,
+    CbufUnbindable = 7
 };
 
 struct PackProgram {
@@ -99,6 +103,16 @@ enum class PackForm : uint8_t {
     Default,
     Barrier
 };
+
+constexpr uint8_t cbufKind(uint8_t type)
+{
+    return type & 7;
+}
+
+constexpr uint32_t cbufUboOffset(uint8_t type)
+{
+    return uint32_t(type >> 3) * 16;
+}
 
 struct PackPipeline {
     uint64_t keyHash;    // FNV-1a 64 of the state key (the frontend journal's R-line fields but the label)

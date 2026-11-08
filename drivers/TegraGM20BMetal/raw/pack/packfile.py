@@ -6,7 +6,7 @@ from dataclasses import dataclass
 MAGIC = b'GM20BPK1'
 # 2: the header's stack key (rawpack.py --stack) after the section table; 3: barrier-form records; 4: programs' shader
 # data and constant buffer types
-VERSION = 4
+VERSION = 5
 PROGRAM_CBUFS = 11  # PackProgram.cbufType's length (runtime/raw_pack.h)
 
 

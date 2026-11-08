@@ -558,6 +558,18 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
     w.m(0x2144, fs.program);  // SET_PIPELINE_PROGRAM(PIXEL)
     pl.setSlot[0] = bindProgramCbufs(w, *vs.record, 0, vs.data, root_.va);
     pl.setSlot[1] = bindProgramCbufs(w, *fs.record, 4, fs.data, root_.va);
+    for (const auto &[prog, group] : {std::pair{vs.record, uint8_t(0)}, std::pair{fs.record, uint8_t(4)}})
+        for (uint8_t c = 1; c < prog->cbufs; c++) {
+            if (cbufKind(prog->cbufType[c]) != CbufUbo)
+                continue;
+            uint8_t entry = 0;
+            while (entry < pp.entries && !(pp.entry[entry].kind == EntryUbo && !bufferStorage(pp.entry[entry]) &&
+                                           pp.entry[entry].offset == cbufUboOffset(prog->cbufType[c])))
+                entry++;
+            pl.ubosNamed &= entry < pp.entries;
+            if (entry < pp.entries)
+                pl.ubos[pl.uboCount++] = {group, c, entry};
+        }
     pl.methods.assign(words.data(), w.at);
     memcpy(pl.push, pp.pushWords, sizeof pl.push);
     pl.pushMask = pp.pushMask;
@@ -2661,6 +2673,11 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     uint32_t *root = cb_->rootPush_;
     const PackPipeline &r = *pl->rec;
     // set 0 first (it may refuse the draw before anything is written): the layout's entries only
+    if (!pl->ubosNamed) {
+        *why = "a program reads a set-0 uniform buffer its record does not name";
+        cb_->refusal = {};
+        return false;
+    }
     uint64_t setVa;
     uint32_t *set = reinterpret_cast<uint32_t *>(d.alloc(d.upload_, kSetBytes, 256, setVa));
     uint32_t residuals[32], residualMask = 0;  // the draw's SlotBindOffset residuals by root push word
@@ -2837,8 +2854,21 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
             p.m(BIND_GROUP_CB + 0x20 * 0, 1 | uint32_t(pl->setSlot[0]) << 4);
         if (pl->setSlot[1])
             p.m(BIND_GROUP_CB + 0x20 * 4, 1 | uint32_t(pl->setSlot[1]) << 4);
-        p.inc(CB_SELECTOR_A, {kRootBytes, uint32_t(d.root_.va >> 32), uint32_t(d.root_.va)});
     }
+    // set 0's uniform buffers the programs read as constant buffers, at the descriptors just written (NVK binds them from the
+    // descriptor: NVK_MME_BIND_CBUF_DESC); one of no bytes is unbound
+    for (uint8_t u = 0; u < pl->uboCount; u++) {
+        const Pipeline::UboCbuf &c = pl->ubos[u];
+        const uint32_t *desc = set + r.entry[c.entry].offset / 4;
+        if (desc[2]) {
+            p.inc(CB_SELECTOR_A, {std::min(desc[2], kMaxCbufBytes), desc[1], desc[0]});
+            p.m(BIND_GROUP_CB + 0x20 * c.group, 1 | uint32_t(c.slot) << 4);
+        } else {
+            p.m(BIND_GROUP_CB + 0x20 * c.group, uint32_t(c.slot) << 4);
+        }
+    }
+    if (pl->setSlot[0] || pl->setSlot[1] || pl->uboCount)
+        p.inc(CB_SELECTOR_A, {kRootBytes, uint32_t(d.root_.va >> 32), uint32_t(d.root_.va)});
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     countRules(*pl);
 #endif

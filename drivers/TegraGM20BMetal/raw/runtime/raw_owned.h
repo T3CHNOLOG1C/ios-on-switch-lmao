@@ -51,6 +51,8 @@ constexpr MethodRange kOwnedMethods[] = {
     {0x1598, 0x15A8},
     {0x179C, 0x17A0},
     {0x19CC, 0x19D0},
+    // SET_PATCH: no raw draw is of patches, and the generator's probe left it as its command buffers' history had it
+    {0x0DCC, 0x0DD0},
     // cache invalidates and flushes: actions, which the raw path issues itself (a submission's prologue, a barrier), though NVK
     // leaves the last one's data behind as if it were state
     {0x021C, 0x0220},
