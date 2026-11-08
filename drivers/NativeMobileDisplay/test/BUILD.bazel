@@ -21,6 +21,8 @@
 #                                       against a model of DC A with the ARM copy
 #   tegra_display_color_test            TegraDisplayColorMath.h against a model of DC A's CMU: the sRGB tables, bit-exact
 #                                       passthrough, and what each IOMobileFramebuffer colour input programs
+#   tegra_display_color_sequence_test   TegraDisplayColorSequence.h against a raster model of DC A: no CMU word changes
+#                                       under the scan, late filters defer, DC A ends on the last tables
 #   display_blend_test                  the blend registers window A and B get while a layer is detached, decoded
 #                                       with the gen2 blender's factor fields: the UI premultiplied over the layer over
 #                                       black, Core Animation's own composite, within half a step at every 8-bit alpha
@@ -108,6 +110,16 @@ host_test(
     srcs = [
         "tegra_display_color_test.cpp",
         "//drivers/NativeMobileDisplay:TegraDisplayColorMath.h",
+        "//drivers/NativeMobileDisplay:TegraDisplayColorTables.h",
+    ],
+)
+
+host_test(
+    name = "tegra_display_color_sequence_test",
+    srcs = [
+        "tegra_display_color_sequence_test.cpp",
+        "//drivers/NativeMobileDisplay:TegraDisplayColorMath.h",
+        "//drivers/NativeMobileDisplay:TegraDisplayColorSequence.h",
         "//drivers/NativeMobileDisplay:TegraDisplayColorTables.h",
     ],
 )
