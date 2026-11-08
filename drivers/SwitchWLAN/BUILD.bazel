@@ -47,6 +47,7 @@ kernel_driver(
         "family-controller-bindings.S",
         "family-interface-bindings.S",
         "SwitchWLANAwdl.cpp",
+        "SwitchWLANAwdlSoft.cpp",
         "awdl/awdl_wire.c",
         "awdl/awdl_core.c",
         "awdl/awdl_data.c",

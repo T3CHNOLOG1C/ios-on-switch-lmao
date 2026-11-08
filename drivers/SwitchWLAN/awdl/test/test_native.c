@@ -383,6 +383,9 @@ static void test_monitor_probe(void)
     NCHECK(bcm_monitor_probe_request(BCM_MONITOR_PROBE_STA_MONITOR, b, sizeof b) == 12 &&
            !memcmp(b, "sta_monitor", 12));
     NCHECK(bcm_monitor_probe_request(BCM_MONITOR_PROBE_STA_MONITOR, b, 11) == 0);
+    NCHECK(bcm_monitor_probe_request(BCM_MONITOR_PROBE_AF_FLYING_MAX, b, sizeof b) == 14 &&
+           !memcmp(b, "af_flying_max", 14));
+    NCHECK(bcm_monitor_probe_request(BCM_MONITOR_PROBE_TSF, b, sizeof b) == 4 && !memcmp(b, "tsf", 4));
     NCHECK(bcm_monitor_probe_request(BCM_MONITOR_PROBE_COUNT, b, sizeof b) == 0);
     NCHECK(BCM_WLC_GET_MONITOR == 107 &&
            !strcmp(bcm_monitor_probe_names[BCM_MONITOR_PROBE_GET_MONITOR], "WLC_GET_MONITOR"));
@@ -393,26 +396,31 @@ static void test_radio_verdict(void)
     struct bcm_awdl_probe p;
     probe_7_35_252_108(&p);
     NCHECK(bcm_probe_absent(&p) == (((1u << BCM_PROBE_COUNT) - 1) & ~(1u << BCM_PROBE_EVENT_MSGS_EXT)));
-    struct awdl_radio_verdict v = awdl_radio_verdict_of(0, 1, 1, 0, 0, &p);
-    NCHECK(v.mode == AWDL_RADIO_OFF && v.off == AWDL_OFF_NO_API && v.api == BCM_AWDL_API_NONE);
-    v = awdl_radio_verdict_of(-EAGAIN, 0, 0, 0, 0, NULL);
-    NCHECK(v.mode == AWDL_RADIO_UNDECIDED);
-    v = awdl_radio_verdict_of(-ENODEV, 0, 0, 0, 0, NULL);
-    NCHECK(v.mode == AWDL_RADIO_OFF && v.off == AWDL_OFF_NO_RADIO);
-    v = awdl_radio_verdict_of(0, 0, 1, 0, 0, &p);
-    NCHECK(v.mode == AWDL_RADIO_OFF && v.off == AWDL_OFF_ABI);
-    v = awdl_radio_verdict_of(0, 1, 0, 1, 0, NULL);
-    NCHECK(v.mode == AWDL_RADIO_OFF && v.off == AWDL_OFF_NO_BACKEND);
-    v = awdl_radio_verdict_of(0, 1, 1, 1, 1, &p);
-    NCHECK(v.mode == AWDL_RADIO_SOFT && v.off == AWDL_OFF_NOT);
-    v = awdl_radio_verdict_of(0, 1, 0, 1, 1, NULL);
+    struct awdl_radio_verdict v = awdl_radio_verdict_of(0, 1, 1, 0, 0, 0, 0, &p);
+    NCHECK(v.mode == AWDL_RADIO_OFF && v.off == AWDL_OFF_NO_API && v.api == BCM_AWDL_API_NONE && !v.trial);
+    // the debug trial runs the soft backend on this firmware, and says what it lacks
+    v = awdl_radio_verdict_of(0, 1, 1, 0, 0, 1, 1, &p);
+    NCHECK(v.mode == AWDL_RADIO_SOFT && v.trial && v.off == AWDL_OFF_NO_API);
+    v = awdl_radio_verdict_of(-EAGAIN, 0, 0, 0, 0, 0, 1, NULL);
+    NCHECK(v.mode == AWDL_RADIO_UNDECIDED && !v.trial);
+    v = awdl_radio_verdict_of(-ENODEV, 0, 0, 0, 0, 0, 1, NULL);
+    NCHECK(v.mode == AWDL_RADIO_OFF && v.off == AWDL_OFF_NO_RADIO && !v.trial);
+    v = awdl_radio_verdict_of(0, 0, 1, 0, 0, 0, 1, &p);
+    NCHECK(v.mode == AWDL_RADIO_OFF && v.off == AWDL_OFF_ABI && !v.trial);
+    v = awdl_radio_verdict_of(0, 1, 0, 1, 0, 1, 0, NULL);
+    NCHECK(v.mode == AWDL_RADIO_OFF && v.off == AWDL_OFF_NO_BACKEND);  // monitor and action frames, no data out
+    v = awdl_radio_verdict_of(0, 1, 1, 1, 1, 0, 0, &p);
+    NCHECK(v.mode == AWDL_RADIO_OFF && v.off == AWDL_OFF_NO_API);  // no way to its channels
+    v = awdl_radio_verdict_of(0, 1, 1, 1, 1, 1, 0, &p);
+    NCHECK(v.mode == AWDL_RADIO_SOFT && v.off == AWDL_OFF_NOT && !v.trial);
+    v = awdl_radio_verdict_of(0, 1, 0, 1, 1, 1, 0, NULL);
     NCHECK(v.mode == AWDL_RADIO_SOFT);
     bcm_probe_record(&p, BCM_PROBE_AWDL_IF, BCME_BADARG, NULL, 0);
-    v = awdl_radio_verdict_of(0, 1, 1, 0, 0, &p);
+    v = awdl_radio_verdict_of(0, 1, 1, 0, 0, 0, 0, &p);
     NCHECK(v.mode == AWDL_RADIO_NATIVE && v.api == BCM_AWDL_API_AWDL_IF);
     const uint8_t v3[4] = {3, 0, 0, 0};
     bcm_probe_record(&p, BCM_PROBE_INTERFACE_CREATE, 0, v3, 4);
-    v = awdl_radio_verdict_of(0, 1, 1, 0, 0, &p);
+    v = awdl_radio_verdict_of(0, 1, 1, 0, 0, 0, 0, &p);
     NCHECK(v.mode == AWDL_RADIO_NATIVE && v.api == BCM_AWDL_API_IFC_V3);
 }
 

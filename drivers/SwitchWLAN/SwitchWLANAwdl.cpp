@@ -9,13 +9,13 @@
 //     page (type 2), and the async wake-up;
 //   - the AWDL protocol itself (awdl/awdl_core.c) on the radio services of SwitchWLANAwdlRadio.h (r12-awdl).
 //
-// en0 advertises AWDL (capability bit 32) when the radio's bring-up probe found a way to make the firmware's AWDL
-// interface (interface_create v3 or awdl_if); otherwise it never does, and awdl0 exists but stays down
-// (a80211_awdl_down_if) with no IO80211 service and no AWDL stack. Nothing touches the
-// firmware before wifip2pd enables AWDL on awdl0: that is when the radio is opened (event mask) and the interface
-// made. Every step that has never run on hardware fails with one log line and AWDL off. The native backend (the firmware's own AWDL, RADIO-API §6) drives
-// whichever firmware generation the radio's bring-up probe found (interface_create v3 as the brcmfmac AWDL series, or
-// the 7.x awdl_if); the software backend (monitor + inject) stays for radios without firmware AWDL.
+// en0 advertises AWDL (capability bit 32) when a backend can carry it: the firmware's own AWDL (the bring-up probe
+// found interface_create v3 or awdl_if), or the soft one (monitor rx, data injection and action frames on a chosen
+// channel). Otherwise it never does, and awdl0 exists but stays down (a80211_awdl_down_if) with no IO80211 service and
+// no AWDL stack; 7.35.252.108 has neither. A debug build's switch-awdl-soft boot-arg runs the soft backend there
+// anyway, for a device run to show what its actframe and receive paths do. Nothing touches the firmware before
+// wifip2pd enables AWDL on awdl0: that is when the radio is opened (event mask) and the interface made. Every step
+// that has never run on hardware fails with one log line and AWDL off.
 #include <IOKit/IOBufferMemoryDescriptor.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/IOPlatformExpert.h>
@@ -29,6 +29,7 @@
 #include <sys/param.h>  // (before sys/mbuf.h: the cluster sizes)
 #include <sys/errno.h>
 #include <sys/mbuf.h>
+#include <sys/proc.h>
 #include <sys/socket.h>
 #include <sys/sockio.h>
 #include <net/ethernet.h>
@@ -42,6 +43,7 @@ extern "C" {
 #include <net/bpf.h>
 }
 #include "SwitchWLANAwdlRadio.h"
+#include "SwitchWLANAwdlSoft.h"
 #include "SwitchWLANStation.h"
 #include "awdl/awdl.h"
 #include "awdl/awdl_apple80211.h"
@@ -49,86 +51,6 @@ extern "C" {
 
 #define SIOCSA80211 0x802869c8UL
 #define SIOCGA80211 0xc02869c9UL
-
-// ---- the radio services, until r12-awdl's SwitchWLAN provides them: "unavailable" ------------------------------
-extern "C" {
-__attribute__((weak)) int swlan_awdl_open(const struct swlan_awdl_caps **caps_out)
-{
-    if (caps_out)
-        *caps_out = nullptr;
-    return -EOPNOTSUPP;
-}
-
-__attribute__((weak)) int swlan_awdl_query(const struct swlan_awdl_caps **caps_out)
-{
-    if (caps_out)
-        *caps_out = nullptr;
-    return -EOPNOTSUPP;
-}
-
-__attribute__((weak)) void swlan_awdl_close(void)
-{}
-
-__attribute__((weak)) int swlan_awdl_rx_start(swlan_rx_fn, void *)
-{
-    return -EOPNOTSUPP;
-}
-
-__attribute__((weak)) int swlan_awdl_rx_stop(void)
-{
-    return 0;
-}
-
-__attribute__((weak)) int swlan_awdl_rx_filter(const uint8_t *, const uint8_t *, uint16_t)
-{
-    return -EOPNOTSUPP;
-}
-
-__attribute__((weak)) int swlan_awdl_tx(const struct swlan_tx_req *)
-{
-    return -EOPNOTSUPP;
-}
-
-__attribute__((weak)) int swlan_awdl_chanseq_set(const struct swlan_chan_seq *)
-{
-    return -EOPNOTSUPP;
-}
-
-__attribute__((weak)) int swlan_awdl_chanseq_clear(void)
-{
-    return 0;
-}
-
-__attribute__((weak)) int swlan_awdl_events(swlan_evt_fn, void *)
-{
-    return -EOPNOTSUPP;
-}
-
-__attribute__((weak)) int swlan_awdl_tsf_read(uint64_t *)
-{
-    return -EOPNOTSUPP;
-}
-
-__attribute__((weak)) int swlan_awdl_var(int, uint8_t, const char *, const void *, size_t, void *, size_t, size_t *)
-{
-    return -EOPNOTSUPP;
-}
-
-__attribute__((weak)) int swlan_awdl_fw_events(swlan_fw_event_fn, void *)
-{
-    return -EOPNOTSUPP;
-}
-
-__attribute__((weak)) int swlan_awdl_eth_tx(const uint8_t *, size_t)
-{
-    return -EOPNOTSUPP;
-}
-
-__attribute__((weak)) int swlan_awdl_eth_rx(swlan_eth_rx_fn, void *)
-{
-    return -EOPNOTSUPP;
-}
-}
 
 namespace {
 
@@ -155,7 +77,7 @@ const struct swlan_awdl_caps *gCaps;
 struct awdl_core *gCore;
 a80211_awdl gFacade;
 awdl_tsf_clock gClock;
-uint64_t gLastAnchorNs;
+bool gSoft;  // the soft backend (actframe excursions) rather than the firmware's own AWDL
 thread_call_t gTimer, gDeferred, gCreate, gIovarWork;
 ifnet_t gIf;
 uint8_t gMac[6];
@@ -180,6 +102,28 @@ Presence gPresence[16];
 unsigned gPresenceCount;
 mbuf_t gInputHead, gInputTail;
 
+// One log line per (process, reason) for a request awdl0 turns down.
+void refuseOnce(const char *reason)
+{
+    static struct {
+        char process[32];
+        const char *reason;
+    } said[8];
+
+    static unsigned count;
+    char process[32] = {};
+    proc_selfname(process, sizeof(process));
+    for (unsigned i = 0; i < count; ++i) {
+        if (said[i].reason == reason && !strncmp(said[i].process, process, sizeof(process)))
+            return;
+    }
+    if (count < sizeof(said) / sizeof(said[0])) {
+        strlcpy(said[count].process, process, sizeof(said[count].process));
+        said[count++].reason = reason;
+    }
+    IOLog("SwitchWLAN: AWDL: refused for %s: %s\n", process, reason);
+}
+
 uint64_t hostNs()
 {
     uint64_t ns = 0;
@@ -187,36 +131,16 @@ uint64_t hostNs()
     return ns;
 }
 
-// The radio's TSF now, from the last (TSF, host clock) pair; re-read once a second.
-// The rule for every radio call that waits on the firmware (swlan_awdl_tsf_read, swlan_awdl_var): never under
-// gLock and never from a radio callback (the radio's work loop would wait on itself). They run from iovarWork or
-// timerFired only, with gLock dropped.
-//
-// Under gLock: the clock as last anchored; the host clock stands in until the radio's TSF is read (the native backend
-// never needs it: the firmware keeps AWDL time, the stack only times peer expiry).
+// The stack's clock: the host's, in microseconds. Neither backend needs the radio's TSF: the firmware keeps AWDL time
+// in the native one, and the soft one times everything, receive times included, on this clock.
+// The rule for every radio call that waits on the firmware (swlan_awdl_var): never under gLock and never from a radio
+// callback (the radio's work loop would wait on itself). They run from iovarWork only, with gLock dropped.
 uint64_t nowTsf()
 {
     const uint64_t ns = hostNs();
-    if (!gClock.valid) {
+    if (!gClock.valid)
         awdl_tsf_clock_anchor(&gClock, ns / 1000, ns);
-        gLastAnchorNs = ns;
-    }
     return awdl_tsf_clock_now(&gClock, ns);
-}
-
-// Soft backend only, from timerFired without gLock: re-read the radio's TSF once a second.
-void reanchorUnlocked()
-{
-    if (!gCaps || gCaps->has_native_awdl || hostNs() - gLastAnchorNs < 1000000000ULL)
-        return;
-    uint64_t tsf = 0;
-    const uint64_t ns = hostNs();
-    if (swlan_awdl_tsf_read(&tsf) != 0)
-        return;
-    IOLockLock(gLock);
-    awdl_tsf_clock_anchor(&gClock, tsf, ns);
-    gLastAnchorNs = ns;
-    IOLockUnlock(gLock);
 }
 
 void armTimer(uint64_t tsf)
@@ -254,7 +178,7 @@ void postEvent(uint32_t event, const void *payload, uint32_t length)
 }
 
 // ---- what the core asks of us (gLock held) --------------------------------------------------------------------------
-int hostTx(void *, const uint8_t *frame, size_t length, uint16_t freq, uint64_t tsf, int noAck)
+int hostTx(void *, const uint8_t *frame, size_t length, uint16_t freq, uint64_t stayUntil, int noAck)
 {
     struct swlan_tx_req r = {};
     r.frame = frame;
@@ -262,7 +186,8 @@ int hostTx(void *, const uint8_t *frame, size_t length, uint16_t freq, uint64_t 
     r.freq_mhz = freq;
     r.rate_mcs = 0xff;
     r.flags = static_cast<uint8_t>((noAck ? SWLAN_TX_NO_ACK : 0u) | SWLAN_TX_ON_CHANNEL_ONLY);
-    r.tx_tsf = gCaps && gCaps->can_inject_timed ? tsf : 0;
+    const uint64_t now = nowTsf();
+    r.stay_us = stayUntil > now ? static_cast<uint32_t>(stayUntil - now) : 0;
     return swlan_awdl_tx(&r) < 0 ? -1 : 0;
 }
 
@@ -482,26 +407,29 @@ void deferredWork(thread_call_param_t, thread_call_param_t)
 // Once a minute, to the unified log (not the console): whether the firmware's AWDL frames and events arrive at all.
 void statsLine()
 {
+#if DEVELOPMENT || DEBUG
     static uint64_t last;
     const uint64_t ns = hostNs();
     if (ns - last < 60000000000ULL || !gCore)
         return;
     last = ns;
     const awdl_stats *st = awdl_core_stats(gCore);
+    char soft[160] = "";
+    switch_wlan_soft_stat(soft, sizeof(soft));
     os_log(
         OS_LOG_DEFAULT,
         "SwitchWLAN: AWDL stats: ifidx %d, fw events %u (unknown %u), AWs %u, frames %u parsed %u bad %u, fw role %d "
         "(%u), peers +%u -%u, syncs %u, iovars %u refused %u skipped %u, data rx %u tx %u drop %u refused %u "
-        "not-AWDL %u, mode changes %u",
+        "not-AWDL %u, mode changes %u, sent PSF %u MIF %u, sync error %d us, resyncs %u%s",
         awdl_core_fw_ifidx(gCore), st->fw_events, st->fw_unknown, st->aws, st->fw_frames, st->af_rx, st->af_bad,
         st->fw_role, st->roles, st->peer_adds, st->peer_dels, st->syncs_pushed, st->iovars, st->iovar_refused,
-        st->iovar_skipped, st->data_rx, st->data_tx, st->data_drop, st->tx_refused, st->data_not_awdl,
-        st->mode_changes);
+        st->iovar_skipped, st->data_rx, st->data_tx, st->data_drop, st->tx_refused, st->data_not_awdl, st->mode_changes,
+        st->psf_tx, st->mif_tx, st->last_sync_error_us, st->resyncs, soft);
+#endif
 }
 
 void timerFired(thread_call_param_t, thread_call_param_t)
 {
-    reanchorUnlocked();
     IOLockLock(gLock);
     if (gCore && awdl_core_running(gCore))
         awdl_core_set_infra(gCore, swlan_awdl_infra_freq(), nowTsf());
@@ -577,7 +505,7 @@ int opStart(void *)
 {
     // the access point's channel now; timerFired follows it (the core re-sends the schedule when it changes)
     awdl_core_set_infra(gCore, swlan_awdl_infra_freq(), nowTsf());
-    if (!gRxStarted && gCaps->has_native_awdl) {
+    if (!gRxStarted && !gSoft) {
         int e = swlan_awdl_fw_events(fwEvent, nullptr);
         if (e >= 0)
             e = swlan_awdl_eth_rx(ethRx, nullptr);
@@ -605,7 +533,7 @@ void opStop(void *)
 {
     if (gTimer)
         thread_call_cancel(gTimer);
-    if (!gCaps->has_native_awdl) {  // native: the core's "awdl_if down" stops the firmware; its events stay on
+    if (gSoft) {  // native: the core's "awdl_if down" stops the firmware; its events stay on
         swlan_awdl_chanseq_clear();
         swlan_awdl_rx_stop();
         gRxStarted = false;
@@ -761,9 +689,18 @@ errno_t ifIoctl(ifnet_t ifp, unsigned long cmd, void *arg)
         if (ifr->ifr_addr.sa_len != ETHER_ADDR_LEN)
             return EINVAL;
         const uint8_t *mac = reinterpret_cast<const uint8_t *>(ifr->ifr_addr.sa_data);
-        // While AWDL runs on the firmware, its awdl_if and payload carry the address: change it only while off
-        if (gCaps && gCaps->has_native_awdl && gCore && awdl_core_running(gCore))
+        if (!memcmp(mac, gMac, 6))
+            return 0;
+        // The soft backend's frames leave with the station's address (actframe takes no other), so awdl0 keeps it;
+        // while AWDL runs on the firmware, its awdl_if and payload carry the address: changed only while off
+        if (gSoft) {
+            refuseOnce("awdl0's address is the station's: the soft backend's frames carry no other");
             return EBUSY;
+        }
+        if (gCore && awdl_core_running(gCore)) {
+            refuseOnce("awdl0's address changes only while AWDL is off");
+            return EBUSY;
+        }
         const errno_t e = ifnet_set_lladdr(ifp, mac, ETHER_ADDR_LEN);
         if (e)
             return e;
@@ -1220,6 +1157,35 @@ bool allocateStack()
 
 }  // namespace
 
+namespace {
+
+void startStack(const awdl_radio_verdict &v, const struct swlan_awdl_caps *caps)
+{
+    gCaps = caps;
+    gSoft = v.mode == AWDL_RADIO_SOFT;
+    memcpy(gMac, caps->self_mac, 6);
+    awdl_config cfg;
+    awdl_config_default(&cfg, gMac);
+    cfg.backend = gSoft ? AWDL_BACKEND_SOFT : AWDL_BACKEND_NATIVE;
+    cfg.fw_api = static_cast<uint8_t>(v.api);
+    cfg.fw_absent = bcm_probe_absent(caps->probe);
+    const awdl_host host = {nullptr, hostTx, hostSchedule, hostPeer, hostDeliver, hostLog, hostIovar, hostTxEth};
+    awdl_core_init(gCore, &host, &cfg);
+    if (v.trial) {
+        IOLog("SwitchWLAN: AWDL: soft backend trial (switch-awdl-soft=%u) on a radio without %s: action frames out "
+              "through actframe, in through WLC_E_ACTION_FRAME_RX%s; AWDL data cannot leave this radio\n",
+              caps->soft_trial, v.off == AWDL_OFF_NO_API ? "firmware AWDL" : "a soft backend's needs",
+              caps->soft_trial >= 2 ? " and monitor mode" : "");
+        return;
+    }
+    IOLog("SwitchWLAN: AWDL: available, %s backend (native %u, %s; monitor %u, inject %u, action frames %u, hops %u, "
+          "mchan %u)\n",
+          gSoft ? "soft" : "firmware", caps->has_native_awdl, bcm_awdl_api_name(v.api), caps->can_monitor,
+          caps->can_inject, caps->can_tx_action, caps->can_scheduled_hops, caps->can_stay_assoc);
+}
+
+}  // namespace
+
 extern "C" int switch_wlan_awdl_capable(void)
 {
     if (__atomic_load_n(&gCapable, __ATOMIC_ACQUIRE) >= 0)
@@ -1237,8 +1203,16 @@ extern "C" int switch_wlan_awdl_capable(void)
             static_cast<int>((caps != nullptr) && caps->abi_version == SWLAN_AWDL_ABI_VERSION),
             static_cast<int>((caps != nullptr) && caps->has_native_awdl != 0u),
             static_cast<int>((caps != nullptr) && caps->can_monitor != 0u),
-            static_cast<int>((caps != nullptr) && caps->can_inject != 0u), caps ? caps->probe : nullptr);
+            static_cast<int>((caps != nullptr) && caps->can_inject != 0u),
+            static_cast<int>((caps != nullptr) && caps->can_tx_action != 0u),
+            static_cast<int>((caps != nullptr) && caps->soft_trial != 0u), caps ? caps->probe : nullptr);
         if (v.mode == AWDL_RADIO_UNDECIDED) {
+        } else if (v.mode != AWDL_RADIO_OFF && caps && !allocateStack()) {
+            IOLog("SwitchWLAN: AWDL: no memory for the stack: off\n");
+            verdict = 0;
+        } else if (v.mode != AWDL_RADIO_OFF && caps) {
+            startStack(v, caps);
+            verdict = 1;
         } else if (v.off == AWDL_OFF_NO_RADIO || !caps) {
             IOLog("SwitchWLAN: AWDL: the radio has no AWDL (%d): off\n", e);
             verdict = 0;
@@ -1247,35 +1221,15 @@ extern "C" int switch_wlan_awdl_capable(void)
                   SWLAN_AWDL_ABI_VERSION);
             verdict = 0;
         } else if (v.off == AWDL_OFF_NO_BACKEND) {
-            IOLog("SwitchWLAN: AWDL: radio native=%u monitor=%u inject=%u: neither backend can run: off\n",
-                  caps->has_native_awdl, caps->can_monitor, caps->can_inject);
+            IOLog("SwitchWLAN: AWDL: radio native=%u monitor=%u inject=%u action frames=%u: neither backend can run: "
+                  "off\n",
+                  caps->has_native_awdl, caps->can_monitor, caps->can_inject, caps->can_tx_action);
             verdict = 0;
-        } else if (v.off == AWDL_OFF_NO_API) {
+        } else {
             IOLog(
                 "SwitchWLAN: AWDL: the firmware lists awdl but has neither interface_create v3 nor awdl_if (%s): off\n",
                 caps->probe ? "AWDL probe lines" : "probe did not run");
             verdict = 0;
-        } else if (!allocateStack()) {
-            IOLog("SwitchWLAN: AWDL: no memory for the stack: off\n");
-            verdict = 0;
-        } else {
-            gCaps = caps;
-            memcpy(gMac, caps->self_mac, 6);
-            awdl_config cfg;
-            awdl_config_default(&cfg, gMac);
-            const enum bcm_awdl_api api = v.api;
-            cfg.backend = v.mode == AWDL_RADIO_NATIVE ? AWDL_BACKEND_NATIVE : AWDL_BACKEND_SOFT;
-            cfg.fw_api = static_cast<uint8_t>(api);
-            cfg.fw_absent = bcm_probe_absent(caps->probe);
-            const awdl_host host = {nullptr,     hostTx,  hostSchedule, hostPeer,
-                                    hostDeliver, hostLog, hostIovar,    hostTxEth};
-            awdl_core_init(gCore, &host, &cfg);
-            IOLog("SwitchWLAN: AWDL: available, %s backend (native %u, %s; monitor %u, inject %u timed %u, hops %u, "
-                  "mchan %u)\n",
-                  cfg.backend == AWDL_BACKEND_NATIVE ? "firmware" : "monitor+inject", caps->has_native_awdl,
-                  bcm_awdl_api_name(api), caps->can_monitor, caps->can_inject, caps->can_inject_timed,
-                  caps->can_scheduled_hops, caps->can_stay_assoc);
-            verdict = 1;
         }
         if (verdict >= 0)
             __atomic_store_n(&gCapable, verdict, __ATOMIC_RELEASE);
@@ -1298,8 +1252,12 @@ extern "C" int switch_wlan_awdl_vif_create(void *payload, size_t length)
         gUnit = r->unit < 8 ? r->unit : 0;
         snprintf(gName, sizeof gName, "awdl%u", gUnit);
         static const uint8_t zero[6] = {};
-        if (memcmp(r->mac, zero, 6))
+        if (memcmp(r->mac, zero, 6) && gSoft && memcmp(r->mac, gMac, 6)) {
+            refuseOnce("awdl0 takes the station's address, not the one asked for: the soft backend's frames carry no "
+                       "other");
+        } else if (memcmp(r->mac, zero, 6)) {
             memcpy(gMac, r->mac, 6);
+        }
         awdl_core_set_addr(gCore, gMac);
         uint8_t caps[12] = {0x4c, 0x46, 0x0a, 0, 0x01};  // en0's bitmap (SwitchWLANNet kCardCaps) plus bit 32
         const a80211_awdl_ops ops = {nullptr, opStart, opStop, opPost, opLog};

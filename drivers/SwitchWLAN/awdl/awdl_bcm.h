@@ -46,6 +46,8 @@ const char *bcme_name(int status);
 // ---- firmware events (wl_event_msg_t.event_type) ---------------------------------------------------------------------
 enum {
     WLC_E_IF = 54,
+    BCM_E_ACTION_FRAME_COMPLETE = 60,           // an actframe's transmit status (0: sent)
+    BCM_E_ACTION_FRAME_OFF_CHAN_COMPLETE = 70,  // its dwell is over: the radio is back on its home channel
     WLC_E_ACTION_FRAME_RX = 75,  // received action frames on the AWDL interface (the series' AWDL frames)
     WLC_E_AWDL_AW = 96,
     WLC_E_AWDL_ROLE = 97,   // the role is the event's status: 0 slave, 1 non-election master, 2 master
@@ -136,6 +138,8 @@ enum bcm_monitor_probe_item {
     BCM_MONITOR_PROBE_GET_MONITOR,  // WLC_GET_MONITOR, an ioctl rather than a variable
     BCM_MONITOR_PROBE_PROMISC_LEVEL,
     BCM_MONITOR_PROBE_STA_MONITOR,
+    BCM_MONITOR_PROBE_AF_FLYING_MAX,  // in the RAM image: the action frame machinery actframe sends through
+    BCM_MONITOR_PROBE_TSF,            // the TSF, for receive times on the radio's clock
     BCM_MONITOR_PROBE_COUNT
 };
 
@@ -196,13 +200,16 @@ enum awdl_radio_off {
 
 struct awdl_radio_verdict {
     enum awdl_radio_mode mode;
-    enum awdl_radio_off off;
+    enum awdl_radio_off off;  // why it is off, or would be without the trial
     enum bcm_awdl_api api;
+    int trial;  // the soft backend runs for a debug build's trial although the radio cannot carry AWDL
 };
 // `query` is swlan_awdl_query's return with a missing caps pointer counted as refused: -EAGAIN is undecided, any other
-// negative value is off for good.
+// negative value is off for good. The soft backend needs all three of monitor rx (AWDL data in), data injection (out)
+// and action frames on a chosen channel; `trial` runs it on a radio that answered but lacks them (never past an ABI
+// mismatch or a radio that is not there).
 struct awdl_radio_verdict awdl_radio_verdict_of(int query, int abi_ok, int has_native, int can_monitor, int can_inject,
-                                                const struct bcm_awdl_probe *probe);
+                                                int can_tx_action, int trial, const struct bcm_awdl_probe *probe);
 
 // ---- interface creation -------------------------------------------------------------------------------------------
 enum {

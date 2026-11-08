@@ -9,13 +9,22 @@
 #include <errno.h>
 #endif
 
-const uint8_t bcm_awdl_events[] = {WLC_E_ACTION_FRAME_RX,    WLC_E_AWDL_AW,
-                                   WLC_E_AWDL_ROLE,          WLC_E_AWDL_EVENT,
-                                   WLC_E_AWDL_RX_PRB_RESP,   WLC_E_AWDL_RX_ACT_FRAME,
-                                   WLC_E_AWDL_WOWL_NULLPKT,  WLC_E_AWDL_PHYCAL_STATUS,
-                                   WLC_E_AWDL_OOB_AF_STATUS, WLC_E_AWDL_SCAN_STATUS,
-                                   WLC_E_AWDL_AW_START,      WLC_E_AWDL_AW_END,
-                                   WLC_E_AWDL_AW_EXT,        WLC_E_AWDL_PEER_CACHE_CONTROL};
+const uint8_t bcm_awdl_events[] = {BCM_E_ACTION_FRAME_COMPLETE,
+                                   BCM_E_ACTION_FRAME_OFF_CHAN_COMPLETE,
+                                   WLC_E_ACTION_FRAME_RX,
+                                   WLC_E_AWDL_AW,
+                                   WLC_E_AWDL_ROLE,
+                                   WLC_E_AWDL_EVENT,
+                                   WLC_E_AWDL_RX_PRB_RESP,
+                                   WLC_E_AWDL_RX_ACT_FRAME,
+                                   WLC_E_AWDL_WOWL_NULLPKT,
+                                   WLC_E_AWDL_PHYCAL_STATUS,
+                                   WLC_E_AWDL_OOB_AF_STATUS,
+                                   WLC_E_AWDL_SCAN_STATUS,
+                                   WLC_E_AWDL_AW_START,
+                                   WLC_E_AWDL_AW_END,
+                                   WLC_E_AWDL_AW_EXT,
+                                   WLC_E_AWDL_PEER_CACHE_CONTROL};
 const unsigned bcm_awdl_event_count = sizeof bcm_awdl_events;
 
 static uint16_t be16(const uint8_t *p)
@@ -125,7 +134,7 @@ size_t bcm_probe_request(unsigned item, uint8_t *out, size_t size)
 }
 
 const char *const bcm_monitor_probe_names[BCM_MONITOR_PROBE_COUNT] = {"WLC_GET_MONITOR", "monitor_promisc_level",
-                                                                      "sta_monitor"};
+                                                                      "sta_monitor", "af_flying_max", "tsf"};
 
 size_t bcm_monitor_probe_request(unsigned item, uint8_t *out, size_t size)
 {
@@ -218,10 +227,10 @@ const char *bcm_awdl_api_name(enum bcm_awdl_api api)
 }
 
 struct awdl_radio_verdict awdl_radio_verdict_of(int query, int abi_ok, int has_native, int can_monitor, int can_inject,
-                                                const struct bcm_awdl_probe *probe)
+                                                int can_tx_action, int trial, const struct bcm_awdl_probe *probe)
 {
-    struct awdl_radio_verdict v = {AWDL_RADIO_OFF, AWDL_OFF_NOT, bcm_awdl_api_of(probe)};
-    const int soft = can_monitor && can_inject;
+    struct awdl_radio_verdict v = {AWDL_RADIO_OFF, AWDL_OFF_NOT, bcm_awdl_api_of(probe), 0};
+    const int soft = can_monitor && can_inject && can_tx_action;
     if (query == -EAGAIN) {
         v.mode = AWDL_RADIO_UNDECIDED;
     } else if (query < 0) {
@@ -234,6 +243,10 @@ struct awdl_radio_verdict awdl_radio_verdict_of(int query, int abi_ok, int has_n
         v.off = AWDL_OFF_NO_API;
     } else {
         v.mode = has_native && v.api != BCM_AWDL_API_NONE ? AWDL_RADIO_NATIVE : AWDL_RADIO_SOFT;
+    }
+    if (trial && (v.off == AWDL_OFF_NO_BACKEND || v.off == AWDL_OFF_NO_API)) {
+        v.mode = AWDL_RADIO_SOFT;
+        v.trial = 1;
     }
     return v;
 }

@@ -47,6 +47,7 @@
 #include "SwitchWLANTrace.h"
 #include "SwitchWLANWpa.h"
 #include "../SwitchSuspend/SwitchWake.h"
+#include "SwitchWLANAwdlSoft.h"
 #include "awdl/awdl_bcm.h"
 
 // firmware.S
@@ -104,7 +105,8 @@ constexpr uint32_t E_ACTION_FRAME_RX = 75;
 
 bool isAwdlEvent(uint32_t type)
 {
-    return (type >= 96 && type <= 98) || (type >= 111 && type <= 120);
+    return (type >= 96 && type <= 98) || (type >= 111 && type <= 120) || type == BCM_E_ACTION_FRAME_COMPLETE ||
+           type == BCM_E_ACTION_FRAME_OFF_CHAN_COMPLETE;
 }
 
 constexpr uint32_t kStatusPartial = 8, kLinkUp = 1;
@@ -248,6 +250,13 @@ OSDeclareDefaultStructors(SwitchWLAN)
     int awdlVar(bool set, uint8_t ifidx, const char *name, const void *in, size_t inLength, void *out, size_t outLength,
                 size_t *returned);
     int awdlTransmit(const uint8_t *eth, size_t length);
+    int awdlIoctlSet(uint32_t cmd, const void *buf, size_t length);  // the soft backend's actframe and monitor mode
+
+    int awdlD11n() const
+    {
+        return iotype_ == SWLAN_IOTYPE_D11N;
+    }
+
     void awdlCallbacks(swlan_fw_event_fn events, void *eventsContext, swlan_eth_rx_fn rx, void *rxContext,
                        swlan_evt_fn loss, void *lossContext);
 
@@ -429,7 +438,7 @@ private:
     void attachInterrupt();
     static void msiFired(OSObject *owner, IOInterruptEventSource *sender, int count);
     static void onEvent(void *context, const swlan::Event &event);
-    static void onFrame(void *context, const uint8_t *frame, size_t length, uint8_t ifidx);
+    static void onFrame(void *context, const uint8_t *frame, size_t length, uint8_t ifidx, uint8_t kind);
     void escanResult(const swlan::Event &event);
     void keepBss(const swlan_bss &bss, uint64_t now);
     void pushEapol(const uint8_t *frame, size_t length);
@@ -721,9 +730,17 @@ void SwitchWLAN::pushEapol(const uint8_t *frame, size_t length)
 
 // Work loop: a received frame. EAPOL to the supplicant, the rest to en0 once joined (a station has no carrier
 // before that).
-void SwitchWLAN::onFrame(void *context, const uint8_t *frame, size_t length, uint8_t ifidx)
+void SwitchWLAN::onFrame(void *context, const uint8_t *frame, size_t length, uint8_t ifidx, uint8_t kind)
 {
     auto *self = static_cast<SwitchWLAN *>(context);
+    if (kind == BCM_MSGBUF_RX_FRAME_802_11) {  // monitor mode's: only the soft AWDL backend asks for it
+        if (self->awdlOpen_) {
+            switch_wlan_soft_frame(frame, length);
+        } else {
+            ++self->awdlRxDropped_;
+        }
+        return;
+    }
     if (ifidx) {  // another firmware interface: AWDL's, while it is open
         if (self->awdlOpen_ && self->awdlRxFn_ && static_cast<int>(ifidx) == self->awdlIfidx_) {
             self->awdlRxFn_(self->awdlRxCtx_, frame, length);
@@ -2980,6 +2997,8 @@ void SwitchWLAN::awdlEvent(const swlan::Event &event)
         IOLog("SwitchWLAN: AWDL: firmware interface %u %s (bsscfg %u, role %u)\n", ifidx, change, event.data[3],
               event.data[4]);
     }
+    if (switch_wlan_soft_event(event.type, event.status, event.addr, event.data, event.length))
+        return;
     if (!awdlEventFn_)
         return;
     swlan_fw_event e = {event.type, event.status, event.reason, {}, event.ifidx, event.bsscfgidx};
@@ -3002,6 +3021,7 @@ int SwitchWLAN::awdlQuery(const swlan_awdl_caps **caps)
     memset(&c, 0, sizeof(c));
     c.abi_version = SWLAN_AWDL_ABI_VERSION;
     c.has_native_awdl = 1;
+    switch_wlan_soft_caps(&c);
     memcpy(c.self_mac, mac_, 6);
     c.probe = &gAwdlProbe;
     if (caps)
@@ -3045,9 +3065,11 @@ int SwitchWLAN::awdlOpen(const swlan_awdl_caps **caps)
         }
         IOLog("SwitchWLAN: AWDL: firmware AWDL opened (AWDL events on, %u AWDL flow rings)\n", mb_.awdlRingCount());
     }
+    switch_wlan_soft_init();
     memset(&c, 0, sizeof(c));
     c.abi_version = SWLAN_AWDL_ABI_VERSION;
     c.has_native_awdl = 1;
+    switch_wlan_soft_caps(&c);
     memcpy(c.self_mac, mac_, 6);
     c.probe = gAwdlProbe.done ? &gAwdlProbe : nullptr;
     if (caps)
@@ -3170,6 +3192,16 @@ int SwitchWLAN::awdlVar(bool set, uint8_t ifidx, const char *name, const void *i
     if (said++ < 8)
         IOLog("SwitchWLAN: AWDL: %s %s (ifidx %u): %s\n", set ? "set" : "get", name, ifidx, why_);
     return -EIO;
+}
+
+int SwitchWLAN::awdlIoctlSet(uint32_t cmd, const void *buf, size_t length)
+{
+    if (loop_->onThread())
+        return -EDEADLK;
+    int16_t fw = 0;
+    if (ioctlOn(0, cmd, static_cast<const uint8_t *>(buf), length, 0, nullptr, nullptr, &fw))
+        return 0;
+    return fw ? SWLAN_FWERR(fw) : -EIO;
 }
 
 int SwitchWLAN::awdlTransmit(const uint8_t *eth, size_t length)
@@ -3301,8 +3333,7 @@ extern "C" void switch_wlan_counters(char *text, size_t size)
     }
 }
 
-// SwitchWLANAwdlRadio.h §6, the firmware's own AWDL. The monitor+inject calls (§2-§5) keep SwitchWLANAwdl.cpp's
-// weak "unavailable" definitions: this firmware has no monitor or injection.
+// SwitchWLANAwdlRadio.h §6, the firmware's own AWDL; the soft backend's calls (§2-§5) are SwitchWLANAwdlSoft.cpp's.
 extern "C" int swlan_awdl_open(const struct swlan_awdl_caps **caps_out)
 {
     if (caps_out)
@@ -3356,6 +3387,16 @@ extern "C" int swlan_awdl_events(swlan_evt_fn fn, void *ctx)
 extern "C" int swlan_awdl_eth_tx(const uint8_t *eth, size_t len)
 {
     return gDriver ? gDriver->awdlTransmit(eth, len) : -ENXIO;
+}
+
+extern "C" int switch_wlan_ioctl_set(uint32_t cmd, const void *buf, size_t length)
+{
+    return gDriver ? gDriver->awdlIoctlSet(cmd, buf, length) : -ENXIO;
+}
+
+extern "C" int switch_wlan_d11n(void)
+{
+    return gDriver ? gDriver->awdlD11n() : 0;
 }
 
 // The radio's address where the system reads it, before userland starts: /chosen mac-address-wifi0 (MobileGestalt's
