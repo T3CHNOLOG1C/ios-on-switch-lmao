@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// Publishes NativeSwitchWatchdog.cpp's IOWatchdog and PMU from the board thread (SwitchRootDiag.h), long before
+// Publishes NativeSwitchWatchdog.cpp's IOWatchdog and PMU from the board thread (SwitchRootBoot.c), long before
 // launchd: load AppleARMWatchdogTimer (prelinked; apfs depends on it) so the IOWatchdog metaclass exists, register our
 // classes (switch_kernel_classes), then attach one instance of each to IOResources and start it (the original start
 // registers the watchdog). Same staging as SwitchAccelStubPublish.cpp. Only when both started does
