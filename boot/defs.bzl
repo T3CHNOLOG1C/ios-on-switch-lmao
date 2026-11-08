@@ -207,6 +207,7 @@ def _boot_package_impl(ctx):
     args.add("--portrait-header", ctx.file.portrait_header)
     if smp:
         args.add("--smp")
+
     # iOS 27's Image4 will not start without the current boot's manifest hash; 17's AppleImage4 boots without one.
     manifest_hash = ios_version(ctx.attr._kind[BuildSettingInfo].value) >= 27
     if manifest_hash:

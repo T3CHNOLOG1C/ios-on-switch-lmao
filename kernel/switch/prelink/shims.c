@@ -10,16 +10,15 @@ int switch_prelink_enosys(void);
 __abortlike void switch_prelink_unreachable(void);
 
 /* A code-signing monitor call this kernel, which runs without a monitor, does not take (txm.c's answer). */
-int
-switch_prelink_enosys(void)
+int switch_prelink_enosys(void)
 {
-	return ENOSYS;
+    return ENOSYS;
 }
 
 /* Code only Apple SoC hardware the console's ADT does not describe can reach; the caller's site names the import. */
-__abortlike void
-switch_prelink_unreachable(void)
+__abortlike void switch_prelink_unreachable(void)
 {
-	panic("SwitchPrelink: kext code for hardware this console lacks called an import shims.py answers as unreachable "
-	    "(from %p)", __builtin_return_address(0));
+    panic("SwitchPrelink: kext code for hardware this console lacks called an import shims.py answers as unreachable "
+          "(from %p)",
+          __builtin_return_address(0));
 }

@@ -490,7 +490,10 @@ xnu_kernel(
 xnu_kernel_12377(
     name = "kernel_unprelinked_12377",
     out = "build/xnu-12377/mach.development.bcm2837.unstripped.noctf",
-    extra_exports = ["prelink.exports"],
+    extra_exports = [
+        "prelink.exports",
+        "prelink26.exports",
+    ],
     inputs = [
         ":corecrypto",
         ":libArmDTPlatform",

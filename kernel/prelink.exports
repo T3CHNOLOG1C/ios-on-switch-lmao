@@ -3,9 +3,6 @@
 # which the prelink reads. DEVELOPMENT links without a list and exports every global anyway.
 # emit_prelink.py CUT_STUB (drivers/SwitchUSB): the zero word a cut dependency's metaclass pointers are rebound to.
 _switch_prelink_cut_null
-# kernel/switch/prelink/shims.c: what prelink26's shims.py binds iOS 27 kext imports to.
-_switch_prelink_enosys
-_switch_prelink_unreachable
 # The ABI markers emit_prelink.py checks the native kernel for (kits/NativePrelink's XNU patches).
 _kalloc_sparse_prelink_index_version
 _native_prelink_security_init_version

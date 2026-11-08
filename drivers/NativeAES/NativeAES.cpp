@@ -143,10 +143,16 @@ IOReturn NativeAES::performAES(IOMemoryDescriptor *input, IOMemoryDescriptor *ou
         (key->bits != 128 && key->bits != 192 && key->bits != 256))
         return kIOReturnBadArgument;
     IOAESKeyData derived{};
+
     const struct Wipe {
         IOAESKeyData *key;
-        ~Wipe() { cc_clear(sizeof *key, key); }
+
+        ~Wipe()
+        {
+            cc_clear(sizeof *key, key);
+        }
     } wipe{&derived};
+
     if (key->selector && deviceKey(*key, &derived))
         key = &derived;
     if (key->selector || (operation != IOAESEncrypt && operation != IOAESDecrypt)) {
