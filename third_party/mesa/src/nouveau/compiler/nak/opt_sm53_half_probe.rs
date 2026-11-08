@@ -12,6 +12,9 @@
 //!
 //! At most one of them holds. Its kernels match the CPU and the other's do
 //! not; the one that holds becomes a rule of its own.
+//!
+//! opt_sm53_f32_source_probe asks the same of HADD2's F32 swizzle: an f32
+//! narrowed to half, and its round trip through half, as one HADD2 each.
 
 use crate::ir::*;
 
@@ -77,6 +80,7 @@ fn with_f32_result(dst: Dst, kind: Half, srcs: &[Src], saturate: bool) -> Option
             saturate,
             ftz: false,
             f32: true,
+            a_f32: false,
         }
         .into(),
         (Half::Mul, [a, b]) => OpHFma2 {
@@ -165,6 +169,77 @@ impl Shader<'_> {
                         instr.op = op;
                     }
                     record(&mut defs, &instr.op);
+                }
+            }
+        }
+    }
+}
+
+fn narrowing(op: &OpF2F) -> bool {
+    op.src_type == FloatType::F32
+        && op.dst_type == FloatType::F16
+        && op.rnd_mode == FRndMode::NearestEven
+        && !op.integer_rnd
+        && op.src.src_swizzle.is_none()
+        // legalize copies a constant as a half pair, not as an f32
+        && matches!(op.src.src_ref, SrcRef::SSA(_))
+        && matches!(
+            op.src.src_mod,
+            SrcMod::None | SrcMod::FAbs | SrcMod::FNeg | SrcMod::FNegAbs
+        )
+}
+
+fn f32_source(dst: Dst, x: Src, f32: bool) -> Op {
+    OpHAdd2 {
+        dst,
+        srcs: [x, Src::ZERO.fneg()],
+        saturate: false,
+        ftz: false,
+        f32,
+        a_f32: true,
+    }
+    .into()
+}
+
+/// The half a widening of a low lane reads
+fn widened_low(op: &OpF2F) -> Option<SSAValue> {
+    let low = matches!(op.src.src_swizzle, SrcSwizzle::None | SrcSwizzle::Xx);
+    if widening(op) && !op.ftz && low {
+        ssa(&op.src)
+    } else {
+        None
+    }
+}
+
+impl Shader<'_> {
+    /// SM53's F32 swizzle, after copy-prop. HADD2 of an f32 and -0 with a half
+    /// result is the f32 rounded to half if the ALU rounds to nearest even,
+    /// whether it converts the f32 first or rounds the exact sum; with an f32
+    /// result it is the round trip through half only if it converts the f32 to
+    /// half first.
+    pub fn opt_sm53_f32_source_probe(&mut self) {
+        for f in &mut self.functions {
+            let mut narrowed: FxHashMap<SSAValue, Src> = FxHashMap::default();
+            for b in &mut f.blocks {
+                for instr in &mut b.instrs {
+                    let op = match &instr.op {
+                        Op::F2F(n) if narrowing(n) => {
+                            if let Some(dst) = n.dst.as_ssa() {
+                                narrowed.insert(dst[0], n.src.clone());
+                            }
+                            f32_source(n.dst.clone(), n.src.clone(), false)
+                        }
+                        Op::F2F(w) => {
+                            let Some(x) =
+                                widened_low(w).and_then(|h| narrowed.get(&h))
+                            else {
+                                continue;
+                            };
+                            f32_source(w.dst.clone(), x.clone(), true)
+                        }
+                        _ => continue,
+                    };
+                    instr.op = op;
                 }
             }
         }

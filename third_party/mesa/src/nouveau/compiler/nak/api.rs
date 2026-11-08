@@ -548,6 +548,9 @@ fn nak_compile_shader_internal(
     pass!(s, opt_copy_prop);
     pass!(s, opt_dce);
     pass!(s, opt_out);
+    if DEBUG.sm53_probe() && nak.sm >= 53 && nak.sm < 70 {
+        pass!(s, opt_sm53_f32_source_probe);
+    }
     pass!(s, legalize);
     pass!(s, opt_dce);
     pass!(s, opt_instr_sched_prepass);
