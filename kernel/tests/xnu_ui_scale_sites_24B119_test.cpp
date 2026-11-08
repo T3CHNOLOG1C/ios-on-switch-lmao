@@ -23,6 +23,11 @@ const std::vector<TextMapping> kMappings = {
      0x180400000,
      0x7d34000,
      0},
+    {".03",
+     {0x8f, 0x50, 0x44, 0x24, 0x74, 0xa0, 0x3b, 0x04, 0xb1, 0x03, 0xe8, 0xd2, 0x5a, 0x06, 0xe3, 0x8b},
+     0x188400000,
+     0x7cac000,
+     0},
     {".11",
      {0x13, 0xd1, 0x27, 0xbc, 0x9e, 0xd2, 0x36, 0x63, 0xa6, 0x80, 0xfd, 0x90, 0x2f, 0xbb, 0xd2, 0x51},
      0x1a8400000,
@@ -289,6 +294,7 @@ TEST(XnuUiScaleSites24B119, HomeGridIsTheRowOfTheScreenTypeThisScreenGets)
               (std::vector<uint8_t>{4, 6, 0, 0, 0, 0, 0, 0}));
     EXPECT_EQ(std::vector<uint8_t>(root.patched, root.patched + root.size), (std::vector<uint8_t>{3, 5, 5, 3}));
     EXPECT_EQ(std::vector<uint8_t>(widgets.patched, widgets.patched + widgets.size), (std::vector<uint8_t>{3, 5}));
+    EXPECT_TRUE(site->every_scale);  // as 21H461's grid, which its own pager maps at every scale
 }
 
 TEST(XnuUiScaleSites24B119, SwitcherPageScaleKeepsTheShippedCallsAndExit)
@@ -333,4 +339,46 @@ TEST(XnuUiScaleSites24B119, SwitcherCardsAreTheLandscapeScaleOnlyInLandscape)
     // 1.25: 256 x 144 point cards in landscape (320 x 180 pixels)
     EXPECT_EQ(1024 * PatchedPageScale(0.3, 1024, 576, 0.25), 256);
     EXPECT_EQ(576 * PatchedPageScale(0.3, 1024, 576, 0.25), 144);
+}
+
+TEST(XnuUiScaleSites24B119, PlaceholderBatchDeadlineIsNPlusTenTimesFiveInBothCopies)
+{
+    const switch_us_site *site = Named("WidgetKit placeholder batch deadline (n + 10) x 5 s");
+    ASSERT_NE(site, nullptr);
+    EXPECT_TRUE(site->every_scale);
+    ASSERT_EQ(site->edits, 2u);
+    // the getter and DefaultWatchdogTimeoutProvider's function, each + 0x38
+    EXPECT_EQ(AddressOf(*site, site->edit[0], 0), 0x18bd532d4u + 0x38);
+    EXPECT_EQ(AddressOf(*site, site->edit[1], 0), 0x18bd537b8u + 0x38);
+    // clang -arch arm64: fadd d1, d0, d1; fmov d2, #10.0; fmaxnm d1, d1, d2; fadd d0, d0, d2; fmov d2, #20.0;
+    // fmaxnm d0, d0, d2; cmp w9, #0; fcsel d0, d1, d0, eq -> fmov d2, #5.0; fmul d0, d0, d2 for the last two of six
+    const std::vector<uint32_t> stock = {0x1e612801u, 0x1e649002u, 0x1e626821u, 0x1e622800u,
+                                         0x1e669002u, 0x1e626800u, 0x7100013fu, 0x1e600c20u};
+    for (unsigned e = 0; e < site->edits; e++) {
+        SCOPED_TRACE(e);
+        const switch_us_edit &edit = site->edit[e];
+        ASSERT_EQ(edit.length, 4 * stock.size());
+        for (size_t i = 0; i < stock.size(); i++) {
+            EXPECT_EQ(Word(edit.stock + 4 * i), stock[i]) << i;
+        }
+        EXPECT_EQ(edit.kind, SWITCH_US_FIXED);
+        ASSERT_EQ(edit.at, 16u);
+        ASSERT_EQ(edit.size, 8u);
+        EXPECT_EQ(Word(edit.patched), 0x1e629002u);
+        EXPECT_EQ(Word(edit.patched + 4), 0x1e620800u);
+    }
+    // getPlaceholders(13): 23 s shipped, 115 s after
+    const double n = 13;
+    EXPECT_EQ(std::fmax(n + 10, 20), 23);
+    EXPECT_EQ((n + 10) * 5, 115);
+}
+
+TEST(XnuUiScaleSites24B119, OnlyTheGridAndTheWidgetDeadlineApplyAtScaleOne)
+{
+    for (size_t i = 0; i < kCache.count; i++) {
+        const std::string name = switch_ui_scale_sites::NameOf(kCache.sites[i]);
+        const bool every_scale = name == "SpringBoardHome home screen grid 3x5" ||
+                                 name == "WidgetKit placeholder batch deadline (n + 10) x 5 s";
+        EXPECT_EQ(kCache.sites[i].every_scale, every_scale) << name;
+    }
 }
