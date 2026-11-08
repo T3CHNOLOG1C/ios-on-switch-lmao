@@ -246,6 +246,25 @@ TEST(Pretranslate, PlacesStubsInTheTailAndMarksAndSigns)
     EXPECT_NE(memcmp(x.r.cdhash_in, x.r.cdhash_out, sizeof(h)), 0);
 }
 
+// An address of the end of __text (here an ADR; in libsystem_malloc_debug a rebased section$end pointer) is the first
+// word of the stub tail: it is not code, so it is no entry and the stubs there stand.
+TEST(Pretranslate, AnAddressOfTheTextEndIsNoEntry)
+{
+    Spec s = typical();
+    const uint32_t adr = static_cast<uint32_t>(s.code.size());
+    s.code.push_back(0x10000041);  // adr x1, . + 8: the word after __text
+    s.code.push_back(kRet);
+    s.starts.push_back(adr);
+    Result x;
+    run(s, x);
+    ASSERT_EQ(x.r.status, A64X_PT_TRANSLATED) << x.r.why;
+    EXPECT_EQ(x.verified, 2) << x.err;
+    uint64_t tail_lo, tail_hi;
+    a64x_pt_tail(&x.m, &tail_lo, &tail_hi);
+    ASSERT_EQ(tail_lo, kTextOff + 4ull * (adr + 2));
+    EXPECT_NE(get32(x.out.data() + tail_lo), 0u) << "a stub word starts the tail";
+}
+
 TEST(Pretranslate, TheVerifierCatchesAStubThatDoesNotReturn)
 {
     Result x;

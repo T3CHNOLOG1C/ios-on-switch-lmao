@@ -9,16 +9,19 @@
 
 struct entries {
     const struct a64x_macho *m;
+    const uint8_t *data;
     uint8_t *bits;
 };
 
+/* Only code words: a pointer to the end of __text (section$end) names the first word of the stub tail, never code. */
 static void mark(struct entries *e, uint64_t va)
 {
     const struct a64x_macho *m = e->m;
     if (va < m->exec_vmaddr || va - m->exec_vmaddr >= m->exec_filesize || (va & 3))
         return;
     uint64_t k = (va - m->exec_vmaddr) / 4;
-    e->bits[k >> 3] |= (uint8_t)(1u << (k & 7));
+    if (a64x_image_is_code(m, e->data, m->exec_fileoff + 4 * k))
+        e->bits[k >> 3] |= (uint8_t)(1u << (k & 7));
 }
 
 static const uint8_t *at_vm(const struct a64x_macho *m, uint64_t va, uint64_t len)
@@ -80,7 +83,7 @@ static const char *mark_rebase(void *ctx, uint64_t loc, uint32_t format, uint64_
 uint8_t *a64x_pt_entries(const struct a64x_macho *m, const uint8_t *data)
 {
     const uint32_t n = (uint32_t)(m->exec_filesize / 4);
-    struct entries e = {m, calloc(m->exec_filesize / 32 + 1, 1)};
+    struct entries e = {m, data, calloc(m->exec_filesize / 32 + 1, 1)};
     uint32_t *w = malloc(4ull * n + 4);
     if (!e.bits || !w) {
         free(e.bits);
