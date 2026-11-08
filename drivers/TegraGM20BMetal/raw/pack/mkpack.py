@@ -173,13 +173,13 @@ def default_forms(simple: list[dict], storage: set[str]) -> tuple[list[dict], li
 
 
 # NVK's cbuf types (nvk_shader.h nvk_cbuf_type) a raw draw binds: the root table at slot 0, then NAK's shader data,
-# set 0, and set 0's uniform buffers (mkprograms.py cbuf_code: the type in bits 0-2, the descriptor's offset / 16
-# above) at the slots the program names (raw_gpu.cpp)
+# set 0, and set 0's uniform buffers (mkprograms.py cbuf_code: the type in bits 0-2, the descriptor's offset / 16 above)
+# at the slots the program names (raw_gpu.cpp)
 CBUF_ROOT, CBUF_SHADER_DATA, CBUF_SET, CBUF_UBO = 1, 2, 3, 5
 
 
 def ubo_offsets(program: dict) -> list[int]:
-    """Give the set-0 byte offsets of the uniform buffers the program reads as constant buffers."""
+    """Return the set-0 byte offsets of the uniform buffers the program reads as constant buffers."""
     return [(c >> 3) * 16 for c in program['cbufs'][1:] if c & 7 == CBUF_UBO]
 
 
@@ -478,18 +478,6 @@ def vertex_streams(r: dict, problems: list[str]) -> list[dict]:
     return vbs
 
 
-def unnamed_ubos(p: dict, rec: dict, programs: dict[str, dict]) -> list[str]:
-    """Give the uniform buffers the state's programs read as constant buffers that no uniform entry of set 0 names."""
-    uniform = {e['off'] for e in rec['entries'] if e['kind'] == 'ubo' and not e['ssbo']}
-    r = p['records'][0]
-    return [
-        f'stage {stage} reads set 0 at {offset} as a uniform buffer the layout does not name'
-        for stage in (1, 5)
-        for offset in ubo_offsets(programs[r['prog'][stage][0]])
-        if offset not in uniform
-    ]
-
-
 def pipeline(
     p: dict,
     varying: list[int],
@@ -523,6 +511,19 @@ def pipeline(
     rec['fetch'] = any(e.get('tex', [None])[0] == 'fetch' for e in entries if e['kind'] == 'handle')
     rec['clears'] = len(p['clears'])
     rec['problems'] = problems
+    return rec
+
+
+def with_unnamed_ubos(rec: dict, p: dict, programs: dict[str, dict]) -> dict:
+    """Return the record with a problem for each set-0 uniform buffer a stage reads that its layout does not name."""
+    r = p['records'][0]
+    uniform = {e['off'] for e in rec['entries'] if e['kind'] == 'ubo' and not e['ssbo']}
+    rec['problems'] += [
+        f'stage {stage} reads set 0 at {offset} as a uniform buffer the layout does not name'
+        for stage, pid in ((1, r['prog'][1][0]), (5, r['prog'][5][0]))
+        for offset in ubo_offsets(programs[pid])
+        if offset not in uniform
+    ]
     return rec
 
 
@@ -564,8 +565,7 @@ def main() -> None:
     # pipelines
     pipes, constexpr_tsc = [], []
     for p in simple:
-        rec = pipeline(p, varying, prog_index, sizes, constexpr_tsc)
-        rec['problems'] += unnamed_ubos(p, rec, programs)
+        rec = with_unnamed_ubos(pipeline(p, varying, prog_index, sizes, constexpr_tsc), p, programs)
         if rec['problems']:  # m2v draws it (RawMetal.mm: a state not in the pack goes there)
             skipped.append((p, '; '.join(rec['problems'])))
             continue

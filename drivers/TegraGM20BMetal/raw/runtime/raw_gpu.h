@@ -179,7 +179,7 @@ struct Texture {
     // level 0 holds now, `levelsFresh` that its later levels were generated since the last generateMipmaps (encode order, under
     // the submit lock: the GPU's order).
     // `rawLevels`: levels written directly (a pass into the level, chainLevelTarget, or a copy from a mirror) since the last
-    // generate, so not what generating from level 0 gives: m2v gets them by copies (RawMetal.mm mirrorsForM2v).
+    // generate, so not what generating from level 0 gives: m2v gets them by copies (RawMetalMips.mm mirrorsForM2v).
     // `mirrorLevels`: levels m2v rendered since, held by the RMTexture's mirror of each and copied into the chain before
     // the raw path next reads it (BlitEncoder::copyToLevel).
     struct Chain {

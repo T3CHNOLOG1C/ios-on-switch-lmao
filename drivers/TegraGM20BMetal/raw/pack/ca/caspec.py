@@ -358,7 +358,7 @@ def state_line(tables: Tables, name: str) -> str:
     """Give the journal's R line of the state `name`, spaced as the frontend journals it (the probe keys by that text).
 
     Each function's part is its name, a blank, its constants: two blanks before the next '|' for one without constants,
-    as RawMetal.mm raw_metal_pipeline_key makes the key the pack is looked up by.
+    as RawMetalLibrary.mm raw_metal_pipeline_key makes the key the pack is looked up by.
     """
     s = decode(tables, name)
     rules = _rules(tables)
