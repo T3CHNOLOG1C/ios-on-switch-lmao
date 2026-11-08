@@ -43,7 +43,8 @@ void awdl_data_flush(struct awdl_core *c, uint64_t now)
     for (unsigned i = 0; i < n; ++i) {
         struct awdl_txq_entry *e = &c->txq[(c->txq_head + i) % AWDL_TXQ_FRAMES];
         if (listening(c, e->dst, now)) {
-            send(c, e->frame, e->len, e->group, now);
+            if (!send(c, e->frame, e->len, e->group, now) && e->transfer)
+                awdl_sched_transfer(c, e->dst, 1, now);
             continue;
         }
         if (!e->group && !awdl_core_find(c, e->dst)) {
@@ -72,11 +73,13 @@ int awdl_core_output(struct awdl_core *c, const uint8_t *eth, size_t len, uint64
     }
     if (awdl_native(c))
         return awdl_native_output(c, eth, len, now);
-    awdl_sched_traffic(c, eth, len, 1, now);
     const uint16_t seq = c->data_seq++;
     if (listening(c, eth, now) && !c->txq_count) {
         const size_t n = awdl_data_encap(eth, len, c->cfg.addr, seq, c->scratch, sizeof c->scratch);
-        return n ? send(c, c->scratch, n, group, now) : -3;
+        const int e = n ? send(c, c->scratch, n, group, now) : -3;
+        if (!e)
+            awdl_sched_traffic(c, eth, len, 1, now);
+        return e;
     }
     if (c->txq_count == AWDL_TXQ_FRAMES) {
         c->stats.data_drop++;
@@ -88,6 +91,7 @@ int awdl_core_output(struct awdl_core *c, const uint8_t *eth, size_t len, uint64
         return -5;
     e->len = (uint16_t)n;
     e->group = (uint8_t)group;
+    e->transfer = (uint8_t)awdl_transfer_frame(eth, len);
     memcpy(e->dst, eth, 6);
     c->txq_count++;
     return 0;

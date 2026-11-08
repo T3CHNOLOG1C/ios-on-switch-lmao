@@ -162,7 +162,7 @@ void awdl_sched_learn_social(struct awdl_core *c, const struct awdl_peer *p, uin
 }
 
 // AirDrop's data (TLS over TCP, unicast) on awdl0: transfer mode now, held for AWDL_TRANSFER_HOLD_US after it.
-static int unicast_tcp(const uint8_t *eth, size_t len)
+int awdl_transfer_frame(const uint8_t *eth, size_t len)
 {
     if (len < 14 + 20 || (eth[0] & 1))
         return 0;
@@ -174,16 +174,20 @@ static int unicast_tcp(const uint8_t *eth, size_t len)
     return 0;
 }
 
-void awdl_sched_traffic(struct awdl_core *c, const uint8_t *eth, size_t len, int out, uint64_t now)
+void awdl_sched_transfer(struct awdl_core *c, const uint8_t peer[6], int out, uint64_t now)
 {
-    if (!unicast_tcp(eth, len))
-        return;
     c->transfer_until = now + AWDL_TRANSFER_HOLD_US;
     if (c->mode == AWDL_MODE_TRANSFER)
         return;
-    const uint8_t *p = out ? eth : eth + 6;
+    const uint8_t *p = peer;
     set_mode(c, AWDL_MODE_TRANSFER, now, "TCP %s %02x:%02x:%02x:%02x:%02x:%02x", out ? "to" : "from", p[0], p[1], p[2],
              p[3], p[4], p[5]);
+}
+
+void awdl_sched_traffic(struct awdl_core *c, const uint8_t *eth, size_t len, int out, uint64_t now)
+{
+    if (awdl_transfer_frame(eth, len))
+        awdl_sched_transfer(c, out ? eth : eth + 6, out, now);
 }
 
 void awdl_core_traffic_registered(struct awdl_core *c, const char *who, uint64_t now)

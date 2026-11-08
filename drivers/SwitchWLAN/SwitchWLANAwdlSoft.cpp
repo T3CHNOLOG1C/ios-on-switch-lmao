@@ -13,6 +13,7 @@
 #include <kern/thread_call.h>
 #include <pexpert/pexpert.h>
 #include <sys/errno.h>
+#include <sys/proc.h>
 #include "SwitchWLANAwdlRadio.h"
 #include "SwitchWLANAwdlSoft.h"
 #include "awdl/awdl.h"
@@ -61,13 +62,32 @@ uint64_t hostNs()
     return ns;
 }
 
-// Once per reason, release builds too.
+// Once per (process, reason), release builds too: data refusals come from whichever process sent on awdl0.
 void refusedOnce(unsigned reason, const char *what)
 {
-    static uint32_t said;
-    if (__atomic_fetch_or(&said, 1u << reason, __ATOMIC_RELAXED) & (1u << reason))
-        return;
-    IOLog("SwitchWLAN: AWDL soft: %s\n", what);
+    static struct {
+        char process[32];
+        unsigned reason;
+    } said[8];
+
+    static unsigned count;
+    char process[32] = {};
+    proc_selfname(process, sizeof(process));
+    IOLock *lock = __atomic_load_n(&gLock, __ATOMIC_ACQUIRE);  // never held by a caller of this
+    if (lock) {
+        IOLockLock(lock);
+        bool saidBefore = false;
+        for (unsigned i = 0; i < count && !saidBefore; ++i)
+            saidBefore = said[i].reason == reason && strncmp(said[i].process, process, sizeof(process)) == 0;
+        if (!saidBefore && count < sizeof(said) / sizeof(said[0])) {
+            strlcpy(said[count].process, process, sizeof(said[count].process));
+            said[count++].reason = reason;
+        }
+        IOLockUnlock(lock);
+        if (saidBefore)
+            return;
+    }
+    IOLog("SwitchWLAN: AWDL soft: refused for %s: %s\n", process, what);
 }
 
 void send(const Job &job)

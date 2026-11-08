@@ -47,7 +47,7 @@ void awdl_w_chanseq(struct awdl_writer *w, const struct awdl_chan seq[AWDL_SEQ_S
 
 struct awdl_txq_entry {
     uint16_t len;
-    uint8_t group;
+    uint8_t group, transfer;
     uint8_t dst[6];
     uint8_t frame[AWDL_MAX_FRAME];
 };
@@ -130,6 +130,9 @@ void awdl_sched_start(struct awdl_core *c);
 void awdl_sched_learn_social(struct awdl_core *c, const struct awdl_peer *p, uint64_t now);
 void awdl_schedule_from(struct awdl_chan out[AWDL_SEQ_SLOTS], uint16_t mask, struct awdl_chan free_chan, uint8_t first,
                         uint8_t second);
+// Only data that really moved counts: frames out once the radio took them, frames in once delivered.
+int awdl_transfer_frame(const uint8_t *eth, size_t len);
+void awdl_sched_transfer(struct awdl_core *c, const uint8_t peer[6], int out, uint64_t now);
 void awdl_sched_traffic(struct awdl_core *c, const uint8_t *eth, size_t len, int out, uint64_t now);
 void awdl_sched_deadline(struct awdl_core *c, uint64_t now);  // transfer mode's end
 uint64_t awdl_sched_next(const struct awdl_core *c);          // its deadline, UINT64_MAX when idle

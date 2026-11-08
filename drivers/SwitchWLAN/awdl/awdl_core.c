@@ -535,8 +535,12 @@ uint64_t awdl_core_timer(struct awdl_core *c, uint64_t now)
             send_af(c, AWDL_SUBTYPE_MIF, now);
     }
     if (now >= c->next_psf) {
-        send_af(c, AWDL_SUBTYPE_PSF, now);
-        c->next_psf = now + psf_period(c);
+        if (awdl_chan_freq(awdl_core_channel_at(c, now))) {
+            send_af(c, AWDL_SUBTYPE_PSF, now);
+            c->next_psf = now + psf_period(c);
+        } else {
+            c->next_psf = next_away_start(c, now) + psf_period(c);  // an empty slot: nothing to wake for until then
+        }
     }
     uint64_t next = c->next_psf < c->next_slot ? c->next_psf : c->next_slot;
     if (c->next_mif && c->next_mif < next)
