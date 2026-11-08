@@ -375,6 +375,47 @@ void switch_pretranslated_redirect(struct nameidata *ndp)
     ndp->ni_vp = copy;
 }
 
+/* FrontBoard trusts a daemon as a system process (lockdownd's Trust prompt, SpringBoard's MIG services) only if its
+ * executable's st_dev is /System's (BaseBoard's BSPathExistsOnSystemPartition). Only what stat and getattrlist hand out
+ * changes, and not when the caller asks for the real device: the kernel's own vnode_getattr keeps the Data ids the
+ * tables are keyed by. */
+void switch_pretranslated_identity(vnode_t vp, struct vnode_attr *va)
+{
+    if (!os_atomic_load(&switch_pretranslated_on, acquire) || vp == NULLVP || vp->v_mount != switch_pt.data ||
+        vp->v_type != VREG || (va->va_vaflags & VA_REALFSID) ||
+        !(VATTR_IS_ACTIVE(va, va_fsid) || VATTR_IS_ACTIVE(va, va_fsid64) || VATTR_IS_SUPPORTED(va, va_fileid) ||
+          VATTR_IS_SUPPORTED(va, va_linkid))) {
+        return;
+    }
+    uint64_t data_id = va->va_fileid;
+    if (!VATTR_IS_SUPPORTED(va, va_fileid)) {
+        struct vnode_attr id;
+        VATTR_INIT(&id);
+        VATTR_WANTED(&id, va_fileid);
+        if (vnode_getattr(vp, &id, vfs_context_kernel()) || !VATTR_IS_SUPPORTED(&id, va_fileid)) {
+            return;
+        }
+        data_id = id.va_fileid;
+    }
+    const uint64_t system_id = switch_pt_system_id(&switch_pt.tables, data_id);
+    if (system_id == 0) {
+        return;
+    }
+    const fsid_t system = vfs_statfs(switch_pt.system)->f_fsid;
+    if (VATTR_IS_ACTIVE(va, va_fsid)) {
+        VATTR_RETURN(va, va_fsid, (uint32_t)system.val[0]);
+    }
+    if (VATTR_IS_ACTIVE(va, va_fsid64)) {
+        VATTR_RETURN(va, va_fsid64, system);
+    }
+    if (VATTR_IS_SUPPORTED(va, va_fileid)) {
+        va->va_fileid = system_id;
+    }
+    if (VATTR_IS_SUPPORTED(va, va_linkid) && va->va_linkid == data_id) {
+        va->va_linkid = system_id;
+    }
+}
+
 static const char *switch_pt_op_name(enum switch_pt_op op)
 {
     static const char *const names[SWITCH_PT_OPS] = {

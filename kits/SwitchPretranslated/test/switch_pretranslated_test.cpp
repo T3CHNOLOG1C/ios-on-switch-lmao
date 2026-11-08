@@ -254,6 +254,28 @@ TEST(Tables, DataIdsTellFilesFromDirectories)
     EXPECT_FALSE(switch_pt_map_put(&b.tables.data, 77, SWITCH_PT_PROTECTED));
 }
 
+TEST(Tables, DataFilesReportTheirSystemFile)
+{
+    Built b = build(kFiles, kDirs);
+    REQUIRE(b.error == SWITCH_PT_OK);
+    EXPECT_EQ(switch_pt_system_id(&b.tables, 100), 10u);
+    EXPECT_EQ(switch_pt_system_id(&b.tables, 400), 40u);
+    EXPECT_EQ(switch_pt_system_id(&b.tables, 30), 0u);
+    EXPECT_EQ(switch_pt_system_id(&b.tables, 1003), 0u);
+    EXPECT_EQ(switch_pt_system_id(&b.tables, 0), 0u);
+    REQUIRE(switch_pt_map_put(&b.tables.data, 77, SWITCH_PT_PROTECTED));
+    EXPECT_EQ(switch_pt_system_id(&b.tables, 77), 0u);
+}
+
+TEST(Tables, HardLinksReportOneSystemFile)
+{
+    Built b = build({{"/usr/libexec/d", 1, 2}, {"/usr/sbin/d", 1, 2}, {"/usr/sbin/f", 3, 4}}, {5});
+    REQUIRE(b.error == SWITCH_PT_OK);
+    EXPECT_EQ(switch_pt_system_id(&b.tables, 2), 1u);
+    EXPECT_EQ(switch_pt_system_id(&b.tables, 4), 3u);
+    EXPECT_EQ(switch_pt_system_id(&b.tables, 5), 0u);
+}
+
 }  // namespace
 
 namespace {
