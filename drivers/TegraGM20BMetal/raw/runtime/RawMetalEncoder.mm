@@ -204,11 +204,11 @@ static bool rawDepthStencil(MTLRenderPassDescriptor *pass)
             [self takeReason:WhyPass why:@"a planar texture as a render target"];
             hit(self, PredEncPlanarRT, t.pixelFormat, c);
         } else if (pass.colorAttachments[c].slice || pass.colorAttachments[c].depthPlane ||
-                   pass.colorAttachments[c].resolveTexture ||
+                   pass.colorAttachments[c].resolveTexture || x->_raw.type == raw::fx::kTexThreeD ||
                    (pass.colorAttachments[c].level &&
                     (!x->_raw.chain || pass.colorAttachments[c].level >= x->_raw.chain->layout.levels))) {
-            // A slice or depth plane needs an array or 3D texture and a resolve a multisampled one, none of which the raw
-            // path keeps (rawShape)
+            // A slice or depth plane needs an array or 3D texture and a resolve a multisampled one; the raw path keeps no
+            // array or multisampled texture and renders into no plane of a 3D one
             [self takeReason:WhyPass why:@"a color attachment slice, depth plane or resolve"];
             hit(self, PredPassAttLevel, pass.colorAttachments[c].level | pass.colorAttachments[c].slice << 8,
                 pass.colorAttachments[c].resolveTexture != nil);

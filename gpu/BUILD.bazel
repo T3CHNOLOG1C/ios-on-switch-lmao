@@ -158,6 +158,7 @@ metal_plugin(
         GM20B_METAL + ":raw/runtime/raw_gpu.cpp",
         GM20B_METAL + ":raw/runtime/raw_alias.cpp",
         GM20B_METAL + ":raw/fx/fx_mip.cpp",
+        GM20B_METAL + ":raw/fx/fx_image.cpp",
         GM20B_METAL + ":raw/runtime/raw_kernel.cpp",
         GM20B_METAL + ":raw/runtime/raw_pack.cpp",
         GM20B_METAL + ":raw/runtime/raw_ycbcr.cpp",

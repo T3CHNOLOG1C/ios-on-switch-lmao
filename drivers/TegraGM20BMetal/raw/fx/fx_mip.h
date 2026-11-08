@@ -41,6 +41,9 @@ struct MipLevel {
     uint32_t rowBytes = 0,
              rows = 0;  // the level's extent aligned to its tile (row stride; rows, a multiple of 8 << yLog2)
     uint8_t yLog2 = 0;  // the level's block height in GOBs, log2 (level 0's clamped to the level, as hardware does)
+    // A 3D image's (fx_image.h): the level's depth, max(1, d >> level), its planes in whole blocks of 1 << zLog2
+    uint32_t depth = 1, planes = 1;
+    uint8_t zLog2 = 0;
 };
 
 struct MipChain {
@@ -49,6 +52,9 @@ struct MipChain {
         0;  // level 0's: the texture header's GOBS_PER_BLOCK_HEIGHT and the 2D engine's block size of level 0
     uint64_t bytes = 0, align = 0;
     MipLevel level[kMaxLevels];
+    // A 3D image's depth and level 0's GOBS_PER_BLOCK_DEPTH (fx_image.h); a 2D chain's are 1 and 0
+    uint32_t depth = 1;
+    uint8_t zLog2 = 0;
 };
 
 // The number of levels of a full chain (Metal's mipmapLevelCount for a full chain): floor(log2(max(w, h))) + 1
@@ -78,7 +84,7 @@ inline uint32_t gobOffset(uint32_t xB, uint32_t y)
 uint32_t gobOffsetFermi(uint32_t xB, uint32_t y);
 
 // TEXHEAD_BL TEXTURE_TYPE (clb097tex.h), NIL pipe_to_nv_texture_type of a view's type
-constexpr uint32_t kTexOneD = 0, kTexTwoD = 1;
+constexpr uint32_t kTexOneD = 0, kTexTwoD = 1, kTexThreeD = 2;
 
 // The texture header of the chain at GPU address `va` (512-byte aligned): word 0 from `tic0` (the format's components, data
 // types and swizzle: raw::formatInfo()->tic0), a view of levels [baseLevel, baseLevel + levelCount). NIL nvb097 for a view of

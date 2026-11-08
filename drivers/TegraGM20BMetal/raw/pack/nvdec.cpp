@@ -523,18 +523,22 @@ void Decoder::copyEngine(uint32_t launch)
     for (uint32_t c = 0; remap && c < ndst; c++)
         reads = reads || ((comp >> (4 * c)) & 7) < 4;
 
-    // where element e of line y lies: rows `pitch` apart from `base`, or a block-linear surface (its six block words at `at`)
+    // where element e of line y lies: rows `pitch` apart from `base`, or a block-linear surface (its six block words at `at`:
+    // block height and depth, width in elements, height, depth and the layer the copy reads or writes)
     struct Side {
         bool tiled;
         uint64_t base;
-        uint32_t pitch, yLog2, rowBytes, ox, oy;
+        uint32_t pitch, yLog2, rowBytes, ox, oy, zLog2 = 0, height = 0, layer = 0;
     };
 
     auto side = [&](bool isPitch, uint64_t base, uint32_t pitch, uint32_t at, uint32_t elemBytes) {
         Side d{!isPitch, base, pitch, 0, 0, 0, 0};
         if (d.tiled) {
             d.yLog2 = (r[at / 4] >> 4) & 0xf;
+            d.zLog2 = (r[at / 4] >> 8) & 0xf;
             d.rowBytes = r[at / 4 + 1] * elemBytes;
+            d.height = r[at / 4 + 2];
+            d.layer = r[at / 4 + 4];
             d.ox = r[at / 4 + 5] & 0xffff;
             d.oy = r[at / 4 + 5] >> 16;
         }
@@ -557,7 +561,17 @@ void Decoder::copyEngine(uint32_t launch)
     auto addr = [](const Side &d, uint32_t e, uint32_t y, uint32_t elemBytes) {
         if (!d.tiled)
             return d.base + uint64_t(y) * d.pitch + uint64_t(e) * elemBytes;
-        return d.base + tgm_layout_offset_of(d.rowBytes, uint8_t(d.yLog2), (d.ox + e) * elemBytes, d.oy + y);
+        if (!d.zLog2 && !d.layer)
+            return d.base + tgm_layout_offset_of(d.rowBytes, uint8_t(d.yLog2), (d.ox + e) * elemBytes, d.oy + y);
+        // a plane of a 3D surface: blocks along a row, down the plane, then through the depth; GOBs down a block, then
+        // through its planes
+        const uint32_t xB = (d.ox + e) * elemBytes, row = d.oy + y, blockRows = 8u << d.yLog2,
+                       blockPlanes = 1u << d.zLog2;
+        const uint64_t blocksDown = (d.height + blockRows - 1) / blockRows;
+        const uint64_t block =
+            (uint64_t(d.layer / blockPlanes) * blocksDown + row / blockRows) * (d.rowBytes / 64) + xB / 64;
+        const uint64_t gob = uint64_t(d.layer % blockPlanes) * (blockRows / 8) + (row % blockRows) / 8;
+        return d.base + block * (512ull << (d.yLog2 + d.zLog2)) + gob * 512 + tgm_layout_gob_offset(xB, row);
     };
     // NVDEC_WRITETHROUGH: the copy lands in the memory behind the destination too, as the GPU's would, so a host test reads
     // its result back on the CPU (pack/cap.cpp maps every BO)

@@ -4,6 +4,7 @@
 // copies NVK's nouveau_copy_rect and nvk_cmd_copy_memory_ce (all MIT), restricted to what Core Animation uses. r7-raw wrote the
 // first version (render encoder, pack replay) and checked it against NVK's stream; r8-rawca added the lifetimes, the pool, the
 // imports, the copies and the abortable command buffer.
+#include "../fx/fx_image.h"
 #include "raw_clear.h"
 #include "raw_follow.h"
 #include "raw_gpu.h"
@@ -1049,6 +1050,11 @@ void Device::writeTic(const Texture &t)
     const FormatInfo *f = formatInfo(t.format);
     uint32_t w[8] = {f->tic0};
     fx::MipChain one;
+    if (t.type == fx::kTexThreeD && fx::volumeLayout(t.width, t.height, t.depth, 1, t.bpp, !t.blockDepth, one)) {
+        fx::mipChainTic(one, t.va, f->tic0, f->srgb, 0, 1, w, t.type);
+        memcpy(tic_.cpu + 32 * t.tic, w, 32);
+        return;
+    }
     if (t.blockLinear && fx::mipChainLayout(t.width, t.height, 1, t.bpp, one)) {  // NIL's header of a one-level image
         fx::mipChainTic(one, t.va, f->tic0, f->srgb, 0, 1, w, t.type);
         memcpy(tic_.cpu + 32 * t.tic, w, 32);
@@ -1144,6 +1150,33 @@ bool Device::createLine(uint32_t width, uint32_t format, Texture &t)
     t.blockHeight = bl.y_log2;
     t.layerBytes = bl.bytes;
     t.type = fx::kTexOneD;
+    if (!(t.tic = allocTic())) {
+        Lease *none = nullptr;
+        freeSpan(t.span, Memory::Bl, none);
+        return false;
+    }
+    writeTic(t);
+    return true;
+}
+
+bool Device::createVolume(uint32_t width, uint32_t height, uint32_t depth, uint32_t format, bool view2d, Texture &t)
+{
+    fx::MipChain c;
+    if (!shape(width, height, format, t) || xrForm(format) != XrForm::None ||
+        !fx::volumeLayout(width, height, depth, 1, t.bpp, view2d, c))
+        return false;
+    std::lock_guard<std::mutex> l(lock_);
+    if (!blAlloc(c.bytes, c.align, t.span))
+        return false;
+    t.va = t.span.va;
+    t.cpu = t.span.cpu;
+    t.pitch = c.level[0].rowBytes;
+    t.blockLinear = true;
+    t.blockHeight = c.level[0].yLog2;
+    t.layerBytes = c.bytes;
+    t.type = fx::kTexThreeD;
+    t.depth = depth;
+    t.blockDepth = c.zLog2;
     if (!(t.tic = allocTic())) {
         Lease *none = nullptr;
         freeSpan(t.span, Memory::Bl, none);
@@ -3315,24 +3348,26 @@ static void clearWords(uint32_t format, const float in[4], uint32_t out[4], bool
 
 namespace {
 // One side of a copy-engine copy: pitch (va the first texel's, rows `pitch` apart) or a block-linear image (va its first byte,
-// `pitch` its row stride, the copy from texel (x, y) of its width x height)
+// `pitch` its row stride, the copy from texel (x, y) of plane `layer` of its width x height x depth)
 struct CopySide {
     uint64_t va = 0;
     uint32_t pitch = 0, x = 0, y = 0, width = 0, height = 0;
     bool blockLinear = false;
     uint8_t blockHeight = 0;
+    uint32_t depth = 1, layer = 0;
+    uint8_t blockDepth = 0;
 };
 
-CopySide sideOf(const Texture &t, uint32_t x, uint32_t y)
+CopySide sideOf(const Texture &t, uint32_t x, uint32_t y, uint32_t z)
 {
     if (!t.blockLinear)
         return {t.va + uint64_t(y) * t.pitch + uint64_t(x) * t.bpp, t.pitch};
-    return {t.va, t.pitch, x, y, t.pitch / t.bpp, t.height, true, t.blockHeight};
+    return {t.va, t.pitch, x, y, t.pitch / t.bpp, t.height, true, t.blockHeight, t.depth, z, t.blockDepth};
 }
 
 // `w` x `h` texels of `bpp` bytes as nouveau_copy_rect moves them: a remap of min(bpp, 4)-byte components, so lengths, widths
 // and origins count texels; a block-linear side by its block size (one GOB wide, Fermi's 8-row GOBs), its width the row
-// stride in texels, one layer
+// stride in texels, a 3D image's plane by its depth and layer
 void copySides(Push &p, const CopySide &s, const CopySide &d, uint32_t w, uint32_t h, uint32_t bpp,
                Device::Stats &stats)
 {
@@ -3351,12 +3386,16 @@ void copySides(Push &p, const CopySide &s, const CopySide &d, uint32_t w, uint32
     uint32_t launch = (kLaunchPitch & ~(kSrcPitch | kDstPitch)) | 1u << 10;  // REMAP_ENABLE
     if (s.blockLinear)
         p.inc(CE_SET_SRC_BLOCK_SIZE,
-              {uint32_t(s.blockHeight) << 4 | kGobHeightFermi8, s.width, s.height, 1, 0, s.y << 16 | s.x}, SUBC_COPY);
+              {uint32_t(s.blockHeight) << 4 | uint32_t(s.blockDepth) << 8 | kGobHeightFermi8, s.width, s.height,
+               s.depth, s.layer, s.y << 16 | s.x},
+              SUBC_COPY);
     else
         launch |= kSrcPitch;
     if (d.blockLinear)
         p.inc(CE_SET_DST_BLOCK_SIZE,
-              {uint32_t(d.blockHeight) << 4 | kGobHeightFermi8, d.width, d.height, 1, 0, d.y << 16 | d.x}, SUBC_COPY);
+              {uint32_t(d.blockHeight) << 4 | uint32_t(d.blockDepth) << 8 | kGobHeightFermi8, d.width, d.height,
+               d.depth, d.layer, d.y << 16 | d.x},
+              SUBC_COPY);
     else
         launch |= kDstPitch;
     p.m(CE_LAUNCH_DMA, launch, SUBC_COPY);
@@ -3533,7 +3572,8 @@ void RenderEncoder::end()
         if (const Texture *o = shadowOf_[j]) {
             if (pass_.color[j].load == ColorAttachment::Clear)
                 continue;
-            copySides(p, sideOf(*o, 0, 0), sideOf(*pass_.color[j].texture, 0, 0), areaW_, areaH_, o->bpp, d.stats);
+            copySides(p, sideOf(*o, 0, 0, 0), sideOf(*pass_.color[j].texture, 0, 0, 0), areaW_, areaH_, o->bpp,
+                      d.stats);
             copied = true;
         }
     if (copied) {
@@ -3651,7 +3691,7 @@ void RenderEncoder::end()
                     w = std::max(w, c.x1);
                     h = std::max(h, c.y1);
                 }
-            copySides(q, sideOf(*pass_.color[j].texture, 0, 0), sideOf(*o, 0, 0), w, h, o->bpp, d.stats);
+            copySides(q, sideOf(*pass_.color[j].texture, 0, 0, 0), sideOf(*o, 0, 0, 0), w, h, o->bpp, d.stats);
         }
         checkRoom(q, "a pass's shadow stores");
         cb_->segment(at, q.at);
@@ -3847,18 +3887,18 @@ void BlitEncoder::copyRect(uint64_t src, uint32_t srcPitch, uint64_t dst, uint32
     copyRows(p_, src, srcPitch, dst, dstPitch, width, lines, bpp, dev_->stats);
 }
 
-void BlitEncoder::copyTexels(const Texture &src, uint32_t sx, uint32_t sy, const Texture &dst, uint32_t dx, uint32_t dy,
-                             uint32_t w, uint32_t h)
+void BlitEncoder::copyTexels(const Texture &src, uint32_t sx, uint32_t sy, uint32_t sz, const Texture &dst, uint32_t dx,
+                             uint32_t dy, uint32_t dz, uint32_t w, uint32_t h)
 {
     room(32);
-    copySides(p_, sideOf(src, sx, sy), sideOf(dst, dx, dy), w, h, src.bpp, dev_->stats);
+    copySides(p_, sideOf(src, sx, sy, sz), sideOf(dst, dx, dy, dz), w, h, src.bpp, dev_->stats);
 }
 
-void BlitEncoder::copyBufferTexels(uint64_t va, uint32_t pitch, const Texture &t, uint32_t x, uint32_t y, uint32_t w,
-                                   uint32_t h, bool toTexture)
+void BlitEncoder::copyBufferTexels(uint64_t va, uint32_t pitch, const Texture &t, uint32_t x, uint32_t y, uint32_t z,
+                                   uint32_t w, uint32_t h, bool toTexture)
 {
     room(32);
-    const CopySide rows{va, pitch}, texels = sideOf(t, x, y);
+    const CopySide rows{va, pitch}, texels = sideOf(t, x, y, z);
     copySides(p_, toTexture ? rows : texels, toTexture ? texels : rows, w, h, t.bpp, dev_->stats);
 }
 
