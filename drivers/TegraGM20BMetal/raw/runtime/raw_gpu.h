@@ -909,8 +909,8 @@ private:
     Ring push_, upload_;
     // rings replaced by larger ones, freed once the GPU passed the seqno
     std::vector<std::pair<Bo, uint32_t>> grownOut_;
-    bool overflowing_ = false;       // the open command buffer outgrew a ring with no memory for a larger one
-    std::vector<uint8_t> overflow_;  // where it is written then (never submitted)
+    bool overflowing_ = false;  // the open command buffer outgrew a ring with no memory for a larger one
+    std::deque<std::vector<uint8_t>> overflow_;  // where it is written then (never submitted)
     uint32_t channel_ = 0, lastSeqno_ = 0;
     // the channel's fence word; before there is a channel a zero, which every seqno submitted so far (none) has passed
     const volatile uint32_t *fence_ = &kNoFence;

@@ -74,7 +74,7 @@ id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool pa
 
     std::vector<Range> ranges;
     auto range = [&](RMBuffer *b, uint64_t offset, uint64_t bytes, bool flush = false) {
-        if (!b || offset >= b->_raw.length || b->_raw.wc)
+        if (![(id)b isKindOfClass:[RMBuffer class]] || offset >= b->_raw.length || b->_raw.wc)
             return;  // (write-combined: in memory once the DSB below drains it)
         ranges.push_back({b->_raw.cpu + offset, std::min(bytes, b->_raw.length - offset), flush});
     };

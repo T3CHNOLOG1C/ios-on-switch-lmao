@@ -422,6 +422,8 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
     v->_descriptor.pixelFormat = format;
     v->_descriptor.textureType = type;
     v->_descriptor.mipmapLevelCount = levels.length;
+    const bool viewCube = type == MTLTextureTypeCube || type == MTLTextureTypeCubeArray;
+    v->_descriptor.arrayLength = std::max<NSUInteger>(viewCube ? slices.length / 6 : slices.length, 1);
     v->_kind = RMTextureView;
     v->_parent = self;
     v->_twin = twin;

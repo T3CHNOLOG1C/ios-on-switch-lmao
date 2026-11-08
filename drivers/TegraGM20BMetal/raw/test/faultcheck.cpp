@@ -394,6 +394,38 @@ void fills(raw::Device &dev, const Expect &expect)
     dev.destroyBuffer(b);
 }
 
+// The same, with no memory for a larger ring (the BoAlloc refused): written to scratch blocks that stay put while written,
+// and the commit refused (ASan: no write to a block freed under it)
+void overflowRing(const char *pack, const Expect &expect)
+{
+    raw::Device client;
+    std::string err;
+    raw::Buffer chain;
+    if (!client.open(pack, 0, err, raw::Device::Role::Client) || !client.createBuffer(4096, chain)) {
+        expect(false, "a client device and a buffer");
+        return;
+    }
+    raw::CommandBuffer *cb = client.begin();
+    if (!cb) {
+        expect(false, "a command buffer");
+        return;
+    }
+    mock_iokit_fail_next(TegraGM20BMethodBoAlloc, 1000, kIOReturnNoMemory);
+    raw::BlitEncoder *e = cb->blit();
+    for (uint32_t i = 0; i < 10000; i++)
+        e->copyBytes(chain.va, chain.va + 4, 4);
+    e->end();
+    uint32_t seq = 0;
+    const bool committed = cb->commit(seq);
+    mock_iokit_fail_next(TegraGM20BMethodBoAlloc, 0, 0);
+    if (!committed)
+        cb->abandon();
+    expect(!committed, "the commit of a command buffer with no ring to hold it is refused");
+    const uint32_t next = copy(client, chain, chain);
+    expect(next && client.wait(next), "the next command buffer runs");
+    client.destroyBuffer(chain);
+}
+
 void reopenRefused(raw::Device &dev, const Expect &expect)
 {
     raw::Buffer a, b;
@@ -537,6 +569,7 @@ int main(int argc, char **argv)
     waitRefused(dev, expect);
     channelRefused(argv[1], expect);
     outgrownRing(argv[1], expect);  // last: its device's channel is the mock's latest from here on
+    overflowRing(argv[1], expect);
     if (failures) {
         std::printf("FAIL: faultcheck (%d)\n", failures);
         return 1;

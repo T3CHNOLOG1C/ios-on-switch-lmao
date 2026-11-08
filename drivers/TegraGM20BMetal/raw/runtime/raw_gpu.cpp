@@ -233,10 +233,9 @@ uint8_t *Device::alloc(Ring &r, uint32_t bytes, uint32_t align, uint64_t &va)
         at = 0;  // wrap: the tail [head, end) counts as used by the open command buffer
     if (overflowing_ || (ownWords(r, at, bytes) && !outgrow(r, bytes, at))) {
         overflowing_ = true;  // no larger ring: the command buffer is written to nowhere, and its commit refused
-        if (overflow_.size() < bytes)
-            overflow_.resize(bytes);
+        overflow_.emplace_back(bytes);  // a block of its own: the encoder may still be writing an earlier one
         va = 0;
-        return overflow_.data();
+        return overflow_.back().data();
     }
     // [at, at + bytes) may still be read by an earlier submission: retire what the GPU finished (the fence page, no call) and
     // block in the kernel (WaitFence: the fence interrupt) for what overlaps. Sized so a Core Animation frame never waits.
@@ -2175,6 +2174,7 @@ CommandBuffer *Device::begin()
     cb.refusal = {};
     cb.partial = false;
     overflowing_ = false;
+    overflow_.clear();
     cb.pushStart_ = push_.head;
     cb.uploadStart_ = upload_.head;
     memcpy(cb.rootPush_, rootPush_, sizeof rootPush_);
@@ -2417,6 +2417,7 @@ void CommandBuffer::abandon()
 {
     Device &d = *dev_;
     d.overflowing_ = false;
+    d.overflow_.clear();
     for (Device::Ring *r : {&d.push_, &d.upload_}) {
         // drop the open command buffer's spans and give back what it took (nothing else was allocated since: one encodes)
         for (auto it = r->inflight.begin(); it != r->inflight.end();)
