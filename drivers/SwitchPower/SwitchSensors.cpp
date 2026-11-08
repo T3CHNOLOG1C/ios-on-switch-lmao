@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // thermalmonitord's sensors on the Switch (SwitchSensors.h has the mapping, CONTRACT.md the contract and evidence).
 //
-// iPadOS's CLTM daemon reads every temperature sensor of its product model (J120AP) every 5 s through the HID event
-// system and reports itself unhealthy to watchdogd until all 38 answer; without them it also has nothing to mitigate
-// on. Here each of those sensors is a HID service (SwitchHIDDevice's temperature kind) whose copyEvent answers from the
+// iPadOS's CLTM daemon reads every temperature sensor of its product model (the IPSW's iPad: J120AP, J181AP) every 5 s
+// through the HID event system and reports itself unhealthy to watchdogd until all of them answer; without them it also
+// has nothing to mitigate on. Here each of those sensors is a HID service (SwitchHIDDevice's temperature kind) whose copyEvent answers from the
 // Switch sensor nearest to what the iPad's sensor measures:
 //   * SOC_THERM (T210B01, 0x700E2000): six on-die tsensors, cpu0-cpu3 beside each A57 core, gpu, pllx, brought up as
 //     L4T's soctherm.c does for "nvidia,tegra210b01-soctherm" (tegra210-soctherm.c tegra210b01_tsensors, fuse
@@ -40,6 +40,10 @@
 #include "SwitchPower.h"
 #include "SwitchSensors.h"
 #include "SwitchSocTherm.h"
+
+#ifndef SWITCH_IPSW_BUILD
+#error "SwitchSensors.h takes the thermal model of the IPSW kind's iPad: build with driver_flags.bzl's IPSW_KIND_FLAGS"
+#endif
 
 extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 
@@ -84,7 +88,7 @@ constexpr uint32_t kPdivCpuShift = 12, kPdivGpuShift = 8, kPdivPllxShift = 0;  /
 constexpr uint32_t kHotspotCpuShift = 16, kHotspotGpuShift = 8;                // 8 bits each
 constexpr uint32_t kHotspotCpu = 10, kHotspotGpu = 5;                          // pllx_hotspot_diff
 
-constexpr uint32_t kHookQuietMS = 10000;  // for all 38 devices together
+constexpr uint32_t kHookQuietMS = 10000;  // for all the devices together
 static_assert(kHookQuietMS < 41000, "IOService::waitQuiet reports (and may panic on) busy services from 41 s on");
 
 inline uint32_t rd(const volatile uint8_t *base, uint32_t offset)
