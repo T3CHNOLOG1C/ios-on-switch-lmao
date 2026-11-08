@@ -77,6 +77,13 @@ int tegra_gm20b_scanout_outstanding(const void *display);
 // block-linear pixels. A surface's layout is decided once, at its first GPU import, and holds while any GPU client
 // imports it; a CPU lock never changes what its pages hold. Thread context; never waits for the GPU.
 int tegra_gm20b_surface_tiled(uint64_t pa);
+// Provided by the GPU driver (weak in NativeLegacyDisplay): the display scans the IOSurface whose first page is `pa` in
+// place from now until tegra_gm20b_surface_unhold. Its layout, once decided, then holds even with no GPU client importing
+// it any more: the last import's release moves a block-linear surface's texels back to rows in place, under a window
+// that still scans it block-linear (device boot 10, after backboardd's crash). *tiled: the layout held. Null: nothing
+// to hold yet (no GPU client decided its layout). Thread context; never waits for the GPU.
+void *tegra_gm20b_surface_hold(uint64_t pa, int *tiled);
+void tegra_gm20b_surface_unhold(void *hold);
 // Each vsync the display sends the compositor (only while it has vsync on), from the display's work loop: its stamp and
 // interval (mach absolute time) and lead, the microseconds from the stamp to the frame end (0: sent at V_BLANK). The GPU
 // holds app work off the GPU ahead of the vblank the frame started there aims for.

@@ -110,6 +110,20 @@ TEST(DirectScanoutSource, LateOffersAreTheDriversAndLostFramesAreNotShown)
     EXPECT_THAT(drop, Not(HasSubstr("presentEntry")));
 }
 
+// A direct slot keeps what window A may scan from it until the slot is dropped: the surface, its wired memory and its
+// layout (the GPU driver moves a released surface's texels back to rows otherwise, under the window).
+TEST(DirectScanoutSource, SlotsHoldTheSurfaceTheyScan)
+{
+    const std::string make = method(display(), "    int directSlotFor(");
+    EXPECT_THAT(make, HasSubstr("surface->retain();"));
+    EXPECT_THAT(make, HasSubstr("holdLayout(slots[victim], tiled)"));
+    EXPECT_THAT(make, HasSubstr("holdLayout(slots[k], tiled)"));
+    EXPECT_THAT(method(display(), "    static bool holdLayout("), HasSubstr("tegra_gm20b_surface_hold("));
+    const std::string drop = method(display(), "    void dropSlot(unsigned k)\n");
+    expectBefore(drop, "probeDomain.unmap(", "tegra_gm20b_surface_unhold(slot.layout);");
+    expectBefore(drop, "tegra_gm20b_surface_unhold(slot.layout);", "OSSafeReleaseNULL(slot.surface);");
+}
+
 TEST(DirectScanoutSource, NeverReplacedAcrossLayouts)
 {
     EXPECT_THAT(method(display(), "    void presentEntry(int i)\n"), HasSubstr("sameLayout(i, ring.pending)"));
@@ -124,7 +138,7 @@ TEST(DirectScanoutSource, TiledSurfacesScanBlockLinear)
     EXPECT_THAT(method(display(), "    bool offerGpuCopy("),
                 HasSubstr("copy.flags = tiled ? TEGRA_SCANOUT_COPY_SOURCE_BLOCK : 0;"));
     expectBefore(after(display(), "    void kickOnce()"), "const bool tiled = surfaceTiled(memory);",
-                 "offerDirect(request, memory, sourceStride, allocation, width, height, tiled, kickAt)");
+                 "offerDirect(request, surface, memory, sourceStride, allocation, width, height, tiled, kickAt)");
     // the CPU's fallback copies a tiled frame as it is: it is already in the scanout's block layout
     EXPECT_THAT(method(display(), "    static Swizzled swizzle("),
                 HasSubstr("memcpy(out, source, kNativeBlockBytes);"));

@@ -78,4 +78,24 @@ TEST(RawLinkedSource, TheRawRecordIsTheLinkedFunctionsToo)
     EXPECT_THAT(key, HasSubstr("a.key += \" | linked\" + linked;"));
 }
 
+// A state the pack holds is this device's archive hit: every way the facade asks m2v for its twin (at once, with
+// reflection, through a completion handler) drops the creation's archives and FailOnBinaryArchiveMiss, so a command buffer
+// that falls back never meets a twin m2v refused (device boot 10: "foreign render pipeline", 833 failed frames).
+TEST(RawLinkedSource, APackedStatesTwinNeverFailsOnTheArchive)
+{
+    const std::string states = SourceText("../raw/runtime/RawMetalStates.mm");
+    EXPECT_THAT(Body(states, "static MTLRenderPipelineDescriptor *packedTwinDescriptor("),
+                HasSubstr("t.binaryArchives = nil;"));
+    EXPECT_THAT(Body(states, "static MTLPipelineOption packedTwinOptions("),
+                HasSubstr("o & ~MTLPipelineOptionFailOnBinaryArchiveMiss"));
+    EXPECT_THAT(Body(states, "static id<MTLRenderPipelineState> pipelineTwin("),
+                HasSubstr("packedTwinOptions(o, true)"));
+    const std::string reflected = Between(states, "    if (reflection) {", "\n    }\n");
+    EXPECT_THAT(reflected, HasSubstr("packedTwinOptions(o, packed)"));
+    const std::string handler =
+        Between(states, "completionHandler:(MTLNewRenderPipelineStateWithReflectionCompletionHandler)handler", "\n}\n");
+    EXPECT_THAT(handler, HasSubstr("packedTwinOptions(o, packed)"));
+    EXPECT_THAT(handler, HasSubstr("packedTwinDescriptor(d, packed)"));
+}
+
 }  // namespace

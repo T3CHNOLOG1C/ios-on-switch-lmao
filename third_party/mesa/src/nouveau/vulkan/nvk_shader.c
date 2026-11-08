@@ -7,6 +7,7 @@
  * SPDX-License-Identifier: MIT
  */
 #include "nvk_shader.h"
+#include "nvk_switch_push.h"
 #include "nvk_switch_capture.h"
 
 #include "nvk_cmd_buffer.h"
@@ -412,6 +413,8 @@ nvk_lower_nir(struct nvk_device *dev, nir_shader *nir,
    /* Lower push constants before lower_descriptors */
    NIR_PASS(_, nir, nir_lower_explicit_io, nir_var_mem_push_const,
             nir_address_format_32bit_offset);
+   NIR_PASS(_, nir, switch_nvk_fold_const_push,
+            switch_nvk_const_push_current);
 
    struct nvk_cbuf_map *cbuf_map = NULL;
    if (!(pdev->debug_flags & NVK_DEBUG_NO_CBUF)) {

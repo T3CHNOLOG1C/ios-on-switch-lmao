@@ -131,6 +131,15 @@ extern "C" __attribute__((weak)) int tegra_gm20b_scanout_outstanding(const void 
     return 0;
 }
 
+extern "C" __attribute__((weak)) void *tegra_gm20b_surface_hold(uint64_t, int *tiled)
+{
+    *tiled = 0;
+    return nullptr;
+}
+
+extern "C" __attribute__((weak)) void tegra_gm20b_surface_unhold(void *)
+{}
+
 extern "C" __attribute__((weak)) void tegra_gm20b_frame_take(struct SwitchFrameGpu *out)
 {
     *out = {};
@@ -880,8 +889,12 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
                               kDirectUnderflowFrames = 3;
     static constexpr uint64_t kSlotSpan = 4ULL << 20;
 
+    // A slot keeps what window A may scan from it: the surface itself, its memory wired and its layout held
+    // (tegra_gm20b_surface_hold), until a later frame's slot replaces it and the slot is dropped. Its client may die meanwhile.
     struct DirectSlot {
         IOMemoryDescriptor *memory;
+        OSObject *surface;
+        void *layout;
         uint64_t stride, used;
         uint32_t pages;
         bool tiled;  // the GPU renders it block-linear (TegraScanoutCopy.h): window A scans it so
@@ -3794,7 +3807,7 @@ public:
         }
         noteSurface(surface, memory);
         const bool tiled = surfaceTiled(memory);
-        if (direct && offerDirect(request, memory, sourceStride, allocation, width, height, tiled, kickAt))
+        if (direct && offerDirect(request, surface, memory, sourceStride, allocation, width, height, tiled, kickAt))
             return;
         if (direct && ring.target() == kNoBuffer) {  // no slot either: the frame end that frees a surface kicks again
             kickDeferred = true;
@@ -4649,13 +4662,13 @@ public:
 
     // The slot entry holding memory (mapped now, into the least recently used slot neither scanned nor asked for, if not yet);
     // kNoBuffer when every slot is in use or the pages cannot be had.
-    int directSlotFor(IOMemoryDescriptor *memory, uint64_t stride, uint64_t allocation, bool tiled)
+    int directSlotFor(OSObject *surface, IOMemoryDescriptor *memory, uint64_t stride, uint64_t allocation, bool tiled)
     {
         int victim = -1;
         for (unsigned k = 0; k < kSlots; ++k) {
             if (slots[k].memory == memory && slots[k].stride == stride) {
                 slots[k].used = ++slotUses;
-                slots[k].tiled = tiled;
+                slots[k].tiled = holdLayout(slots[k], tiled);
                 return kSlot0 + static_cast<int>(k);
             }
             if (!ring.busy(kSlot0 + static_cast<int>(k)) && (victim < 0 || slots[k].used < slots[victim].used))
@@ -4693,9 +4706,26 @@ public:
             return kNoBuffer;
         }
         memory->retain();
-        slots[victim] = {memory, stride, ++slotUses, pages, tiled};
+        surface->retain();
+        slots[victim] = {memory, surface, nullptr, stride, ++slotUses, pages, tiled};
+        slots[victim].tiled = holdLayout(slots[victim], tiled);
         cleanDomain();
         return kSlot0 + victim;
+    }
+
+    // The slot's layout held for as long as the slot lives, once its surface's GPU client has decided it; the layout the
+    // kick read until then.
+    static bool holdLayout(DirectSlot &slot, bool tiled)
+    {
+        if (!slot.layout) {
+            IOByteCount length = 0;
+            const addr64_t pa = slot.memory->getPhysicalSegment(0, &length, kIOMemoryMapperNone);
+            int held = 0;
+            slot.layout = pa ? tegra_gm20b_surface_hold(pa & ~0xfffULL, &held) : nullptr;
+            if (slot.layout)
+                return held != 0;
+        }
+        return slot.layout ? slot.tiled : tiled;
     }
 
     // The GPU driver's word on whether the surface's pixels are block-linear (by its first page).
@@ -4712,10 +4742,13 @@ public:
         DirectSlot &slot = slots[k];
         if (slot.pages)
             probeDomain.unmap(kProbeSlot + static_cast<uint64_t>(k) * kSlotSpan, slot.pages);
+        if (slot.layout)
+            tegra_gm20b_surface_unhold(slot.layout);
         if (slot.memory) {
             slot.memory->complete(kIODirectionOut);
             slot.memory->release();
         }
+        OSSafeReleaseNULL(slot.surface);
         slot = {};
         cleanDomain();
     }
@@ -4732,12 +4765,12 @@ public:
 
     // Under the gate, in the kick: the swap's surface into its slot, and a fence-only GPU present for it; its completion flips
     // window A to the slot (finishGpuCopy). False: the copy path takes it.
-    bool offerDirect(const OriginalLegacySwapRequest *request, IOMemoryDescriptor *memory, uint64_t stride,
-                     uint64_t allocation, uint32_t width, uint32_t height, bool tiled, uint64_t kickAt)
+    bool offerDirect(const OriginalLegacySwapRequest *request, OSObject *surface, IOMemoryDescriptor *memory,
+                     uint64_t stride, uint64_t allocation, uint32_t width, uint32_t height, bool tiled, uint64_t kickAt)
     {
         if (!gpuCopy || !gpuDoneSource)
             return false;
-        const int entry = directSlotFor(memory, stride, allocation, tiled);
+        const int entry = directSlotFor(surface, memory, stride, allocation, tiled);
         if (entry == kNoBuffer)
             return false;
         TegraScanoutCopy copy = {};

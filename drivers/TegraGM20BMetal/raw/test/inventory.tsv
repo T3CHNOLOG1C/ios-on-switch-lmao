@@ -1,7 +1,7 @@
 # raw's API inventory, written by raw/test/selcover (SELCOVER_WRITE=1; selcover_inventory.h says what each
 # column holds): container, item, selector, m2v, sent by, raw
 # m2v's items: base 5 m2v 14 m2vobj 35 none 65 raw 235 read 292 refused 163 unread 201 zero 47
-# sent selectors: base 89 m2v 26 m2vobj 44 none 8 raw 438 refused 56 zero 154
+# sent selectors: base 88 m2v 26 m2vobj 44 none 8 raw 439 refused 56 zero 154
 MTLArgument	access	access	I	-	read
 MTLArgument	active	isActive	I	-	unread
 MTLArgument	arrayLength	arrayLength	I	-	read
@@ -466,7 +466,7 @@ MTLDevice	-	newCommandAllocatorWithDescriptor:error:	-	24B119	base
 MTLDevice	-	newCommandBuffer	-	24B119	base
 MTLDevice	-	newCommandQueueWithDescriptor:	-	21H461,24B119	raw
 MTLDevice	-	newCompilerWithDescriptor:error:	-	24B119	base
-MTLDevice	-	newComputePipelineStateWithDescriptor:error:	-	21H461,24B119	base
+MTLDevice	-	newComputePipelineStateWithDescriptor:error:	-	21H461,24B119	raw
 MTLDevice	-	newCounterHeapWithDescriptor:error:	-	24B119	base
 MTLDevice	-	newCounterSampleBufferWithDescriptor:error:	-	21H461,24B119	base
 MTLDevice	-	newDagStringWithGraphs:	-	21H461,24B119	base

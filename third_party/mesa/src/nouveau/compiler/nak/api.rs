@@ -28,6 +28,7 @@ enum DebugFlags {
     Annotate,
     NoUgpr,
     Cycles,
+    Sm53Probe,
 }
 
 pub struct Debug {
@@ -54,6 +55,11 @@ impl Debug {
                 "annotate" => flags |= 1 << DebugFlags::Annotate as u8,
                 "nougpr" => flags |= 1 << DebugFlags::NoUgpr as u8,
                 "cycles" => flags |= 1 << DebugFlags::Cycles as u8,
+                // ios-on-switch-lmao: opt_sm53_half_probe's lowerings, which
+                // SwitchHWTest asks of its own compiles to have the device
+                // answer them; release builds leave the flag out
+                #[cfg(not(switch_release))]
+                "sm53_probe" => flags |= 1 << DebugFlags::Sm53Probe as u8,
                 unk => eprintln!("Unknown NAK_DEBUG flag \"{}\"", unk),
             }
         }
@@ -91,6 +97,10 @@ pub trait GetDebugFlags {
     fn cycles(&self) -> bool {
         self.debug_flags() & (1 << DebugFlags::Cycles as u8) != 0
     }
+
+    fn sm53_probe(&self) -> bool {
+        self.debug_flags() & (1 << DebugFlags::Sm53Probe as u8) != 0
+    }
 }
 
 pub static DEBUG: OnceLock<Debug> = OnceLock::new();
@@ -104,6 +114,11 @@ impl GetDebugFlags for OnceLock<Debug> {
 #[unsafe(no_mangle)]
 pub extern "C" fn nak_should_print_nir() -> bool {
     DEBUG.print()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn nak_debug_sm53_probe() -> bool {
+    DEBUG.sm53_probe()
 }
 
 #[unsafe(no_mangle)]
@@ -526,6 +541,9 @@ fn nak_compile_shader_internal(
     pass!(s, opt_uniform_instrs);
     pass!(s, opt_copy_prop);
     pass!(s, opt_prmt);
+    if DEBUG.sm53_probe() && nak.sm >= 53 && nak.sm < 70 {
+        pass!(s, opt_sm53_half_probe);
+    }
     pass!(s, opt_lop);
     pass!(s, opt_copy_prop);
     pass!(s, opt_dce);

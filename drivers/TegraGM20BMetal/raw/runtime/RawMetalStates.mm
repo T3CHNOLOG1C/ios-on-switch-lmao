@@ -304,15 +304,29 @@ static void completeLater(RMPipeline *p, MTLRenderPipelineDescriptor *d)
 // A packed state is the device's archive hit, so its twin goes without the archives the creation listed (Core Animation's
 // own, which holds nothing for this GPU) and without FailOnBinaryArchiveMiss: refused there, a command buffer that falls
 // back would have no state to draw with, and listed there, the twin would be made at once instead of at its first set.
+// Every way a state is made (with or without reflection, at once or through a completion handler) asks m2v for its twin
+// this way. A twin m2v refused leaves a command buffer that falls back with no state: m2v fails all of it ("foreign
+// render pipeline", device boot 10: 833 of Core Animation's command buffers, each leaving its framebuffer a frame
+// behind).
+static MTLRenderPipelineDescriptor *packedTwinDescriptor(MTLRenderPipelineDescriptor *d, bool packed)
+{
+    MTLRenderPipelineDescriptor *t = twinDescriptor(d);
+    if (packed)
+        t.binaryArchives = nil;
+    return t;
+}
+
+static MTLPipelineOption packedTwinOptions(MTLPipelineOption o, bool packed)
+{
+    return packed ? o & ~MTLPipelineOptionFailOnBinaryArchiveMiss : o;
+}
+
 static id<MTLRenderPipelineState> pipelineTwin(MTLRenderPipelineDescriptor *d, MTLPipelineOption o, bool packed,
                                                NSError **error)
 {
-    if (packed && native_bridge_metal_render_pipeline_lazy) {
-        MTLRenderPipelineDescriptor *t = twinDescriptor(d);
-        t.binaryArchives = nil;
-        return native_bridge_metal_render_pipeline_lazy(gRM->fallback, t,
-                                                        o & ~MTLPipelineOptionFailOnBinaryArchiveMiss);
-    }
+    if (packed && native_bridge_metal_render_pipeline_lazy)
+        return native_bridge_metal_render_pipeline_lazy(gRM->fallback, packedTwinDescriptor(d, true),
+                                                        packedTwinOptions(o, true));
     return [gRM->fallback newRenderPipelineStateWithDescriptor:twinDescriptor(d) options:o reflection:nil error:error];
 }
 
@@ -337,13 +351,14 @@ static id<MTLRenderPipelineState> pipelineTwin(MTLRenderPipelineDescriptor *d, M
 {
     SWITCH_API(ApiObject);
     if (reflection) {
-        id<MTLRenderPipelineState> twin = [gRM->fallback newRenderPipelineStateWithDescriptor:twinDescriptor(d)
-                                                                                      options:o
-                                                                                   reflection:reflection
-                                                                                        error:error];
-        RMPipeline *p = [self pipelineFor:d twin:twin];
+        RMPipeline *p = [self pipelineFor:d twin:nil];
+        const bool packed = p->_raw != nullptr;
+        p->_twin = [gRM->fallback newRenderPipelineStateWithDescriptor:packedTwinDescriptor(d, packed)
+                                                               options:packedTwinOptions(o, packed)
+                                                            reflection:reflection
+                                                                 error:error];
         completeLater(p, d);
-        return !twin && !p->_raw ? nil : (id<MTLRenderPipelineState>)p;
+        return !p->_twin && !p->_raw ? nil : (id<MTLRenderPipelineState>)p;
     }
     RMPipeline *p = [self pipelineFor:d twin:nil];
     p->_twin = pipelineTwin(d, o, p->_raw, error);
@@ -369,15 +384,17 @@ static id<MTLRenderPipelineState> pipelineTwin(MTLRenderPipelineDescriptor *d, M
                            completionHandler:(MTLNewRenderPipelineStateWithReflectionCompletionHandler)handler
 {
     MTLRenderPipelineDescriptor *copy = [d copy];
-    RMDevice *me = self;
-    [gRM->fallback newRenderPipelineStateWithDescriptor:twinDescriptor(d)
-                                                options:o
-                                      completionHandler:^(id<MTLRenderPipelineState> twin,
-                                                          MTLRenderPipelineReflection *r, NSError *e) {
-                                          RMPipeline *p = [me pipelineFor:copy twin:twin];
-                                          completeLater(p, copy);
-                                          handler((!twin && !p->_raw) ? nil : (id<MTLRenderPipelineState>)p, r, e);
-                                      }];
+    RMPipeline *p = [self pipelineFor:copy twin:nil];
+    const bool packed = p->_raw != nullptr;
+    [gRM->fallback
+        newRenderPipelineStateWithDescriptor:packedTwinDescriptor(d, packed)
+                                     options:packedTwinOptions(o, packed)
+                           completionHandler:^(id<MTLRenderPipelineState> twin, MTLRenderPipelineReflection *r,
+                                               NSError *e) {
+                               p->_twin = twin;
+                               completeLater(p, copy);
+                               handler((!twin && !p->_raw) ? nil : (id<MTLRenderPipelineState>)p, r, p->_raw ? nil : e);
+                           }];
 }
 
 - (id)wrapCarried:(id)twin
@@ -406,6 +423,14 @@ static id<MTLRenderPipelineState> pipelineTwin(MTLRenderPipelineDescriptor *d, M
     d.computeFunction = f;
     return rmComputeState(
         self, [gRM->fallback newComputePipelineStateWithFunction:twinOf(f) options:o reflection:r error:error], f, d);
+}
+
+// _MTLDevice's own sends this to [self compiler], which answers nil on a device without Apple's compiler service: Core
+// Animation 27 makes its luma kernels this way and aborts on nil.
+- (id<MTLComputePipelineState>)newComputePipelineStateWithDescriptor:(MTLComputePipelineDescriptor *)d
+                                                               error:(NSError **)error
+{
+    return [self newComputePipelineStateWithDescriptor:d options:MTLPipelineOptionNone reflection:nil error:error];
 }
 
 - (id<MTLComputePipelineState>)newComputePipelineStateWithDescriptor:(MTLComputePipelineDescriptor *)d
