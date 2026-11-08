@@ -91,9 +91,14 @@ void switch_panic_early(const char *format, va_list *args, unsigned long caller)
     if (vsnprintf(line, sizeof(line), format, copy) < 0)
         line[0] = 0;
     va_end(copy);
+    uint64_t kernel_ttbr0 = 0;
+    __asm__ volatile("mrs %0, ttbr0_el1" : "=r"(kernel_ttbr0));
     int framebuffer = 0, mmio = 0;
-    if (!map_bootstrap(&framebuffer, &mmio) || !mmio)
+    if (!map_bootstrap(&framebuffer, &mmio) || !mmio) {
+        __asm__ volatile("msr ttbr0_el1, %0" ::"r"(kernel_ttbr0) : "memory");
+        flush_tlb();
         return;
+    }
     switch_panic_save_early(line, caller, (volatile uint8_t *)(uintptr_t)PSTORE_PA,
                             framebuffer ? (volatile uint32_t *)(uintptr_t)SWITCH_FB_PA : NULL,
                             (volatile uint32_t *)(uintptr_t)PMC_PA);
