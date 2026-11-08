@@ -13,6 +13,13 @@ namespace {
 constexpr unsigned kBus = 1;
 constexpr uint8_t kAddr = 0x1c;
 constexpr unsigned kLdo1Enable = TEGRA_GPIO(Z, 4);
+bool gLost;
+
+void markLost(const char *what, uint16_t reg, int error)
+{
+    IOLog("SwitchAudio: codec off: RT5639 %s %#x failed: %d\n", what, reg, error);
+    gLost = true;
+}
 
 enum : unsigned {
     // PWR_DIG1, PWR_DIG2
@@ -98,11 +105,15 @@ constexpr RegValue kEqOff[] = {{0x0b1, 0x0000}, {0x0b0, 0x6000}, {0x0b4, 0x2206}
 uint16_t SwitchRT5639::read(uint8_t reg)
 {
     uint8_t bytes[2] = {};
+    if (gLost)
+        return 0;
     int error = tegra_i2c_read(kBus, kAddr, reg, bytes, sizeof(bytes));
     if (error)
         error = tegra_i2c_read(kBus, kAddr, reg, bytes, sizeof(bytes));
-    if (error)
-        panic("SwitchAudio: RT5639 read %#x failed: %d", reg, error);
+    if (error) {
+        markLost("read", reg, error);
+        return 0;
+    }
     return static_cast<uint16_t>(static_cast<unsigned>(bytes[0]) << 8U | bytes[1]);  // 16-bit registers, big endian
 }
 
@@ -113,12 +124,14 @@ void SwitchRT5639::write(uint16_t reg, uint16_t value)
         write(PRIV_INDEX, reg - kPrivate);
         reg = PRIV_DATA;
     }
+    if (gLost)
+        return;
     const uint8_t bytes[2] = {static_cast<uint8_t>(value >> 8), static_cast<uint8_t>(value)};
     int error = tegra_i2c_write(kBus, kAddr, static_cast<uint8_t>(reg), bytes, sizeof(bytes));
     if (error)
         error = tegra_i2c_write(kBus, kAddr, static_cast<uint8_t>(reg), bytes, sizeof(bytes));
     if (error)
-        panic("SwitchAudio: RT5639 write %#x = %#x failed: %d", reg, value, error);
+        markLost("write", reg, error);
 }
 
 void SwitchRT5639::update(uint8_t reg, uint16_t mask, uint16_t value)
@@ -129,13 +142,38 @@ void SwitchRT5639::update(uint8_t reg, uint16_t mask, uint16_t value)
         write(reg, static_cast<uint16_t>(now));
 }
 
-void SwitchRT5639::probe(bool afterSleep, bool capture)
+bool SwitchRT5639::present()
 {
+    if (tegra_i2c_init(kBus) != TEGRA_I2C_OK)
+        panic("SwitchAudio: I2C1 did not start");
+    if (tegra_gpio_output(kLdo1Enable, 1))
+        panic("SwitchAudio: cannot drive PZ4 (RT5639 LDO1_EN)");
+    IOSleep(400);
+    uint8_t id[2] = {};
+    const int error = tegra_i2c_read(kBus, kAddr, VENDOR_ID2, id, sizeof(id));
+    if (!error && id[0] == 0x62 && id[1] == 0x31)
+        return true;
+    IOLog("SwitchAudio: no RT5639 on I2C1 0x1c (VENDOR_ID2 %02x%02x, error %d): audio is the null backend\n", id[0],
+          id[1], error);
+    (void)tegra_gpio_output(kLdo1Enable, 0);
+    gLost = true;
+    return false;
+}
+
+bool SwitchRT5639::answering()
+{
+    return !gLost;
+}
+
+void SwitchRT5639::probe(bool ldoOn, bool capture)
+{
+    if (gLost)
+        return;
     if (tegra_i2c_init(kBus) != TEGRA_I2C_OK)
         panic("SwitchAudio: I2C1 did not start");
     uint8_t id[2] = {};
     const bool powered =
-        afterSleep && (tegra_i2c_read(kBus, kAddr, VENDOR_ID2, id, sizeof(id)) == 0) && id[0] == 0x62 && id[1] == 0x31;
+        ldoOn && (tegra_i2c_read(kBus, kAddr, VENDOR_ID2, id, sizeof(id)) == 0) && id[0] == 0x62 && id[1] == 0x31;
     if (!powered) {
         if (tegra_gpio_output(kLdo1Enable, 1))
             panic("SwitchAudio: cannot drive PZ4 (RT5639 LDO1_EN)");
@@ -143,7 +181,9 @@ void SwitchRT5639::probe(bool afterSleep, bool capture)
     }
     const int error = tegra_i2c_read(kBus, kAddr, VENDOR_ID2, id, sizeof(id));
     if (error || id[0] != 0x62 || id[1] != 0x31) {
-        panic("SwitchAudio: no RT5639 on I2C1 0x1c (VENDOR_ID2 %02x%02x, error %d)", id[0], id[1], error);
+        IOLog("SwitchAudio: codec off: no RT5639 on I2C1 0x1c (VENDOR_ID2 %02x%02x, error %d)\n", id[0], id[1], error);
+        gLost = true;
+        return;
     }
     currentRoute = kRouteNone;
     write(RESET, 0);
