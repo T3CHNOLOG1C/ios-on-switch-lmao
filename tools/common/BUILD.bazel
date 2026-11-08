@@ -1,4 +1,4 @@
-# The helpers every tool shares, one module per concern, each the one implementation of its pattern.
+# The helpers every tool shares: one module per concern, the one implementation of its pattern, //tools/common:<module>.
 load("@rules_python//python:py_library.bzl", "py_library")
 load("@rules_python//python:py_test.bzl", "py_test")
 load("//bazel/lint:defs.bzl", "lint_files")
@@ -7,63 +7,24 @@ package(default_visibility = ["//visibility:public"])
 
 lint_files()
 
-py_library(
-    name = "hashing",
-    srcs = ["hashing.py"],
+MODULES = {
+    "files": [],
+    "hashing": [],
+    "macho": [],
+    "paths": ["@rules_python//python/runfiles"],
+    "sudo": [],
+}
+
+[py_library(
+    name = module,
+    srcs = [module + ".py"],
     imports = ["../.."],
-)
+    deps = deps,
+) for module, deps in MODULES.items()]
 
-py_test(
-    name = "hashing_test",
-    srcs = ["hashing_test.py"],
-    deps = [":hashing"],
-)
-
-py_library(
-    name = "paths",
-    srcs = ["paths.py"],
-    imports = ["../.."],
-    deps = ["@rules_python//python/runfiles"],
-)
-
-py_test(
-    name = "paths_test",
-    srcs = ["paths_test.py"],
-    deps = [":paths"],
-)
-
-py_library(
-    name = "sudo",
-    srcs = ["sudo.py"],
-    imports = ["../.."],
-)
-
-py_test(
-    name = "sudo_test",
-    srcs = ["sudo_test.py"],
-    deps = [":sudo"],
-)
-
-py_library(
-    name = "files",
-    srcs = ["files.py"],
-    imports = ["../.."],
-)
-
-py_test(
-    name = "files_test",
-    srcs = ["files_test.py"],
-    deps = [":files"],
-)
-
-py_library(
-    name = "macho",
-    srcs = ["macho.py"],
-    imports = ["../.."],
-)
-
-py_test(
-    name = "macho_test",
-    srcs = ["macho_test.py"],
-    deps = [":macho"],
-)
+[py_test(
+    name = module + "_test",
+    size = "small",
+    srcs = [module + "_test.py"],
+    deps = [":" + module],
+) for module in MODULES]
