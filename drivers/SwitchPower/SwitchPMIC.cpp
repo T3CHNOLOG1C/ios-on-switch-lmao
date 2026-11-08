@@ -77,8 +77,8 @@
 #include "SwitchMAX77620.h"
 #include "SwitchMonotonicClock.h"
 #include "SwitchPower.h"
+#include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
 
-extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 // NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
 extern "C" boolean_t preemption_enabled(void);
 // NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
@@ -118,7 +118,7 @@ constexpr uint32_t kPowerDownUS = 2000000;  // the PMIC cuts power within millis
 // PMC_CNTRL (APBDEV_PMC_CNTRL, PMC at 0x7000E400) MAIN_RST: the SoC's warm reset (hekate, L4T tegra_pmc_restart).
 constexpr vm_offset_t kPmcPA = 0x7000E000;
 constexpr uint32_t kPmcCntrl = 0x400, kPmcMainReset = 1u << 4;
-volatile uint32_t *gPmc;  // mapped at start: nothing is mapped on the restart path
+volatile uint8_t *gPmc;  // mapped at start: nothing is mapped on the restart path
 
 // The Wi-Fi/Bluetooth module's 32 kHz clock on, as L4T has it (top of file); read-modify-write, other bits kept.
 // One line to the log (not the console) when it was off, which is every boot after a PMIC power-off.
@@ -373,7 +373,7 @@ int haltRestart(unsigned int type)
     if (restart) {
         psciSystemReset();
         if (gPmc)
-            gPmc[kPmcCntrl / 4] |= kPmcMainReset;
+            switch_mmio_rmw32(gPmc, kPmcCntrl, 0, kPmcMainReset);
         IODelay(kPowerDownUS);
     }
     if (dark)
@@ -632,7 +632,7 @@ namespace {
 void reportClocks(const char *when)
 {
     using namespace switchclk;
-    volatile uint8_t *car = reinterpret_cast<volatile uint8_t *>(ml_io_map(kCarPA, 0x1000));
+    volatile uint8_t *car = switch_mmio_map(kCarPA, 0x1000);
     if (!car) {
         IOLog("SwitchClocks %s: CAR not mapped\n", when);
         return;
@@ -661,11 +661,13 @@ void reportClocks(const char *when)
           emc.clockSource);
 }
 
-SwitchRTC *publishRTC(unsigned mode)
+SwitchRTC *publishRTC(unsigned mode, int64_t *readSecs, uint64_t *readStamp)
 {
     char why[96] = "";
     const int64_t secs = rtcRead(why, sizeof(why));
     const uint64_t stamp = mach_absolute_time();
+    *readSecs = secs;
+    *readStamp = stamp;
     if (secs < 0) {
         IOLog("SwitchRTC: MAX77620 RTC not used (%s); the clock starts at 1970\n", why);
         return nullptr;
@@ -757,12 +759,13 @@ extern "C" int switch_pmic_start(void)
         return 0;
     started = true;
     reportClocks("at boot");
-    (void)switch_monotonic_clock_start();
 
     // Read-only: Horizon keeps its clock in the same RTC, and writing ours would shift it.
     constexpr unsigned rtcMode = 1;
     constexpr unsigned emcKHz = 1600000;  // hekate's top stock MTC table, L4T's T210B01 core-DVFS "emc" ceiling
     uint8_t control = 0;
+    int64_t rtcSecs = -1;
+    uint64_t rtcStamp = 0;
     const int err = tegra_i2c_init(kBus) ? TEGRA_I2C_ENOTREADY : readByte(kPmic, ONOFFCNFG1, &control);
     if (err) {
         IOLog("SwitchPMIC: MAX77620 not answering on I2C5 (%d): no RTC, no power-off\n", err);
@@ -770,16 +773,17 @@ extern "C" int switch_pmic_start(void)
         if (const int clockErr = moduleClockOn()) {
             IOLog("SwitchPMIC: Wi-Fi/Bluetooth 32 kHz clock not set (%d): Bluetooth will not come up\n", clockErr);
         }
-        gRTC = publishRTC(rtcMode);
+        gRTC = publishRTC(rtcMode, &rtcSecs, &rtcStamp);
         int recordMillic = 0;
         const enum switch_thermal_sensor recorded = switch_pmic_thermal_take(&recordMillic);
         switch_panic_save_thermal(recorded, recordMillic);
 #if DEVELOPMENT || DEBUG
         switch_pmic_mark_start();
 #endif
-        gPmc = (volatile uint32_t *)ml_io_map(kPmcPA, 0x1000);
+        gPmc = switch_mmio_map(kPmcPA, 0x1000);
         PE_halt_restart = haltRestart;
     }
+    (void)switch_monotonic_clock_start(rtcSecs, rtcStamp);
 
     {
         char line[256];

@@ -1,5 +1,6 @@
 import Foundation
 import HWTestCore
+import HWTestGPU
 import Metal
 
 /// Each colour format rendered from (0.2, 0.4, 0.6, 1.0) by a fragment shader (integer formats by a clear) and read

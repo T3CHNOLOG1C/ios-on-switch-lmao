@@ -37,6 +37,7 @@
 #include <stdint.h>
 #include <IOKit/IOLib.h>
 #include "../TegraI2C/TegraI2C.h"
+#include "../../kits/SwitchMMIO/SwitchMMIO.h"
 
 namespace switchclk {
 constexpr uint64_t kCarPA = 0x60006000;
@@ -68,19 +69,14 @@ inline unsigned voutMilliVolts(uint8_t code)
     return 250u + 5u * code;
 }
 
-inline uint32_t reg32(const volatile uint8_t *base, uint32_t offset)
-{
-    return *reinterpret_cast<const volatile uint32_t *>(base + offset);
-}
-
 inline unsigned refKHz(volatile uint8_t *car)
 {
-    return 38400u >> ((reg32(car, OSC_CTRL) >> 26) & 3);
+    return 38400u >> ((switch_mmio_read32(car, OSC_CTRL) >> 26) & 3);
 }
 
 inline unsigned clkmKHz(volatile uint8_t *car)
 {
-    return 38400u / (((reg32(car, SPARE_REG0) >> 2) & 3) + 1);
+    return 38400u / (((switch_mmio_read32(car, SPARE_REG0) >> 2) & 3) + 1);
 }
 
 // The post divider a DIVP code selects (Linux pll_qlin_pdiv_to_hw), 0 for an undefined code.
@@ -113,7 +109,8 @@ struct Cpu {
 
 inline Cpu readCpu(volatile uint8_t *car)
 {
-    Cpu cpu{reg32(car, CCLK_BURST_POLICY), reg32(car, SUPER_CCLK_DIVIDER), reg32(car, PLLX_BASE), 0, 0};
+    Cpu cpu{switch_mmio_read32(car, CCLK_BURST_POLICY), switch_mmio_read32(car, SUPER_CCLK_DIVIDER),
+            switch_mmio_read32(car, PLLX_BASE), 0, 0};
     const uint32_t state = cpu.policy >> 28;
     unsigned index = 1;
     if (state == 1) {
@@ -153,17 +150,17 @@ struct Emc {
 
 inline Emc readEmc(volatile uint8_t *car)
 {
-    Emc emc{reg32(car, CLK_SOURCE_EMC), 0, 0, 0};
+    Emc emc{switch_mmio_read32(car, CLK_SOURCE_EMC), 0, 0, 0};
     emc.source = emc.clockSource >> 29;
     emc.divider = emc.clockSource & 0xff;
     const unsigned ref = refKHz(car);
     unsigned parent = 0;
     switch (emc.source) {
     case 0:
-        parent = pllKHz(reg32(car, PLLM_BASE), ref, 8, false);
+        parent = pllKHz(switch_mmio_read32(car, PLLM_BASE), ref, 8, false);
         break;
     case 1:
-        parent = pllKHz(reg32(car, PLLC_BASE), ref, 10, false);
+        parent = pllKHz(switch_mmio_read32(car, PLLC_BASE), ref, 10, false);
         break;
     case 2:
     case 7:
@@ -173,13 +170,13 @@ inline Emc readEmc(volatile uint8_t *car)
         parent = clkmKHz(car);
         break;
     case 4:
-        parent = pllKHz(reg32(car, PLLM_BASE), ref, 8, true);
+        parent = pllKHz(switch_mmio_read32(car, PLLM_BASE), ref, 8, true);
         break;
     case 5:
-        parent = pllKHz(reg32(car, PLLMB_BASE), ref, 8, true);
+        parent = pllKHz(switch_mmio_read32(car, PLLMB_BASE), ref, 8, true);
         break;
     case 6:
-        parent = pllKHz(reg32(car, PLLMB_BASE), ref, 8, false);
+        parent = pllKHz(switch_mmio_read32(car, PLLMB_BASE), ref, 8, false);
         break;
     default:  // the field is three bits, all named above
         break;

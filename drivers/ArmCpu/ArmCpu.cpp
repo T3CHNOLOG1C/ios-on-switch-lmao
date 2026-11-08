@@ -12,6 +12,7 @@
 #include "../ArmGIC/ArmGIC.h"
 #include "../../kits/SwitchDMA/SwitchDcache.h"
 #include "../../kits/SwitchDMA/SwitchHwPage.h"
+#include "../../kits/SwitchMMIO/SwitchMMIO.h"
 #include "../../diagnostics/switch/SwitchPowerTrail.h"
 #include "../SwitchSuspend/SwitchSleepSteps.h"
 #include "ArmCpuIdle.h"
@@ -159,14 +160,15 @@ OSDefineMetaClassAndStructors(ArmCpu, IOCPU)
     // Redistributor ISENABLER0: SGIs 0..15 (only SGI 0 is used by the kernel; the others let the self-SGI probe tell which INTIDs the GIC accepts) and PPI 27.
     static const uint32_t kSgiPpiEnable = 0xffffU | (1U << 27);
 
+// The GIC's frames are kept as addresses (uintptr_t): the accesses are kits/SwitchMMIO's.
 static uint32_t read32(uintptr_t base, unsigned offset)
 {
-    return *reinterpret_cast<volatile uint32_t *>(base + offset);
+    return switch_mmio_read32(reinterpret_cast<const volatile uint8_t *>(base), offset);
 }
 
 static void write32(uintptr_t base, unsigned offset, uint32_t value)
 {
-    *reinterpret_cast<volatile uint32_t *>(base + offset) = value;
+    switch_mmio_write32(reinterpret_cast<volatile uint8_t *>(base), offset, value);
 }
 
 // NOLINTBEGIN(misc-const-correctness): each value is written by the asm after it
@@ -547,8 +549,8 @@ void ArmCpu::configureBankedV2() const
 // and ATF's warm boot (tegra_gic_pcpu_init) reset, with nothing pending cleared: the IPI that woke the core may be.
 void armcpu::restoreBankedGic()
 {
-    *reinterpret_cast<volatile uint8_t *>(gDist + 0x400) = 0x80;
-    *reinterpret_cast<volatile uint8_t *>(gDist + 0x400 + 27) = 0x80;
+    switch_mmio_write8(reinterpret_cast<volatile uint8_t *>(gDist), 0x400, 0x80);
+    switch_mmio_write8(reinterpret_cast<volatile uint8_t *>(gDist), 0x400 + 27, 0x80);
     write32(gV2CpuIf, 4, 0xff);
     write32(gV2CpuIf, 8, 0);
     write32(gV2CpuIf, 0, (read32(gV2CpuIf, 0) & 0x1e0U) | 1U);
@@ -745,6 +747,10 @@ bool ArmCpu::finishSecondary()
         armcpu_smp_fail[logicalId] = 3;
         return false;
     }
+    // Before registering: xnu-12377 starts the core inside ml_processor_register, and its initCPU records its own
+    // steps and marks it running.
+    armcpu_smp_step[logicalId] = 2;
+    setCPUState(kIOCPUStateUninitalized);
     ml_processor_info_t info = {};
     info.cpu_id = this;
     info.phys_id = static_cast<uint32_t>(affinity);
@@ -758,8 +764,6 @@ bool ArmCpu::finishSecondary()
         return false;
     }
     setCPUNumber(info.log_id);
-    armcpu_smp_step[logicalId] = 2;
-    setCPUState(kIOCPUStateUninitalized);
     registerService();
     startSecondary();
     return true;
@@ -914,7 +918,13 @@ void ArmCpu::observeAllThread(void *, wait_result_t)
 void ArmCpu::startThread(void *argument, wait_result_t)
 {
     ArmCpu *self = static_cast<ArmCpu *>(argument);
-    __atomic_store_n(&armcpu_smp_step[self->logicalId], 3U, __ATOMIC_RELEASE);
+    // xnu-12377 boots a core inside ml_processor_register (processor_boot, !USE_APPLEARMSMP), which has called
+    // startCPU by now, and answers a kext's processor_start with KERN_FAILURE without doing anything
+    // (processor_start_from_kext). xnu-10063 leaves the core to processor_start.
+    const bool booted = __atomic_load_n(&armcpu_smp_step[self->logicalId], __ATOMIC_ACQUIRE) >= 4;
+    if (!booted) {
+        __atomic_store_n(&armcpu_smp_step[self->logicalId], 3U, __ATOMIC_RELEASE);
+    }
     if (self->gicV2) {
         thread_t observer = nullptr;
         if (kernel_thread_start(&ArmCpu::observeThread, self, &observer) != KERN_SUCCESS) {
@@ -922,7 +932,7 @@ void ArmCpu::startThread(void *argument, wait_result_t)
         }
         thread_deallocate(observer);
     }
-    const kern_return_t result = processor_start(self->machProcessor);
+    const kern_return_t result = booted ? KERN_SUCCESS : processor_start(self->machProcessor);
     gStartStatus[self->logicalId] = result;
     __atomic_store_n(&gStartDone[self->logicalId], 1U, __ATOMIC_RELEASE);
     thread_terminate(current_thread());
@@ -1099,6 +1109,12 @@ void ArmCpu::initCPU(bool boot)
         signalCPU(this);
         return;
     }
+    if (gController == nullptr) {
+        // xnu-12377 boots the boot processor inside ml_processor_register (processor_boot), before start() has set
+        // up the interrupt controller; the self-IPI below would find no handler in this core's cpu_data.
+        ml_install_interrupt_handler(this, static_cast<int>(logicalId), this,
+                                     reinterpret_cast<IOInterruptHandler>(&ArmCpu::dispatch), nullptr);
+    }
     enableGic();
     enableCPUTimeBase(true);
     setCPUState(kIOCPUStateRunning);
@@ -1155,10 +1171,12 @@ void ArmCpu::interrupt()
             }
         }
         if (gicV2) {
-            // Preserve source-CPU bits [12:10] for SGIs, not only the 10-bit INTID.
+            // Preserve source-CPU bits [12:10] for SGIs, not only the 10-bit INTID. The barrier lets a driver's
+            // status-clear reach its device before the EOI, so a level line is not taken again. None after (Linux
+            // has none either): the next GICC_IAR read goes to the same Device-nGnRnE peripheral, so the EOI arrives
+            // before it, and the exception return synchronizes.
             __asm__ volatile("dsb sy" ::: "memory");
             write32(gV2CpuIf, 0x10, v2Acknowledge);
-            __asm__ volatile("dsb sy\nisb" ::: "memory");
         } else {
             __asm__ volatile("msr icc_eoir1_el1, %0\nisb" ::"r"(id) : "memory");
         }

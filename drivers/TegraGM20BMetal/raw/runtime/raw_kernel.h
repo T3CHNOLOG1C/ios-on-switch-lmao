@@ -48,7 +48,8 @@ public:
     bool import(void *addr, uint64_t bytes, Bo &bo, uint32_t kind = 0, uint32_t surfaceId = 0);
     // The same in two steps, for a caller that serialises the VA list itself: the kernel's BoImport (the wiring: the slow part,
     // safe beside the other calls) and then the VA and its bind (bindImport, under the caller's lock).
-    bool importPages(void *addr, uint64_t bytes, Bo &bo, uint32_t surfaceId = 0);
+    // `gpuReads`: the GPU never writes it (TegraGM20BImportGpuReads), so no submission marks it GPU-dirty
+    bool importPages(void *addr, uint64_t bytes, Bo &bo, uint32_t surfaceId = 0, bool gpuReads = false);
     // The GPU may write the IOSurface from now on (BoImport took it as only sampled): before its first render or store.
     bool surfaceGpuWrites(uint32_t surfaceId);
     // SurfaceLayout (method 16) for the import `bo` of a surface: its layout, decided by the kernel once for every process
@@ -76,6 +77,21 @@ public:
         return lostChannel_.load(std::memory_order_relaxed) == channel;
     }
 
+    // Why the last channel found dead was killed (TegraGM20BAbiStatus: 1 MMU fault at lostFaultVa(), 2 GR exception, 3 host
+    // error, 4 hang); 0 when the kernel did not say
+    uint32_t lostError() const
+    {
+        return lostError_.load(std::memory_order_relaxed);
+    }
+
+    uint64_t lostFaultVa() const
+    {
+        return lostFaultVa_.load(std::memory_order_relaxed);
+    }
+
+    // `channel` is dead (an Exec or WaitFence answered so, or its kill record says so): lost() and the cause from GetStatus
+    void markLost(uint32_t channel);
+
     // `last`: the channel's last submitted seqno (0 if none), waited on when the GPFIFO is full
     // `surfaces` (null: none): the host imports the submission touches, named to the kernel (ExecSurfaces, method 17,
     // TegraGM20BInfoExecSurfaces) before each Exec of it: it waits on the GPU for other channels' writes to them, and counts
@@ -91,6 +107,12 @@ public:
     bool canOrder() const
     {
         return (info_.flags & TegraGM20BInfoOrder) != 0;
+    }
+
+    // A channel's fence word is a TegraGM20BAbiFence: a kill names the seqnos it took
+    bool killRecords() const
+    {
+        return (info_.flags & TegraGM20BInfoKillRecord) != 0;
     }
 
     const std::string &error() const
@@ -118,7 +140,8 @@ private:
     // A SurfaceWrites failed: imports stop saying the GPU only samples them, and every Exec carries
     // TegraGM20BPushImportsWritten.
     std::atomic<bool> importsWritten_{false};
-    std::atomic<uint32_t> lostChannel_{0};
+    std::atomic<uint32_t> lostChannel_{0}, lostError_{0};
+    std::atomic<uint64_t> lostFaultVa_{0};
     uint64_t fenceMap_ = 0;  // the connection's fence page, mapped once: every channel's word is in it
     uint32_t selector_ = 0;
     TegraGM20BAbiInfo info_ = {};

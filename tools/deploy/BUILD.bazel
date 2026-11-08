@@ -21,7 +21,11 @@ py_library(
         "system_apps.py",
     ],
     imports = ["../.."],
-    deps = ["//tools/install:lib"],
+    deps = [
+        "//tools/common:files",
+        "//tools/common:paths",
+        "//tools/install:lib",
+    ],
 )
 
 py_library(

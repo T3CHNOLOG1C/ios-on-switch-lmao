@@ -183,7 +183,10 @@ int main(int argc, char **argv)
                             bound[b.stage][b.slot] = true;
                         } else
                             e->setBufferOffset(b.stage, b.slot, ringAt);
-                        ringAt = (ringAt + b.length + 255) & ~uint64_t(255);
+                        // FRAME_RING_ALIGN: as nvkframe.mm's
+                        static const uint64_t align =
+                            getenv("FRAME_RING_ALIGN") ? uint64_t(atoi(getenv("FRAME_RING_ALIGN"))) : 256;
+                        ringAt = (ringAt + b.length + align - 1) / align * align;
                         continue;
                     }
                     e->setBytes(b.stage, b.slot, bytes.data(), b.length);

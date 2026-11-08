@@ -35,6 +35,33 @@ swift_library(
     deps = [":core"],
 )
 
+# The GPU scenes (Metal, MPS, Core Image, IOSurface; no UIKit), so the host test runs them on the Mac's GPU too.
+swift_library(
+    name = "gpu",
+    srcs = glob([
+        "gpu/*.swift",
+        "gpu/scenes/*.swift",
+    ]),
+    copts = SWIFT_COPTS,
+    module_name = "HWTestGPU",
+    deps = [":core"],
+)
+
+# Every GPU scene on this Mac's GPU against its CPU reference, the shaders compiled from source. Manual: it needs a Mac
+# whose GPU runs Metal, which CI's runners may not have.
+swift_test(
+    name = "gpu_test",
+    size = "small",
+    srcs = glob(["host_gpu_tests/*.swift"]),
+    copts = SWIFT_COPTS,
+    data = glob(["shaders/*.metal"]),
+    tags = ["manual"],
+    deps = [
+        ":core",
+        ":gpu",
+    ],
+)
+
 # Every clip and still image of core/Media.swift's tables, pinned in bazel/pinned/hw_test_app/media; core_test checks
 # the list against the tables.
 MEDIA = [
@@ -131,7 +158,10 @@ apple_resource_group(
 # tools/devicerun:hwtest_test reads the test IDs out of these.
 filegroup(
     name = "test_sources",
-    srcs = glob(["tests/*.swift"]),
+    srcs = glob([
+        "gpu/scenes/*.swift",
+        "tests/*.swift",
+    ]),
 )
 
 swift_library(
@@ -147,6 +177,7 @@ swift_library(
     target_compatible_with = ["@platforms//os:ios"],
     deps = [
         ":core",
+        ":gpu",
         ":video",
     ],
 )
@@ -164,6 +195,6 @@ ios_application(
     infoplists = ["Info.plist"],
     minimum_os_version = "17.4",
     provisioning_profile = "adhoc.mobileprovision",
-    resources = ["shaders/HWTest.metal"],
+    resources = glob(["shaders/*.metal"]),
     deps = [":app_lib"],
 )

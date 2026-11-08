@@ -21,6 +21,8 @@
 #include <libkern/c++/OSData.h>
 #include <pexpert/pexpert.h>
 #include "../ArmGIC/SwitchInterrupts.h"
+#include "../../kits/SwitchDMA/SwitchDcache.h"
+#include "../../kits/SwitchMMIO/SwitchMMIO.h"
 #include "../../kits/SwitchSysctl/SwitchSysctl.h"
 #include "../TegraDisplayFlip/TegraScanoutCopy.h"
 #include "../TegraDisplayFlip/TegraScanoutRing.h"
@@ -459,20 +461,6 @@ inline uint64_t counterNow()
     uint64_t ticks = 0;
     __asm__ volatile("isb\n\tmrs %0, cntpct_el0" : "=r"(ticks));
     return ticks;
-}
-
-// Clean and invalidate [address, address + bytes) to the point of coherency, by VA (CTR_EL0 line size).
-void cleanInvalidate(const void *address, uint64_t bytes)
-{
-    // NOLINTNEXTLINE(misc-const-correctness): the asm writes it
-    uint64_t ctr = 0;
-    __asm__ volatile("mrs %0, ctr_el0" : "=r"(ctr));
-    const uintptr_t line = static_cast<uintptr_t>(4) << ((ctr >> 16) & 15);
-    const uintptr_t end = reinterpret_cast<uintptr_t>(address) + bytes;
-    __asm__ volatile("dsb sy" ::: "memory");
-    for (uintptr_t at = reinterpret_cast<uintptr_t>(address) & ~(line - 1); at < end; at += line)
-        __asm__ volatile("dc civac, %0" ::"r"(at) : "memory");
-    __asm__ volatile("dsb sy" ::: "memory");
 }
 
 // The MAIR attribute byte the kernel's translation of address resolves to (PAR_EL1 after AT S1E1R, as XNU's mmu_kvtop):
@@ -1479,11 +1467,12 @@ private:
     static bool vblankFilter(OSObject *owner, IOFilterInterruptEventSource *source)
     {
         NativeLegacyDisplay *self = static_cast<NativeLegacyDisplay *>(owner);
-        const uint32_t status = self->dc[kDcIntStatus] & (kVblankInt | kFrameEndInt | kVpulse2Int);
+        const uint32_t status =
+            switch_mmio_read32_word(self->dc, kDcIntStatus) & (kVblankInt | kFrameEndInt | kVpulse2Int);
         if (!status)
             return false;
         self->dc[kDcIntStatus] = status;
-        (void)self->dc[kDcIntStatus];  // read back: the line is low before ArmCpu's EOI
+        (void)switch_mmio_read32_word(self->dc, kDcIntStatus);  // read back: the line is low before ArmCpu's EOI
         if (gPanicRestore.panicking)
             return false;  // window A is the panic's (restorePitchOnPanic): no flip, no DSI command
         if (status & kVblankInt) {
@@ -2203,7 +2192,7 @@ private:
             // The allocator zeroed the pages through the kernel's cacheable alias. Write those lines back and drop them now,
             // before the write-combined mapping writes the same memory around the cache; nothing writes through the cacheable
             // alias after this, so no dirty line can later land on a frame.
-            cleanInvalidate(buffer->getBytesNoCopy(), kNativeBlockBytes);
+            switch_dcache_clean_invalidate(buffer->getBytesNoCopy(), kNativeBlockBytes);
             mapping = mapScanout(pa);
             if (mapping && (!mapping->getVirtualAddress() || mapping->getLength() < kNativeBlockBytes))
                 OSSafeReleaseNULL(mapping);
@@ -2273,7 +2262,7 @@ private:
         const uint64_t pa = tapeBuffer ? tapeBuffer->getPhysicalSegment(0, &run, kIOMemoryMapperNone) : 0;
         if (pa && run >= kTapeBytes && pa + kTapeBytes <= (1ULL << 32) && tapeBuffer->getBytesNoCopy()) {
             // As for surface 1: the zeroing went through the cacheable alias, which nothing writes after this.
-            cleanInvalidate(tapeBuffer->getBytesNoCopy(), kTapeBytes);
+            switch_dcache_clean_invalidate(tapeBuffer->getBytesNoCopy(), kTapeBytes);
             tapeMapping = mapScanout(pa, kTapeBytes);
         }
         if (!tapeMapping || !tapeMapping->getVirtualAddress() || tapeMapping->getLength() < kTapeBytes) {
@@ -2331,7 +2320,8 @@ private:
     static int tapeLatched(void *owner)
     {
         return static_cast<int>(
-            static_cast<int>((static_cast<NativeLegacyDisplay *>(owner)->dc[kDcStateControl] & kWinAActReq)) == 0u);
+            static_cast<int>((switch_mmio_read32_word(static_cast<NativeLegacyDisplay *>(owner)->dc, kDcStateControl) &
+                              kWinAActReq)) == 0u);
     }
 
     static int tapeWait(void *owner)
@@ -2778,7 +2768,7 @@ private:
         uintptr_t low = 0;
         uintptr_t high = 0;
         probeDomain.takeDirty(&low, &high);
-        cleanInvalidate(probeTables->getBytesNoCopy(), static_cast<uint64_t>(kProbeTables) * 4096);
+        switch_dcache_clean_invalidate(probeTables->getBytesNoCopy(), static_cast<uint64_t>(kProbeTables) * 4096);
         probeSwgroupWas = tegra_smmu_read(TEGRA_SMMU_DC_ASID);
         return tegra_smmu_attach(TEGRA_SMMU_ASID_DISPLAY, probeDomain.ptb(), TEGRA_SMMU_DC_ASID,
                                  TEGRA_SMMU_TRANSLATION_ENABLE_0, kDisplay0aTranslation, probeLine,
@@ -3941,7 +3931,7 @@ public:
         const uint64_t waitAt = mach_absolute_time();
         timedOut = tegra_gm20b_sync_for_cpu(address, 0, kGpuWaitNs) != 0;
         const uint64_t cacheAt = mach_absolute_time();
-        cleanInvalidate(address, bytes);
+        switch_dcache_clean_invalidate(address, bytes);
         gpu = cacheAt - waitAt;
         cache = mach_absolute_time() - cacheAt;
     }
@@ -4629,7 +4619,7 @@ public:
         uintptr_t low = 0;
         uintptr_t high = 0;
         if (probeDomain.takeDirty(&low, &high))
-            cleanInvalidate(reinterpret_cast<const void *>(low), high - low);
+            switch_dcache_clean_invalidate(reinterpret_cast<const void *>(low), high - low);
         tegra_smmu_flush(TEGRA_SMMU_ASID_DISPLAY);
     }
 
@@ -5204,11 +5194,11 @@ public:
 #undef LEAF
 };
 
-// OSDefineMetaClassAndStructors(NativeLegacyDisplay, IOMobileFramebufferLegacy), registered under J120's class name. iPadOS
-// finds the internal display as an AppleCLCD: VideoToolbox's and MediaToolbox's FigGetAlignmentForIOSurfaceOutput match
-// IOServiceMatching("AppleCLCD") for the display pipe's alignment, and the poster extensions' sandbox profiles allow
-// iokit-get-properties on the iokit-registry-entry-class AppleCLCD. Apple's AppleCLCD (AppleMobileDispH9G) is not prelinked
-// here, so the name is free.
+// OSDefineMetaClassAndStructors(NativeLegacyDisplay, IOMobileFramebufferLegacy), registered under the class name of J120's
+// and J181's internal display (AppleMobileDispH9G's and AppleMobileDispH12P's IOClass). iPadOS finds the internal display
+// as an AppleCLCD: VideoToolbox's and MediaToolbox's FigGetAlignmentForIOSurfaceOutput match IOServiceMatching("AppleCLCD")
+// for the display pipe's alignment, and the poster extensions' sandbox profiles allow iokit-get-properties on the
+// iokit-registry-entry-class AppleCLCD. Neither kext is prelinked here, so the name is free.
 OSDefineMetaClassWithInit(NativeLegacyDisplay, IOMobileFramebufferLegacy, ) NativeLegacyDisplay::MetaClass::MetaClass()
     : OSMetaClass("AppleCLCD", NativeLegacyDisplay::superClass, sizeof(NativeLegacyDisplay))
 {}

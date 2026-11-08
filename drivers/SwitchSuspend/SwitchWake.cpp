@@ -17,6 +17,7 @@
 #include <sys/mount.h>
 #include <sys/vnode.h>
 #include "SwitchWake.h"
+#include "../../kits/SwitchTime/SwitchTime.h"
 
 // NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
 extern "C" int vsnprintf(char *, size_t, const char *, va_list);
@@ -94,13 +95,6 @@ thread_call_t onceCall(thread_call_t volatile *slot, thread_call_func_t func)
     return expected;
 }
 #endif
-
-uint64_t nanoseconds(uint64_t abs)
-{
-    uint64_t ns = 0;
-    absolutetime_to_nanoseconds(abs, &ns);
-    return ns;
-}
 
 #if DEVELOPMENT || DEBUG
 // "YYYY-MM-DD-HHMMSS" (UTC), as the panic records are named (days to civil date: H. Hinnant's algorithm).
@@ -188,7 +182,7 @@ void writeJournal(bool durable)
     char stamp[24];
     utcStamp(stamp, sizeof(stamp));
     int used = snprintf(gRender, sizeof(gRender), "SwitchPower journal, written %s UTC at %llu ms uptime\n", stamp,
-                        nanoseconds(mach_absolute_time()) / 1000000);
+                        switch_now_ns() / 1000000);
     if (used < 0)
         used = 0;
     IOLockLock(lock);
@@ -263,7 +257,7 @@ extern "C" void switch_power_journal(const char *format, ...)
     va_start(args, format);
     vsnprintf(text, sizeof(text), format, args);
     va_end(args);
-    const uint64_t ms = nanoseconds(mach_absolute_time()) / 1000000;
+    const uint64_t ms = switch_now_ns() / 1000000;
     snprintf(line, sizeof(line), "%llu.%03llu %s", ms / 1000, ms % 1000, text);
     os_log(OS_LOG_DEFAULT, "SwitchPower: %s", line);
     IOLock *lock = once(&gLock);
@@ -294,7 +288,7 @@ extern "C" void switch_wake_event(unsigned source)
         return;
     const uint64_t now = mach_absolute_time();
     IOLockLock(lock);
-    const bool fresh = (gLastSource[source] == 0u) || nanoseconds(now - gLastSource[source]) >= kSourceGapNS;
+    const bool fresh = (gLastSource[source] == 0u) || switch_abs_to_ns(now - gLastSource[source]) >= kSourceGapNS;
     if (fresh)
         gLastSource[source] = now;
     IOLockUnlock(lock);
@@ -316,7 +310,7 @@ extern "C" void switch_wake_bt_acl(const uint8_t *acl, size_t length)
         bzero(&gButtons, sizeof(gButtons));
     const bool dark = !switch_display_is_on();
     const switch_bt_buttons_step step =
-        switch_bt_buttons_report(&gButtons, handle, (uint8_t)held, nanoseconds(mach_absolute_time()), dark);
+        switch_bt_buttons_report(&gButtons, handle, (uint8_t)held, switch_now_ns(), dark);
 #if DEVELOPMENT || DEBUG
     const bool first = !gButtonsLogged;
     gButtonsLogged = true;
@@ -336,7 +330,7 @@ extern "C" void switch_wake_bt_acl(const uint8_t *acl, size_t length)
     uint64_t until = __atomic_load_n(&gReconnectUntil, __ATOMIC_ACQUIRE);
     bool reconnect = false;
     if (until) {
-        reconnect = switch_bt_reconnect_take(&until, nanoseconds(mach_absolute_time()), step.fresh, dark);
+        reconnect = switch_bt_reconnect_take(&until, switch_now_ns(), step.fresh, dark);
         if (!until)
             __atomic_store_n(&gReconnectUntil, 0, __ATOMIC_RELEASE);
     }
@@ -365,7 +359,7 @@ extern "C" unsigned switch_wake_bt_controllers(uint16_t *handles, unsigned max)
 extern "C" void switch_wake_bt_slept(void)
 {
     uint64_t until = 0;
-    switch_bt_reconnect_open(&until, nanoseconds(mach_absolute_time()));
+    switch_bt_reconnect_open(&until, switch_now_ns());
     __atomic_store_n(&gReconnectUntil, until, __ATOMIC_RELEASE);
 }
 
@@ -388,7 +382,7 @@ extern "C" void switch_wake_stackshot(const char *why)
         return;
     const uint64_t now = mach_absolute_time();
     IOLockLock(lock);
-    const bool fresh = (gLastShot == 0u) || nanoseconds(now - gLastShot) >= kShotGapNS;
+    const bool fresh = (gLastShot == 0u) || switch_abs_to_ns(now - gLastShot) >= kShotGapNS;
     if (fresh) {
         gLastShot = now;
         strlcpy(gShotWhy, why ? why : "", sizeof(gShotWhy));

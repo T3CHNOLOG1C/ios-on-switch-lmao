@@ -6,7 +6,7 @@ from dataclasses import dataclass
 MAGIC = b'GM20BPK1'
 # 2: the header's stack key (rawpack.py --stack) after the section table; 3: barrier-form records; 4: programs' shader
 # data and constant buffer types
-VERSION = 4
+VERSION = 5
 PROGRAM_CBUFS = 11  # PackProgram.cbufType's length (runtime/raw_pack.h)
 
 
@@ -26,7 +26,7 @@ def entry_bytes(entries: list[dict]) -> bytearray:
                 1,
                 1 if e['stage'] == 'v' else 2,
                 e['slot'],
-                1 if e.get('ssbo') else 0,
+                buffer_kind(e),
                 e.get('window', 256) // 16,
             )
         else:
@@ -41,6 +41,14 @@ def entry_bytes(entries: list[dict]) -> bytearray:
     return ents
 
 
+def buffer_kind(e: dict) -> int:
+    """Give a buffer entry's samplerKind byte (raw_pack.h bufferStorage, bufferResidualWord)."""
+    if e.get('ssbo'):
+        return 1
+    residual = e.get('residual')
+    return 0 if residual is None else ((residual - 0x700) // 4 + 1) << 2
+
+
 def push_bytes(push: list[tuple[int, int]]) -> bytes:
     mask, words = 0, [0] * 32
     for o, val in push:
@@ -50,9 +58,10 @@ def push_bytes(push: list[tuple[int, int]]) -> bytes:
 
 
 def key_hash(rec: dict) -> int:
-    # the raw path's own states (probe.mm PROBE_YCBCR_LIB) by the name the runtime asks for (raw_gpu.cpp ycbcrPipeline)
-    own = re.search(r'\| f (ycbcr_\w+)', rec['key'])
-    return fnv(('raw.ycbcr.' + own.group(1)).encode() if own else rec['key'].encode())
+    # the raw path's own states (probe.mm PROBE_OWN_LIB) by the name the runtime asks for (raw_gpu.cpp ycbcrPipeline and
+    # standInPipeline, runtime/raw_xr.h xrConversion)
+    own = re.search(r'\| f ((ycbcr|xr|two_plane)_\w+)', rec['key'])
+    return fnv(f'raw.{own.group(2)}.{own.group(1)}'.encode() if own else rec['key'].encode())
 
 
 def pipeline_bytes(rec: dict, key_offset: int, blob_off: int) -> bytes:

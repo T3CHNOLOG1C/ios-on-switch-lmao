@@ -120,6 +120,12 @@ public struct Outcome: Sendable {
     }
 }
 
+public struct TestFailure: Error, CustomStringConvertible {
+    public let description: String
+
+    public init(_ description: String) { self.description = description }
+}
+
 public struct TestRecord: Sendable {
     public let id: String
     public let subsystem: String

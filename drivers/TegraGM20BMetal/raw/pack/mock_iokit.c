@@ -17,6 +17,12 @@
 // SurfaceLayout (method 16; MOCK_NO_SURFACE_LAYOUT=1 hides it) decides a surface's layout as the kext does: at its first asking
 // import, block-linear when that import writes it, is the surface's only import and its shape tiles, its rows then tiled in
 // place (TegraGM20BLayout.h); pitch for good otherwise.
+// mock_iokit_kill_next(error): the next Exec on a 3D channel (a queue's, not NVK's upload channel) is accepted, then its
+// channel dies as the kext kills one (method 11's error, and with mock_iokit_kill_next_at the fault VA GetStatus reports
+// for an MMU fault): what it had in flight never runs, its kill record
+// (TegraGM20BAbiFence) names those seqnos, its fence passes them, and Exec, WaitFence and Order on it answer
+// kIOReturnNotResponding until the client makes a new channel (MOCK_NO_KILL_RECORD=1: no record, as a kext without
+// TegraGM20BInfoKillRecord).
 #include <IOKit/IOKitLib.h>
 #include <fcntl.h>
 #include <pthread.h>
@@ -56,7 +62,13 @@ struct bo {
 static struct bo bos[kMaxBo];
 static atomic_uint nbo = 1;
 static uint32_t submitted[16];
-static uint32_t *fence; /* the fence page, one uint32 per channel at slot*16 */
+static uint32_t *fence;      /* the fence page, a TegraGM20BAbiFence per channel at slot*16 */
+static uint32_t dead[16];    /* method 11's error of a killed channel */
+static uint64_t dead_va[16]; /* and its fault VA */
+static uint32_t engines[16];
+static uint8_t live[16]; /* slots in use: a connection gets its lowest free one, its seqnos continuing (the kext's) */
+static uint32_t kill_next;
+static uint64_t kill_next_va;
 static atomic_ulong calls[16];
 static atomic_ulong import_maps;    /* VmBind map ops onto imported pages */
 static atomic_ulong kind_maps[256]; /* VmBind map ops by PTE kind */
@@ -95,6 +107,7 @@ struct job {
     struct acq acq[kOrderMax];
     struct TegraGM20BAbiExec *exec;
     uint64_t kick;
+    int kill; /* MOCK_KILL's submission: the channel dies when the GPU reaches it */
 };
 
 struct run {
@@ -132,6 +145,22 @@ static struct run runs[kJobs];
 static uint32_t nruns;
 static unsigned long order_calls, order_queued, waits_total, waits_submit;
 static int gpu_us = -1;
+static void kill_channel(uint32_t ch, uint32_t error);
+
+/* MOCK_KILL=<channel>:<seqno>: that submission faults the GPU when it runs and the kernel kills its channel (kill_channel,
+ * GetStatus error 2, a GR exception), so commits can go on past the kill while it is in flight. gpu_lock held. */
+static int kill_due(uint32_t ch, uint32_t seqno)
+{
+    static int parsed;
+    static unsigned kch, kseq;
+    if (!parsed) {
+        const char *k = getenv("MOCK_KILL");
+        parsed = 1;
+        if (!k || sscanf(k, "%u:%u", &kch, &kseq) != 2)
+            kch = 0;
+    }
+    return kch && ch == (kch & 15) && seqno == kseq;
+}
 
 static uint64_t now_us(void)
 {
@@ -229,6 +258,13 @@ static void *gpu_thread(void *arg)
             continue;
         }
         struct job j = queue[ch][qhead[ch] % kQueue];
+        if (dead[ch] || j.kill) { /* killed with it in flight, or MOCK_KILL's: it never runs */
+            if (!dead[ch])
+                kill_channel(ch, 2);
+            qhead[ch]++;
+            free(j.exec);
+            continue;
+        }
         running++;
         pthread_mutex_unlock(&gpu_lock);
         const uint64_t start = now_us();
@@ -239,12 +275,26 @@ static void *gpu_thread(void *arg)
         pthread_mutex_lock(&gpu_lock);
         running--;
         qhead[ch]++;
-        fence[ch * 4] = j.seqno;
+        if (!dead[ch])
+            fence[ch * 4] = j.seqno;
         if (nruns < kJobs)
             runs[nruns++] = (struct run){j.ch, j.seqno, j.nacq, j.kick, start, end};
         pthread_cond_broadcast(&gpu_cond);
     }
     return NULL;
+}
+
+/* gpu_lock held: the kext's chan_killed */
+static void kill_channel(uint32_t ch, uint32_t error)
+{
+    if (!getenv("MOCK_NO_KILL_RECORD")) {
+        fence[ch * 4 + 1] = fence[ch * 4] + 1;
+        fence[ch * 4 + 2] = submitted[ch];
+        fence[ch * 4 + 3] = error;
+    }
+    dead[ch] = error;
+    fence[ch * 4] = submitted[ch];
+    pthread_cond_broadcast(&gpu_cond);
 }
 
 static void gpu_log(void)
@@ -387,7 +437,8 @@ static kern_return_t mock_call(mach_port_t c, uint32_t sel, const void *in, size
                                                (getenv("MOCK_NO_EXEC_SURFACES") ? 0 : TegraGM20BInfoExecSurfaces) |
                                                (getenv("MOCK_NO_KERNEL_MAP") ? 0 : TegraGM20BInfoKernelMap) |
                                                (getenv("MOCK_NO_ORDER") ? 0 : TegraGM20BInfoOrder) |
-                                               (getenv("MOCK_NO_SURFACE_LAYOUT") ? 0 : TegraGM20BInfoSurfaceLayout),
+                                               (getenv("MOCK_NO_SURFACE_LAYOUT") ? 0 : TegraGM20BInfoSurfaceLayout) |
+                                               (getenv("MOCK_NO_KILL_RECORD") ? 0 : TegraGM20BInfoKillRecord),
                                       .chipset = 0x12e,
                                       .gpc_count = 1,
                                       .tpc_count = 2,
@@ -468,16 +519,32 @@ static kern_return_t mock_call(mach_port_t c, uint32_t sel, const void *in, size
         }
         return KERN_SUCCESS;
     }
-    case TegraGM20BMethodChannelDestroy:
+    case TegraGM20BMethodChannelDestroy: {
+        const struct TegraGM20BAbiChannel *d = in;
+        pthread_mutex_lock(&gpu_lock);
+        live[d->channel & 15] = 0;
+        pthread_mutex_unlock(&gpu_lock);
         return KERN_SUCCESS;
+    }
     case TegraGM20BMethodChannelCreate: {
-        static uint32_t next = 1;
         if (!fence)
             fence = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_ANON | MAP_SHARED, -1, 0);
-        uint32_t ch = next++;
         pthread_mutex_lock(&gpu_lock);
-        nchannels = ch;
+        uint32_t ch = 1;
+        while (ch < 16 && (live[ch] || (chan_conn[ch] && chan_conn[ch] != c)))
+            ch++;
+        if (ch == 16) {
+            pthread_mutex_unlock(&gpu_lock);
+            return kIOReturnNoResources;
+        }
+        live[ch] = 1;
+        engines[ch] = ((const struct TegraGM20BAbiChannelCreate *)in)->engines;
+        if (ch > nchannels)
+            nchannels = ch;
         chan_conn[ch & 15] = c;
+        dead[ch & 15] = 0;
+        dead_va[ch & 15] = 0;
+        fence[(ch & 15) * 4 + 1] = fence[(ch & 15) * 4 + 2] = fence[(ch & 15) * 4 + 3] = 0;
         pthread_mutex_unlock(&gpu_lock);
         struct TegraGM20BAbiChannelCreateReply r = {.channel = ch, .fence_token = kFenceToken, .fence_offset = ch * 16};
         memcpy(out, &r, sizeof(r));
@@ -487,6 +554,10 @@ static kern_return_t mock_call(mach_port_t c, uint32_t sel, const void *in, size
         const struct TegraGM20BAbiExec *e = in;
         uint32_t ch = e->channel & 15;
         pthread_mutex_lock(&gpu_lock);
+        if (dead[ch]) {
+            pthread_mutex_unlock(&gpu_lock);
+            return kIOReturnNotResponding;
+        }
         if (!e->count) {
             struct TegraGM20BAbiExecReply r = {.seqno = submitted[ch]};
             pthread_mutex_unlock(&gpu_lock);
@@ -501,6 +572,20 @@ static kern_return_t mock_call(mach_port_t c, uint32_t sel, const void *in, size
                 j.acq[j.nacq++] = pending[ch][i];
         npending[ch] = 0;
         struct TegraGM20BAbiExecReply r = {.seqno = j.seqno};
+        j.kill = kill_due(ch, j.seqno);
+        if (j.kill && !async_gpu())
+            kill_channel(ch, 2);
+        else if (kill_next && (engines[ch] & TegraGM20BEngine3D)) {
+            kill_channel(ch, kill_next);
+            dead_va[ch] = kill_next_va;
+            kill_next = 0;
+            kill_next_va = 0;
+        }
+        if (dead[ch]) {
+            pthread_mutex_unlock(&gpu_lock);
+            memcpy(out, &r, sizeof(r));
+            return KERN_SUCCESS;
+        }
         if (async_gpu()) {
             static pthread_t threads[16];
             if (!threads[ch])
@@ -553,10 +638,11 @@ static kern_return_t mock_call(mach_port_t c, uint32_t sel, const void *in, size
         waits_total++;
         if (strstr(name, "raw.submit"))
             waits_submit++;
-        while (!passed(w->channel & 15, w->seqno))
+        while (!dead[w->channel & 15] && !passed(w->channel & 15, w->seqno))
             pthread_cond_wait(&gpu_cond, &gpu_lock);
+        const int killed = dead[w->channel & 15] != 0;
         pthread_mutex_unlock(&gpu_lock);
-        return KERN_SUCCESS;
+        return killed ? kIOReturnNotResponding : KERN_SUCCESS;
     }
     case TegraGM20BMethodOrder: {
         const struct TegraGM20BAbiOrder *o = in;
@@ -564,6 +650,10 @@ static kern_return_t mock_call(mach_port_t c, uint32_t sel, const void *in, size
         if (getenv("MOCK_NO_ORDER") || !flags || (flags & ~3u) || o->reserved)
             return kIOReturnBadArgument;
         pthread_mutex_lock(&gpu_lock);
+        if (dead[ch]) {
+            pthread_mutex_unlock(&gpu_lock);
+            return kIOReturnNotResponding;
+        }
         order_calls++;
         if (flags & TegraGM20BOrderBeforeTask) {
             if (!seqno)
@@ -620,7 +710,9 @@ static kern_return_t mock_call(mach_port_t c, uint32_t sel, const void *in, size
     case TegraGM20BMethodGetStatus: {
         const struct TegraGM20BAbiChannel *ch = in;
         struct TegraGM20BAbiStatus s = {.completed = fence[(ch->channel & 15) * 4],
-                                        .submitted = submitted[ch->channel & 15]};
+                                        .submitted = submitted[ch->channel & 15],
+                                        .error = dead[ch->channel & 15],
+                                        .fault_va = dead_va[ch->channel & 15]};
         memcpy(out, &s, sizeof(s));
         return KERN_SUCCESS;
     }
@@ -664,6 +756,21 @@ static kern_return_t mock_unmap(io_connect_t c, uint32_t type, task_port_t t, ma
         return KERN_SUCCESS;
     munmap((void *)addr, bytes);
     return KERN_SUCCESS;
+}
+
+void mock_iokit_kill_next(uint32_t error)
+{
+    pthread_mutex_lock(&gpu_lock);
+    kill_next = error;
+    pthread_mutex_unlock(&gpu_lock);
+}
+
+void mock_iokit_kill_next_at(uint32_t error, uint64_t fault_va)
+{
+    pthread_mutex_lock(&gpu_lock);
+    kill_next = error;
+    kill_next_va = fault_va;
+    pthread_mutex_unlock(&gpu_lock);
 }
 
 unsigned long mock_iokit_calls(unsigned method)

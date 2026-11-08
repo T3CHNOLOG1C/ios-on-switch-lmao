@@ -46,6 +46,25 @@ TEST_F(SwitchMMIO, ReadWriteAndModify)
     EXPECT_EQ(gWrites.back(), std::make_pair(at(0x14), 7u));
 }
 
+TEST_F(SwitchMMIO, FlushedWriteIsReadBack)
+{
+    std::vector<uintptr_t> reads;
+    gOnRead = [&](uintptr_t address, uint32_t value) {
+        reads.push_back(address);
+        EXPECT_EQ(gWrites.size(), 1u);
+        return value;
+    };
+    switch_mmio_write32_flush(base(), 0x18, 0x55);
+    EXPECT_EQ(gWrites.back(), std::make_pair(at(0x18), 0x55u));
+    EXPECT_EQ(reads, std::vector<uintptr_t>{at(0x18)});
+}
+
+TEST_F(SwitchMMIO, WordIndexedReadIsTheWordsByteOffset)
+{
+    gRegisters[at(0x4c)] = 0x1234;
+    EXPECT_EQ(switch_mmio_read32_word(reinterpret_cast<const volatile uint32_t *>(base()), 0x13), 0x1234u);
+}
+
 TEST_F(SwitchMMIO, FieldMacros)
 {
     static_assert(SWITCH_BIT(5) == 0x20u);

@@ -133,6 +133,7 @@ static inline void switch_dcache_spans(switch_dcache_op op, const switch_dma_spa
 #if defined(KERNEL) || defined(SWITCH_DCACHE_PHYS_MODEL)
 // XNU's physical aperture (osfmk/arm64/arm_vm_init.c): linear only within the chunk phystokv_range() reports, and
 // only over managed RAM (it panics on anything else).
+// NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
 uint64_t phystokv_range(uint64_t pa, size_t *max_length);
 
 static inline void switch_dcache_phys_lines(switch_dcache_op op, uint64_t pa, uint64_t length)

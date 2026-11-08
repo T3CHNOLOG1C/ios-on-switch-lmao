@@ -37,7 +37,10 @@ kernel_driver(
         "{tree}/drivers/TegraGM20B",
     ],
     c_recipe = ":freestanding_c",
-    hdr_deps = [],
+    hdr_deps = [
+        "kits/SwitchLinux",
+        "kits/SwitchMMIO",
+    ],
     object_names = "path",
 )
 
@@ -89,7 +92,10 @@ kernel_driver(
         "drivers/SwitchSuspend",
         "drivers/TegraDisplayFlip",
         "drivers/TegraI2C",
+        "kits/SwitchDMA",
         "kits/SwitchIdle",
+        "kits/SwitchLinux",
+        "kits/SwitchMMIO",
         "kits/SwitchRefusal",
         "kits/SwitchScratch",
         "kits/SwitchSysctl",

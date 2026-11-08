@@ -11,6 +11,8 @@
 #include <pexpert/pexpert.h>
 #include <pexpert/device_tree.h>
 #include "SwitchSD.h"
+#include "../../kits/SwitchDMA/SwitchDcache.h"
+#include "../../kits/SwitchMMIO/SwitchMMIO.h"
 #include "SwitchFiles.h"
 #include "storage/sdmmc_read.h"
 #include "storage/sdmmc_dma.h"
@@ -59,7 +61,7 @@ static uint8_t r8(void *context, uint32_t offset)
         b->bounds_error = 1;
         return 0;
     }
-    return b->registers[offset];
+    return switch_mmio_read8(b->registers, offset);
 }
 
 static uint16_t r16(void *context, uint32_t offset)
@@ -69,7 +71,7 @@ static uint16_t r16(void *context, uint32_t offset)
         b->bounds_error = 1;
         return 0;
     }
-    return *(volatile uint16_t *)(b->registers + offset);
+    return switch_mmio_read16(b->registers, offset);
 }
 
 static uint32_t r32(void *context, uint32_t offset)
@@ -80,7 +82,7 @@ static uint32_t r32(void *context, uint32_t offset)
         b->bounds_error = 1;
         return 0;
     }
-    return *(volatile uint32_t *)(b->registers + offset);
+    return switch_mmio_read32(b->registers, offset);
 }
 
 static void w16(void *context, uint32_t offset, uint16_t value)
@@ -102,7 +104,7 @@ static void w16(void *context, uint32_t offset, uint16_t value)
         b->bounds_error = 1;
         return;
     }
-    *(volatile uint16_t *)(b->registers + offset) = value;
+    switch_mmio_write16(b->registers, offset, value);
 }
 
 static void w32(void *context, uint32_t offset, uint32_t value)
@@ -112,7 +114,7 @@ static void w32(void *context, uint32_t offset, uint32_t value)
         b->bounds_error = 1;
         return;
     }
-    *(volatile uint32_t *)(b->registers + offset) = value;
+    switch_mmio_write32(b->registers, offset, value);
 }
 
 static uint64_t ticks(void *context)
@@ -136,10 +138,10 @@ static int dma_bus_ready(void *context)
     struct board_io *b = context;
     if (b != &board || !b->mc)
         return -1;
-    uint32_t config = *(volatile uint32_t *)(b->mc + 0x10);
-    uint32_t asid = *(volatile uint32_t *)(b->mc + 0xa94);
-    uint32_t clients = *(volatile uint32_t *)(b->mc + 0x234);
-    uint32_t emem = *(volatile uint32_t *)(b->mc + 0x50);
+    uint32_t config = switch_mmio_read32(b->mc, 0x10);
+    uint32_t asid = switch_mmio_read32(b->mc, 0xa94);
+    uint32_t clients = switch_mmio_read32(b->mc, 0x234);
+    uint32_t emem = switch_mmio_read32(b->mc, 0x50);
     switch_dma_record[5] = config;
     switch_dma_record[6] = asid;
     switch_dma_record[7] = clients;
@@ -156,7 +158,7 @@ static void dma_write8(void *context, uint32_t offset, uint8_t value)
         b->bounds_error = 1;
         return;
     }
-    b->registers[offset] = value;
+    switch_mmio_write8(b->registers, offset, value);
 }
 
 static int dma_cache(void *context, void *address, uint32_t length, int after_read)
@@ -165,15 +167,12 @@ static int dma_cache(void *context, void *address, uint32_t length, int after_re
     if (b != &board || address != b->dma.bytes || !length || length > SWITCH_SD_DMA_BYTES ||
         ((uintptr_t)address & 63) || (after_read != 0 && after_read != 1))
         return -1;
-    uintptr_t end = (uintptr_t)address + ((length + 63u) & ~63u);
-    for (uintptr_t at = (uintptr_t)address; at < end; at += 64) {
-        if (after_read) {
-            __asm__ volatile("dc ivac, %0" ::"r"(at) : "memory");
-        } else {
-            __asm__ volatile("dc civac, %0" ::"r"(at) : "memory");
-        }
+    const size_t lines = (length + SWITCH_DCACHE_LINE - 1) & ~(size_t)(SWITCH_DCACHE_LINE - 1);
+    if (after_read) {
+        switch_dcache_invalidate(address, lines);
+    } else {
+        switch_dcache_clean_invalidate(address, lines);
     }
-    __asm__ volatile("dsb sy" ::: "memory");
     return 0;
 }
 

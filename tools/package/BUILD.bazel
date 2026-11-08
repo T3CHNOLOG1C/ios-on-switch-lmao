@@ -37,6 +37,7 @@ py_library(
     name = "native_oled_adt",
     srcs = ["native_oled_adt.py"],
     imports = ["."],
+    deps = [":loader_abi"],
 )
 
 py_library(
@@ -67,6 +68,7 @@ py_binary(
     srcs = ["overlay.py"],
     deps = [
         ":boot_config",
+        "//tools/common:macho",
         "//tools/trustcache",
     ],
 )
@@ -77,6 +79,7 @@ py_binary(
     deps = [
         ":boot_config",
         ":loader_abi",
+        ":native_oled_adt",
         ":native_xnu_layout",
     ],
 )
@@ -131,6 +134,13 @@ py_binary(
 py_test(
     name = "native_profile_test",
     srcs = ["native_profile_test.py"],
+    data = [
+        "//ipsw:pins.bzl",
+        "//kernel/switch:include/switch/boot_layout.h",
+        "//kernel/switch:ram/ram.c",
+        "//kernel/xnu-10063.141.1/osfmk:arm64/start.s",
+        "//kernel/xnu-12377.121.6/osfmk:arm64/start.s",
+    ],
     deps = [
         ":kernel_window",
         ":loader_abi",
@@ -148,6 +158,7 @@ py_test(
     imports = ["."],
     deps = [
         ":boot_config",
+        "//tools/common:macho",
         "//tools/trustcache",
     ],
 )

@@ -4,9 +4,6 @@
 //   RAWCAP_LOG=<file>       canonical draw/clear/barrier records
 //   RAWCAP_PROGRAMS=<file>  programs.bin (tools/mkprograms.py): identify programs exactly, compare only the cbufs they use
 //   PUSHDUMP=<file>         raw "submit subc mthd data" lines (r5-gpuwaste format)
-//   RAWCAP_CAPTURE=<pack.bin> RAWCAP_CAPTURE_OUT=<file>  every submission that draws decoded once more by raw::Capture
-//                           (runtime/raw_capture.h) primed from the pack's context init instead of the submissions before it:
-//                           one "CAPTURE <submission> <draw> ..." line per draw (test/capturecheck.py holds them to the pack)
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -17,8 +14,6 @@
 #include <sys/mman.h>
 #include "TegraGM20BABI.h"
 #include "nvdec.h"
-#include "../runtime/raw_capture.h"
-#include "../runtime/raw_pack.h"
 
 namespace {
 #include "parse.h"
@@ -38,11 +33,9 @@ PushCounts gC;
 FILE *gDump, *gLog;
 uint64_t gSubmit;
 bool gDecode;  // RAWCAP_LOG or NVDEC_WRITETHROUGH given
-std::unique_ptr<raw::Capture> gCapture;
-raw::Pack gCapturePack;
-FILE *gCaptureOut;
 std::map<uint32_t, std::unique_ptr<nvdec::Decoder>>
     gChannels;  // r8-rawca: one decoder per channel (each has its own state)
+uint32_t gLastChannel;
 const uint8_t *host(uint64_t va, uint64_t bytes);
 
 extern "C" void cap_describe(uint64_t va)
@@ -124,36 +117,8 @@ void init()
     if (!gLog && getenv("NVDEC_WRITETHROUGH"))
         gLog = fopen("/dev/null", "w");
     gDecode = gLog != nullptr;
-    const char *pack = getenv("RAWCAP_CAPTURE"), *out = getenv("RAWCAP_CAPTURE_OUT");
-    std::string err;
-    if (pack && out && gCapturePack.load(pack, 0, err)) {
-        gCapture.reset(new raw::Capture([](uint64_t va, uint64_t bytes) {
-            return host(va, bytes);
-        }));
-        if (const char *f = getenv("RAWCAP_PROGRAMS"))
-            gCapture->decoder().loadPrograms(f);
-        if (gCapture->prime(gCapturePack, err))
-            gCaptureOut = fopen(out, "w");
-    }
-    if (pack && !gCaptureOut)
-        fprintf(stderr, "cap: no capture: %s\n", err.c_str());
 }
 
-void writeCapture(const std::vector<raw::CapturedState> &states)
-{
-    for (size_t k = 0; k < states.size(); k++) {
-        const raw::CapturedState &c = states[k];
-        fprintf(gCaptureOut, "CAPTURE %llu %zu vs=%s fs=%s push=%x", (unsigned long long)gSubmit, k,
-                c.vertex.id.c_str(), c.pixel.id.c_str(), c.pushMask);
-        for (int i = 0; i < 32; i++)
-            if (c.pushMask >> i & 1)
-                fprintf(gCaptureOut, " p%x=%x", 0x700 + 4 * i, c.push[i]);
-        for (const auto &r : c.registers)
-            fprintf(gCaptureOut, " %x=%x", r.first, r.second);
-        fprintf(gCaptureOut, "\n");
-    }
-    fflush(gCaptureOut);
-}
 }
 
 // A host test that reads the GPU's results back (NVDEC_WRITETHROUGH) needs NVK's copies and fills on the copy engine, which
@@ -202,6 +167,7 @@ extern "C" void pushcount_exec(const struct TegraGM20BAbiExec *e)
     init();
     gSubmit++;
     gC.submits++;
+    gLastChannel = e->channel;
     PushParse p = {};
     nvdec::Decoder *dec = nullptr;
     if (gDecode) {
@@ -212,6 +178,8 @@ extern "C" void pushcount_exec(const struct TegraGM20BAbiExec *e)
                     return host(va, bytes);
                 },
                 gLog));
+            d->scrub = cap_scrub;
+            d->describe = cap_describe;
             if (const char *f = getenv("RAWCAP_PROGRAMS"))
                 if (!d->loadPrograms(f))
                     fprintf(stderr, "cap: cannot read programs %s\n", f);
@@ -221,7 +189,6 @@ extern "C" void pushcount_exec(const struct TegraGM20BAbiExec *e)
         }
         dec = d.get();
     }
-    const uint64_t drawsBefore = dec ? dec->draws : 0;
     if (dec)
         dec->submitBegin();
     for (uint32_t i = 0; i < e->count; i++) {
@@ -242,13 +209,24 @@ extern "C" void pushcount_exec(const struct TegraGM20BAbiExec *e)
         dec->submitEnd();
         fflush(gLog);
     }
-    if (gCaptureOut && dec && dec->draws > drawsBefore) {
-        std::vector<std::pair<const uint32_t *, uint64_t>> segments;
-        for (uint32_t i = 0; i < e->count; i++)
-            if (const uint8_t *w = host(e->pushes[i].va, uint64_t(e->pushes[i].dwords) * 4))
-                segments.push_back({(const uint32_t *)w, e->pushes[i].dwords});
-        writeCapture(gCapture->decode(segments));
-    }
+}
+
+// What reached the GPU, for the raw harnesses' checks (decoding only: RAWCAP_LOG or NVDEC_WRITETHROUGH set): the draws of
+// every channel so far, and a 3D method's value after the last submission
+extern "C" uint64_t cap_draws(void)
+{
+    std::lock_guard<std::mutex> l(gLock);
+    uint64_t n = 0;
+    for (auto &c : gChannels)
+        n += c.second->draws;
+    return n;
+}
+
+extern "C" uint32_t cap_reg3d(uint32_t mthd)
+{
+    std::lock_guard<std::mutex> l(gLock);
+    const auto it = gChannels.find(gLastChannel);
+    return it == gChannels.end() ? 0 : it->second->reg3d(mthd);
 }
 
 extern "C" void pushcount_report(const char *what)

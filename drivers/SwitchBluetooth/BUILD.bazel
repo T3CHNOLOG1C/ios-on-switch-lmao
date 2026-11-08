@@ -35,6 +35,8 @@ kernel_driver(
         "drivers/ArmGIC",
         "drivers/SwitchSuspend",
         "drivers/TegraAPBDMA",
+        "kits/SwitchDMA",
+        "kits/SwitchMMIO",
         "kits/SwitchRefusal",
     ],
 )

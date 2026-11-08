@@ -62,6 +62,45 @@ for f2f16 in ['f2f16', 'f2f16_rtz', 'f2f16_rtne']:
         (('vec2', (f2f16 + '(is_used_once)', 'a@32'), (f2f16 + '(is_used_once)', 'b@32')), (f2f16, ('vec2', a, b)), 'nak->sm >= 86')
     ]
 
+# ios-on-switch-lmao: metal2vulkan rounds a float to half precision, on a
+# device without Float16, as fquantize2f16 (which flushes a result below half's
+# smallest normal) and, where that gave zero, the float rounded to a multiple of
+# half's smallest denormal, 2^-24: seven instructions for what is the round trip
+# through f16 with round-to-nearest-even keeping denormals (the same for every
+# f32 input, checked exhaustively). The two conversions keep denormals under
+# the shader's fp16 mode unless it flushes them.
+algebraic_lowering += [
+    (('bcsel', ('feq', ('fquantize2f16', 'a@32'), 0.0),
+               ('fmul', ('fround_even', ('fmul', a, 16777216.0)), 5.9604644775390625e-08),
+               ('fquantize2f16', a)),
+        ('f2f32', ('f2f16_rtne', a)),
+        '!nir_is_denorm_flush_to_zero(info->float_controls_execution_mode, 16)'),
+]
+
+# ios-on-switch-lmao: metal2vulkan flushes a float's denormal to a signed zero
+# with integer ops wherever Metal does. An FTZ instruction (fp32 unless the
+# shader keeps denormals) flushes its float sources itself: those take the float
+# unflushed.
+def fp32_flushed(x):
+    return ('bcsel', ('ieq', ('iand', x, 0x7f800000), 0), ('iand', x, 0x80000000), x)
+
+fp32_ftz = '!nir_is_denorm_preserve(info->float_controls_execution_mode, 32)'
+for op in ['fadd', 'fmul', 'fmin', 'fmax', 'feq', 'fneu', 'flt', 'fge']:
+    algebraic_lowering += [
+        ((op, fp32_flushed('a@32'), b), (op, a, b), fp32_ftz),
+        ((op, b, fp32_flushed('a@32')), (op, b, a), fp32_ftz),
+    ]
+for op in ['fsat', 'f2i32', 'f2u32']:
+    algebraic_lowering += [((op, fp32_flushed('a@32')), (op, a), fp32_ftz)]
+# An fp32 denormal is a zero of its sign in half precision either way
+for op in ['f2f16', 'f2f16_rtne', 'f2f16_rtz', 'fquantize2f16']:
+    algebraic_lowering += [((op, fp32_flushed('a@32')), (op, a))]
+algebraic_lowering += [
+    (('ffma', fp32_flushed('a@32'), b, c), ('ffma', a, b, c), fp32_ftz),
+    (('ffma', b, fp32_flushed('a@32'), c), ('ffma', b, a, c), fp32_ftz),
+    (('ffma', b, c, fp32_flushed('a@32')), ('ffma', b, c, a), fp32_ftz),
+]
+
 # If we find mufu surrounded by bit_size conversions, just do the op in the
 # original bit_size.
 # MUFU.F16 internally appears to operate with the same precision as F32 does

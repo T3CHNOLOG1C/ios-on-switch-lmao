@@ -250,7 +250,7 @@ void switchxhci_sleep(bool entering)
         return;
     }
     if (gRemoteWake) {
-        gHost.disarmRemoteWake();
+        xhost::Controller::disarmRemoteWake();
         gRemoteWake = false;
     }
     char why[160] = "";

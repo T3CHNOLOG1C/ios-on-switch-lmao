@@ -44,8 +44,8 @@ bool Pack::load(const char *path, uint64_t stack, std::string &err)
     base_ = static_cast<const uint8_t *>(m);
     size_ = st.st_size;
     hdr_ = reinterpret_cast<const PackHeader *>(base_);
-    if (size_ < sizeof(PackHeader) || memcmp(hdr_->magic, "GM20BPK1", 8) || hdr_->version != 4) {
-        err = "not a version-4 pack";
+    if (size_ < sizeof(PackHeader) || memcmp(hdr_->magic, "GM20BPK1", 8) || hdr_->version != 5) {
+        err = "not a version-5 pack";
         return false;
     }
     if (stack && hdr_->stack != stack) {
@@ -69,6 +69,38 @@ bool Pack::load(const char *path, uint64_t stack, std::string &err)
             std::stable_sort(index_.begin(), index_.end(), byKey);
         }
     return true;
+}
+
+uint32_t relocated(const PackInitMethod &m, const InitAddresses &a)
+{
+    switch (m.reloc) {
+    case RelocHeapHi:
+        return uint32_t(a.heap >> 32);
+    case RelocHeapLo:
+        return uint32_t(a.heap);
+    case RelocZeroHi:
+        return uint32_t(a.zero >> 32);
+    case RelocZeroLo:
+        return uint32_t(a.zero);
+    case RelocRootHi:
+        return uint32_t(a.root >> 32);
+    case RelocRootLo:
+        return uint32_t(a.root);
+    case RelocTicHi:
+        return uint32_t(a.tic >> 32);
+    case RelocTicLo:
+        return uint32_t(a.tic);
+    case RelocTicMax:
+        return a.ticMax;
+    case RelocTscHi:
+        return uint32_t(a.tsc >> 32);
+    case RelocTscLo:
+        return uint32_t(a.tsc);
+    case RelocTscMax:
+        return a.tscMax;
+    default:
+        return m.data;
+    }
 }
 
 const PackPipeline *Pack::find(uint64_t keyHash, PackForm form) const

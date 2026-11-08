@@ -34,6 +34,7 @@
 #include "SwitchCryptex.h"
 #include "SwitchCryptexCache.h"
 #include "SwitchCryptexMap.h"
+#include "../../kits/SwitchTime/SwitchTime.h"
 
 // NOLINTNEXTLINE(misc-use-internal-linkage): the layout bsd/vfs/vfs_cluster.c writes, named in its C interface
 struct switch_record_entry {
@@ -70,8 +71,7 @@ int ml_get_max_cpu_number(void);
 }
 
 namespace {
-const char *const paths[SWITCH_CRYPTEX_COUNT] = {"/private/preboot/Switch-Staging/044-76034-038.dmg",
-                                                 "/private/preboot/Switch-Staging/044-75188-038.dmg"};
+const char *const paths[SWITCH_CRYPTEX_COUNT] = {SWITCH_SYSTEM_CRYPTEX_IMAGE, SWITCH_APP_CRYPTEX_IMAGE};
 const char *const uuids[SWITCH_CRYPTEX_COUNT] = {SWITCH_SYSTEM_CRYPTEX_UUID, SWITCH_APP_CRYPTEX_UUID};
 // Fixed development identifier consumed by the owner boot-manifest code.
 const uint8_t systemIdentifier[48] = {0x13, 0x14, 0x8b, 0xb4, 0x2c, 0x8c, 0xe4, 0xb5, 0x6d, 0x83, 0x5d, 0x89,
@@ -81,13 +81,6 @@ const uint8_t systemIdentifier[48] = {0x13, 0x14, 0x8b, 0xb4, 0x2c, 0x8c, 0xe4, 
 int results[SWITCH_CRYPTEX_COUNT] = {ENXIO, ENXIO};
 bool attempted[SWITCH_CRYPTEX_COUNT];
 IOService *directDevice[SWITCH_CRYPTEX_COUNT];  // the image's direct read map, when it is the one attached
-
-uint64_t uptimeMs()
-{
-    uint64_t ns = 0;
-    absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
-    return ns / 1000000;
-}
 
 bool below(const IORegistryEntry *media, const IORegistryEntry *ancestor)
 {
@@ -1645,7 +1638,7 @@ void prefetchDone()
 {
     waitFlowBelow(1);
     const uint64_t started = gPrefetch.startedMs;
-    const uint64_t now = uptimeMs();
+    const uint64_t now = switch_now_ms();
     SwitchCacheStats s = {};
     if (gCache.lock) {
         IOLockLock(gCache.lock);
@@ -1989,7 +1982,7 @@ void prefetchStart()
             gPrefetch.listPages += runs[i].pages;
         for (unsigned i = 0; i < SWITCH_CRYPTEX_COUNT; ++i)
             prepareMap(i);
-        gPrefetch.startedMs = uptimeMs();
+        gPrefetch.startedMs = switch_now_ms();
         gPrefetch.workers = kWorkers;
         for (unsigned i = 0; i < kWorkers; ++i) {
             thread_t thread = THREAD_NULL;

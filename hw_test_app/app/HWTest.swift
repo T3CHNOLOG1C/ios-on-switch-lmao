@@ -8,6 +8,7 @@ enum Subsystem: String, CaseIterable, Sendable {
     case images = "Images"
     case audio = "Audio"
     case display = "Display"
+    case compositor = "Compositor"
     case sensors = "Sensors"
     case input = "Input"
     case connectivity = "Connectivity"
@@ -32,10 +33,4 @@ protocol HWTest: Sendable {
 extension HWTest {
     var interactive: Bool { false }
     var timeout: TimeInterval { 60 }
-}
-
-struct TestFailure: Error, CustomStringConvertible {
-    let description: String
-
-    init(_ description: String) { self.description = description }
 }
