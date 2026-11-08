@@ -2477,6 +2477,13 @@ void RenderEncoder::setBytes(int stage, uint32_t slot, const void *bytes, uint32
     dev_->stats.uploadBytes += chunk;
 }
 
+void RenderEncoder::setBytesAt(int stage, uint32_t slot, uint64_t va, uint32_t length, const uint8_t *cpu)
+{
+    if (slot >= 31 || stage < 1 || stage > 2)
+        return;
+    bufs_[stage][slot] = {va, length, nullptr, 0, cpu};
+}
+
 void RenderEncoder::setBuffer(int stage, uint32_t slot, const Buffer *b, uint64_t offset)
 {
     if (slot >= 31 || stage < 1 || stage > 2)

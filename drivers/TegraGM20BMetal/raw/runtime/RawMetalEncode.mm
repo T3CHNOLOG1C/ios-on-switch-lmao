@@ -401,9 +401,13 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
             re->setBlendColor(rgba);
             break;
         }
-        case OpBytes:
-            re->setBytes(c.stage, c.index, cb->_bytes.data() + c.a, c.b);
+        case OpBytes: {
+            const raw::Buffer &k = cb->_bytes.chunks[c.c];
+            if (!k.wc)
+                rc->clean(k.cpu + c.a, std::max<uint32_t>((c.b + 255) & ~255u, 256));
+            re->setBytesAt(c.stage, c.index, k.va + c.a, c.b, k.cpu + c.a);
             break;
+        }
         case OpDepthStencil:
             re->setDepthStencil(c.obj ? &((__bridge RMDepthStencil *)c.obj)->_raw : nullptr);
             break;

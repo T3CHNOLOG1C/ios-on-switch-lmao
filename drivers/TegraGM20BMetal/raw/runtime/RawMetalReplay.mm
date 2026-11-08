@@ -144,9 +144,9 @@ id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool pa
             if (c.stage <= 2 && c.index <= 30)
                 bound[c.stage][c.index] = nil;
             if (c.stage == 1)
-                [enc setVertexBytes:cb->_bytes.data() + c.a length:c.b atIndex:c.index];
+                [enc setVertexBytes:cb->_bytes.chunks[c.c].cpu + c.a length:c.b atIndex:c.index];
             else
-                [enc setFragmentBytes:cb->_bytes.data() + c.a length:c.b atIndex:c.index];
+                [enc setFragmentBytes:cb->_bytes.chunks[c.c].cpu + c.a length:c.b atIndex:c.index];
             break;
         case OpBuffer: {
             id x = (__bridge id)c.obj;
