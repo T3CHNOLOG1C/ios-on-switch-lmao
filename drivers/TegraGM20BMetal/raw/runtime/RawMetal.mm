@@ -180,6 +180,7 @@ enum RMPred : uint8_t {
     PredEncUboOffset,     // a = stage << 8 | slot, b = va & 255
     PredEncNoTic,
     PredEncDepthStencil,  // a = the state's depth format, b = the pass's | a state that tests without the attachment << 32
+    PredEncNoChannel,     // the kernel refused the channel or its context (logged with its answer)
     PredCount
 };
 
@@ -232,7 +233,8 @@ static constexpr const char *kPredNames[] = {"-",
                                              "enc.colorfmt",
                                              "enc.ubo",
                                              "enc.notic",
-                                             "enc.ds"};
+                                             "enc.ds",
+                                             "enc.nochannel"};
 static_assert(sizeof kPredNames / sizeof *kPredNames == PredCount, "a name for each predicate");
 
 // Each predicate's refusal key: domain "raw", the predicate's name as the reason (kits/SwitchRefusal)
@@ -4617,6 +4619,9 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
     raw::CommandBuffer *rc = d.begin();
     if (!rc) {
         *why = "the kernel gave the raw path no channel";
+        if (!predLogged(PredEncNoChannel))
+            logPred(PredEncNoChannel, 0, 0, @(d.channelError().c_str()));
+        hit(cb, PredEncNoChannel);
         return false;
     }
     raw::RenderEncoder *re = nullptr;
