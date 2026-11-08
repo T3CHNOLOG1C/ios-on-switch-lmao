@@ -366,7 +366,7 @@ void replayKernel(id encoder, RMCommandBuffer *cb, const Cmd &c, std::set<RMBuff
         [e setBufferOffset:c.c atIndex:c.index];
         break;
     case OpKernelTexture:
-        [e setTexture:mipTwinOf(c.obj, false) atIndex:c.index];
+        [e setTexture:twinOf(object) atIndex:c.index];
         break;
     case OpKernelSampler:
         [e setSamplerState:twinOf(object) atIndex:c.index];
