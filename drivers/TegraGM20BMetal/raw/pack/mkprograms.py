@@ -18,7 +18,7 @@ TYPES = {'invalid': 0, 'root': 1, 'shader_data': 2, 'desc_set': 3, 'dynamic_ubo'
 
 
 def cbuf_code(cbuf: tuple) -> int:
-    """A constant buffer as the pack names it (runtime/raw_pack.h PackCbufType, nvk_switch_capture.c switch_nvk_cbuf_code).
+    """Give a constant buffer as the pack names it (raw_pack.h PackCbufType, switch_nvk_cbuf_code).
 
     The nvk_cbuf_type, and a UBO descriptor's set-0 offset / 16 in bits 3-7; a UBO elsewhere is 7.
     """
