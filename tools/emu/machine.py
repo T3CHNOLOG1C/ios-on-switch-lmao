@@ -60,6 +60,8 @@ def command(run: Path, inputs: Inputs) -> list[str]:
         '-D', 'qemu-guest.log',
         '-object', 'secret,id=tegra.fuse.cache,file=fuse.bin,format=raw',
         '-global', f'driver=tegra.evp,property=cpu-reset-vector,value={IRAM_STUB:#x}',
+        '-global', 'driver=tegra.gpu,property=method-log,value=gpu-methods.raw',
+        '-global', 'driver=tegra.gpu,property=event-log,value=gpu-events.log',
     ]  # fmt: skip
     args += stage(run, inputs.package, inputs.regwrite)
     if inputs.icount:
