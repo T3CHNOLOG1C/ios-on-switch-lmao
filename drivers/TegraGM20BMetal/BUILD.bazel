@@ -29,6 +29,12 @@ filegroup(
     ]),
 )
 
+# The raw facade's Objective-C++ units (RawMetal.mm and the RawMetal*.mm beside it, RawAlias.mm, RawComplete.mm, RawProbe.mm)
+filegroup(
+    name = "raw_facade_srcs",
+    srcs = glob(["raw/runtime/Raw*.mm"]),
+)
+
 # What the runtime's capture of a state compiles beside it: pack/nvdec (the generator's decoder) and Mesa's MME simulator
 filegroup(
     name = "raw_capture_headers",
@@ -66,6 +72,7 @@ ios_binary(
     srcs = [
         "raw/fx/fx_mip.cpp",
         "raw/runtime/raw_alias.cpp",
+        "raw/runtime/raw_comp.cpp",
         "raw/runtime/raw_gpu.cpp",
         "raw/runtime/raw_kernel.cpp",
         "raw/runtime/raw_pack.cpp",

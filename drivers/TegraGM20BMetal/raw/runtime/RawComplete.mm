@@ -18,17 +18,19 @@ Completion::Completion(Device &device, id<MTLDevice> m2v, const char *cacheDir, 
     : device_(device), m2v_(m2v), stack_(stack),
       queue_(dispatch_queue_create(
           "com.brunostjohn.switch.raw.complete",
-          dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_BACKGROUND, 0)))
+          dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INITIATED, 0)))
 {
     compiler_ = std::make_unique<Compiler>(&cache_, [this](const CacheKey &k, RuntimeRecord &record, std::string &why) {
         return make(k, record, why);
     });
-    const std::string dir = cacheDir ? cacheDir : "";
-    // the directory's scan (another build's entries removed) on the queue, before any ask there
-    dispatch_async(queue_, ^{
-        if (!dir.empty() && !cache_.open(dir, stack_, kCacheCap))
-            NSLog(@"TegraGM20BMetal: raw records kept in memory only: %s takes no entry", dir.c_str());
-    });
+    // the directory taken at once, for the lookups at state creation; its scan (another build's entries removed, the bytes
+    // kept counted) on the queue, before any store there
+    if (cacheDir && *cacheDir && cache_.attach(cacheDir, stack_, kCacheCap))
+        dispatch_async(queue_, ^{
+            cache_.tidy();
+        });
+    else if (cacheDir && *cacheDir)
+        NSLog(@"TegraGM20BMetal: raw records kept in memory only: %s takes no entry", cacheDir);
 }
 
 Completion::~Completion()
@@ -105,6 +107,33 @@ void Completion::ask(Ask asked, std::function<void(Pipeline *)> ready)
         else if (state == Compiler::State::Refused || state == Compiler::State::Failed)
             done(nullptr, std::string());
     });
+}
+
+Pipeline *Completion::made(Ask a)
+{
+    CacheKey k;
+    RuntimeRecord record;
+    std::string why;
+    if (!keyOf(a, k) || compiler_->lookup(k, record, why) != RecordCache::Found::Record)
+        return nullptr;
+    return device_.addRecord(record, a.caTransform, why);
+}
+
+Pipeline *Completion::makeNow(Ask a, bool *retry)
+{
+    *retry = false;
+    CacheKey k;
+    if (!keyOf(a, k))
+        return nullptr;
+    {
+        std::lock_guard<std::mutex> l(lock_);
+        asked_[k.name()] = a;
+    }
+    RuntimeRecord record;
+    std::string why;
+    const Compiler::State state = compiler_->makeNow(k, record, why);
+    *retry = state == Compiler::State::Failed || state == Compiler::State::Pending;
+    return state == Compiler::State::Ready ? device_.addRecord(record, a.caTransform, why) : nullptr;
 }
 
 Compiler::Outcome Completion::make(const CacheKey &k, RuntimeRecord &record, std::string &why)

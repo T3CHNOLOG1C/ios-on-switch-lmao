@@ -8,14 +8,18 @@
 #include <cmath>
 #import <objc/message.h>
 #include <algorithm>
+#include <chrono>
 #include <mach/mach.h>
 #include "../test/frame.h"
 #include "state_desc.h"
 #include "NativeBridgeMetalFrontend.h"
 #include "bridge/NativeMetalObjects.h"
 #ifdef RAW_FACADE  // the same frames through the raw path's Metal facade (runtime/RawMetal.mm) instead of the frontend + m2v + NVK
+#include <IOKit/IOReturn.h>
 #include "../runtime/RawMetal.h"
+#include "TegraGM20BABI.h"
 #define FRAME_PATH "raw-facade"
+extern "C" void mock_iokit_fail_next(unsigned method, unsigned count, int kr);
 #else
 #define FRAME_PATH "nvk"
 #endif
@@ -57,6 +61,21 @@ static uint64_t threadNs()
            1000;
 }
 
+// FRAME_RATES=1: the rates lines after every frame (that frame's counters): RATESF (raw facade) and M2VF (m2v). Called once
+// before the first frame with -1, for m2v's baseline (its first call only takes one).
+static void framesRates(int f)
+{
+    if (!getenv("FRAME_RATES"))
+        return;
+    char rates[4096];
+#ifdef RAW_FACADE
+    if (f >= 0 && raw_metal_rates(rates, sizeof rates))
+        printf("RATESF %d %s\n", f, rates);
+#endif
+    if (native_bridge_metal_rates(rates, sizeof rates) && f >= 0)
+        printf("M2VF %d %s\n", f, rates);
+}
+
 using state_desc::descriptor;
 
 int main(int argc, char **argv)
@@ -94,6 +113,9 @@ int main(int argc, char **argv)
             fprintf(stderr, "NO DEVICE: %s\n", why.UTF8String);
             return 1;
         }
+        // FRAME_REFUSE_CHANNEL: the kernel refuses the raw device's first channel (its frames go to m2v until it gets one)
+        if (getenv("FRAME_REFUSE_CHANNEL"))
+            mock_iokit_fail_next(TegraGM20BMethodChannelCreate, 1, kIOReturnNoResources);
         // FRAME_COMPLETE=<dir>|memory: the runtime makes the records of the states the pack lacks (RawComplete.h), kept in <dir>;
         // FRAME_COMPLETE_SETTLE=<frame>: two seconds before that frame, so the frames after draw the states it made
         if (const char *complete = getenv("FRAME_COMPLETE"))
@@ -120,6 +142,7 @@ int main(int argc, char **argv)
         }
         std::vector<frame::State> all = frame::states(argv[4]);
         std::vector<id<MTLRenderPipelineState>> uber, blur, extra;
+        double createUs = 0;  // the frame's states' creation (newRenderPipelineStateWithDescriptor), on this thread
         for (auto &s : all) {
             if (s.extra) {
                 if (id<MTLRenderPipelineState> p = [dev newRenderPipelineStateWithDescriptor:descriptor(qc, s.line)
@@ -136,8 +159,10 @@ int main(int argc, char **argv)
                 continue;
             if (s.blur && blur.size() >= 4 && !getenv("FRAME_ALL_STATES"))
                 continue;
-            id<MTLRenderPipelineState> p = [dev newRenderPipelineStateWithDescriptor:descriptor(qc, s.line)
-                                                                               error:&error];
+            MTLRenderPipelineDescriptor *made = descriptor(qc, s.line);
+            const auto creating = std::chrono::steady_clock::now();
+            id<MTLRenderPipelineState> p = [dev newRenderPipelineStateWithDescriptor:made error:&error];
+            createUs += std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - creating).count();
             if (!p) {
                 fprintf(stderr, "REFUSED %s\n", s.key.c_str());
 #ifdef RAW_FACADE
@@ -149,6 +174,8 @@ int main(int argc, char **argv)
             printf("STATE %s %s\n", s.uber ? "uber" : "blur", s.key.c_str());
             statesOut(s);
         }
+        printf("CREATE %zu states, %.0f us a state\n", uber.size() + blur.size(),
+               uber.size() + blur.size() ? createUs / double(uber.size() + blur.size()) : 0.0);
         id<MTLCommandQueue> queue = [dev newCommandQueue];
         id<MTLTexture> tex[frame::TEX_COUNT];
         IOSurfaceRef surfaces[frame::TEX_COUNT] = {};
@@ -399,6 +426,11 @@ int main(int argc, char **argv)
             [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
             [e endEncoding];
         };
+        id<MTLBuffer> fills = nil;  // FRAME_FILL (frame.h)
+        if (frame::fillUniforms()) {
+            fills = [dev newBufferWithLength:frame::kFillBytes options:MTLResourceStorageModeShared];
+            memset(fills.contents, 0, frame::kFillBytes);
+        }
         // FRAME_MIP: IMAGE1's level 0 from a buffer of a pattern, then its levels (each frame, before its passes)
         id<MTLBuffer> mipSource = nil;
         if (frame::mipImage()) {
@@ -412,6 +444,7 @@ int main(int argc, char **argv)
         // a decoder's next frame), so the raw path converts its image again then and only then (RMTexture _imageSeed)
         const unsigned ycbcrWrite = getenv("FRAME_YCBCR_WRITE") ? unsigned(atoi(getenv("FRAME_YCBCR_WRITE"))) : 0;
         const int settle = getenv("FRAME_COMPLETE_SETTLE") ? atoi(getenv("FRAME_COMPLETE_SETTLE")) : -1;
+        framesRates(-1);
         for (unsigned f = 0; f < frames; f++) {
             if (int(f) == settle)
                 usleep(2000000);
@@ -425,6 +458,13 @@ int main(int argc, char **argv)
                 const uint64_t c0 = threadNs();
                 id<MTLCommandBuffer> cb = [queue commandBuffer];
                 caCommandBuffer(cb);
+                if (fills) {
+                    id<MTLBlitCommandEncoder> b = [cb blitCommandEncoder];
+                    [b fillBuffer:fills
+                            range:NSMakeRange(frame::kFillFrom, frame::kFillBytes - frame::kFillFrom)
+                            value:frame::fillValue(f)];
+                    [b endEncoding];
+                }
                 if (mipSource) {
                     const frame::TexDesc td = frame::texture(frame::IMAGE1);
                     id<MTLBlitCommandEncoder> b = [cb blitCommandEncoder];
@@ -546,6 +586,10 @@ int main(int argc, char **argv)
                             else
                                 [e setFragmentBytes:bytes.data() length:b.length atIndex:b.slot];
                         }
+                        if (const int slot = fills ? frame::fillSlot(d) : -1; slot >= 0) {
+                            [e setFragmentBuffer:fills offset:0 atIndex:NSUInteger(slot)];
+                            bound[2][slot] = false;
+                        }
                         for (int t = 0; t < 16; t++)
                             if (d.textures[t] >= 0)
                                 [e setFragmentTexture:tex[d.textures[t]] atIndex:t];
@@ -613,6 +657,7 @@ int main(int argc, char **argv)
                     fprintf(stderr, "frame %u: %s\n", f, cb.error.localizedDescription.UTF8String);
                     return 1;
                 }
+                framesRates(f);
             }
         }
         const size_t warm = cpu.size() > 20 ? 10 : 0;

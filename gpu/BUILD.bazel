@@ -136,10 +136,7 @@ metal_plugin(
     srcs = [
         GM20B_METAL + ":TegraGM20BMetalPlugin.mm",
         METAL + ":NativeBridgeMetalFrontend.mm",
-        GM20B_METAL + ":raw/runtime/RawMetal.mm",
-        GM20B_METAL + ":raw/runtime/RawAlias.mm",
-        GM20B_METAL + ":raw/runtime/RawComplete.mm",
-        GM20B_METAL + ":raw/runtime/RawProbe.mm",
+        GM20B_METAL + ":raw_facade_srcs",
     ],
     hdrs = [
         METAL + ":frontend_headers",
@@ -165,9 +162,11 @@ metal_plugin(
         GM20B_METAL + ":raw/runtime/raw_pack.cpp",
         GM20B_METAL + ":raw/runtime/raw_ycbcr.cpp",
         GM20B_METAL + ":raw/runtime/raw_zeta.cpp",
+        GM20B_METAL + ":raw/runtime/raw_comp.cpp",
         GM20B_METAL + ":raw/runtime/raw_capture.cpp",
         GM20B_METAL + ":raw/runtime/raw_record.cpp",
         GM20B_METAL + ":raw/runtime/raw_cache.cpp",
+        GM20B_METAL + ":raw/runtime/raw_compiler.cpp",
         GM20B_METAL + ":raw/runtime/raw_metallib.cpp",
         GM20B_METAL + ":raw/runtime/raw_completed.cpp",
         GM20B_METAL + ":raw/pack/nvdec.cpp",

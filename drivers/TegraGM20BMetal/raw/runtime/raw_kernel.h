@@ -8,6 +8,7 @@
 // Not thread safe: raw::Device calls it under its own lock.
 #pragma once
 #include <atomic>
+#include <mutex>
 #include <cstdint>
 #include <map>
 #include <string>
@@ -59,6 +60,12 @@ public:
     uint32_t surfaceLayout(const Bo &bo, uint32_t width, uint32_t height, uint32_t bpp, uint32_t bytesPerRow,
                            bool writes);
     bool bindImport(void *addr, Bo &bo, uint32_t kind);
+    // BoAlloc of physically contiguous memory aligned to 2^alignLog2, never CPU-mapped: the kernel gives such memory comptags
+    // (raw_comp.h). The slow part (a contiguous search in the kernel), safe beside the other calls; the kern_return_t.
+    int allocContiguous(uint64_t bytes, uint32_t alignLog2, Bo &bo);
+    // Binds it whole at a VA aligned as its memory with compressible `kind`; false with `noLines` when the kernel had no
+    // comptags left for it (kIOReturnNoResources), with the BO left unbound. Under the caller's lock (the VA list).
+    bool bindCompressed(Bo &bo, uint32_t kind, bool &noLines);
     // GPU VA held for binds made into it later (bindImportAt), whole granules; 0: none left. releaseVa gives it back.
     uint64_t reserveVa(uint64_t bytes);
     void releaseVa(uint64_t va, uint64_t bytes);
@@ -89,8 +96,18 @@ public:
         return lostFaultVa_.load(std::memory_order_relaxed);
     }
 
-    // `channel` is dead (an Exec or WaitFence answered so, or its kill record says so): lost() and the cause from GetStatus
-    void markLost(uint32_t channel);
+    // Channels made so far: with a channel's id, the count when it was the newest names that channel alone (the kernel reuses
+    // ids, and a destroyed channel's waiters may answer after its id is another's)
+    uint32_t opened() const
+    {
+        return opened_.load(std::memory_order_acquire);
+    }
+
+    // `channel`, as it was when `opened` channels had been made, is dead (an Exec or WaitFence answered so, or its kill record
+    // says so): lost() and the cause from GetStatus. Nothing when a channel was made since: that one is not it.
+    void markLost(uint32_t channel, uint32_t opened);
+    // GetStatus: false when the kernel has no such channel (destroyed) or refused the call
+    bool status(uint32_t channel, TegraGM20BAbiStatus &st);
 
     // `last`: the channel's last submitted seqno (0 if none), waited on when the GPFIFO is full
     // `surfaces` (null: none): the host imports the submission touches, named to the kernel (ExecSurfaces, method 17,
@@ -140,7 +157,8 @@ private:
     // A SurfaceWrites failed: imports stop saying the GPU only samples them, and every Exec carries
     // TegraGM20BPushImportsWritten.
     std::atomic<bool> importsWritten_{false};
-    std::atomic<uint32_t> lostChannel_{0}, lostError_{0};
+    std::atomic<uint32_t> lostChannel_{0}, lostError_{0}, opened_{0};
+    std::mutex lostLock_;  // a channel made, and a channel marked lost, one after the other
     std::atomic<uint64_t> lostFaultVa_{0};
     uint64_t fenceMap_ = 0;  // the connection's fence page, mapped once: every channel's word is in it
     uint32_t selector_ = 0;

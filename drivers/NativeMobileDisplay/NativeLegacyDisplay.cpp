@@ -5293,9 +5293,9 @@ extern "C" void native_legacy_gpu_complete(void *display, int status)
 }
 
 // r18-planes, XNU kern_exec.c (native_switch_exec_environment, when it starts backboardd): may Core Animation detach layers?
-// Only on what is proven this boot: the plane probe passed (window B scans through the SMMU), and TegraVIC proved the
-// IOSurfaceAccelerator quarter turns (transforms 4 and 7), 4:2:0 to RGB and a row pitch (V4 pitch: 16, 64 or else 256
-// bytes), since on an internal display every rotated detached layer (here: every landscape video) is first copied through
+// Only when the plane probe passed this boot (window B scans through the SMMU) and TegraVIC's traits have the
+// IOSurfaceAccelerator quarter turns (transforms 4 and 7), 4:2:0 to RGB and a row pitch within ours (kTegraVICTraits),
+// since on an internal display every rotated detached layer (here: every landscape video) is first copied through
 // it into a destination Core Animation allocates, and what Core Animation does when that copy is refused is not known.
 // The alignment Core Animation sizes those destinations by is VIC's from start (native_planes::kPublishedRowAlignment).
 // Otherwise backboardd keeps CA_DISABLE_DETACHED=1 and nothing changes. One line per call.

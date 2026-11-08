@@ -45,6 +45,7 @@ py_test(
     size = "small",
     srcs = ["adt_media_test.py"],
     data = [
+        "//drivers/TegraVIC:TegraVICUserClient.cpp",
         "//ipsw:device_tree",
         "//tools/package:adt_edit.py",
     ],

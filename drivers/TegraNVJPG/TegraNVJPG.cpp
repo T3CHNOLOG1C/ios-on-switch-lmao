@@ -3,28 +3,31 @@
 // tegra_nvjpg_probe() runs the whole bring-up by default on its own thread:
 //   J0  NVDEC's bring-up has ended (NVJPG's MBIST workaround runs on NVDEC's clock),
 //       host1x is up, and NVJPG's kernel buffers are allocated: the firmware image, an arena (the setup and status
-//       slots, the self-test's pictures) and the SMMU page directory with its tables
+//       slots, the service's sink page) and the SMMU page directory with its tables
 //   J1  NVJPG's SMMU domain (ASID 125 for the "nvjpg" swgroup, through TegraSMMU: the kernel buffers 1:1, two empty
 //       windows), power partition 26, clock (PLLP, 408 MHz), reset, the MBIST workaround, falcon firmware loaded and
 //       started
 //   J2  proof of life through host1x channel 0 in NVJPG's class: an IMMEDIATE syncpoint increment (the engine's host
 //       interface) then an OP_DONE one (the falcon firmware), each completed by interrupt
-//   J3  decodes of embedded JPEGs checked against libjpeg-turbo's decode of the same bytes, the SMMU's translation and
-//       the engine's write extent measured (TegraNVJPGSelfTest.cpp)
-//   J4  the AppleJPEGDriver service and its AppleJPEGDriverUserClient published (TegraNVJPGUserClient.cpp)
-// One line per stage ("TegraNVJPG: J1 ok ..."), or the failing stage's FAIL line and nothing after it. Until J4
+//   J3  the AppleJPEGDriver service and its AppleJPEGDriverUserClient published (TegraNVJPGUserClient.cpp)
+// One line per stage ("TegraNVJPG: J1 ok ..."), or the failing stage's FAIL line and nothing after it. Until J3
 // publishes, every failure is that one line: the swgroup goes back to bypass, the engine back to reset with its clock
-// off, and nothing is published (CMPhoto and VideoToolbox find no hardware JPEG codec and decode on the CPU). From J4
-// on the engine is proven: a job past its bound panics with one line, and a lost syncpoint interrupt panics in
+// off, and nothing is published (CMPhoto and VideoToolbox find no hardware JPEG codec and decode on the CPU). No job
+// runs before J3, and from then a job past its bound panics with one line, and a lost syncpoint interrupt panics in
 // TegraHost1x.
+//
+// What the engine does (kTraits) is what the unit measured on every boot of 11-05 and 11-06 (23 boots), decoding
+// libjpeg-turbo's JPEGs through the SMMU windows with their pages out of order: NV12, I420, BGRA, RGBA, ARGB and grey
+// within a few steps of libjpeg-turbo, 4:2:0, 4:2:2, 4:4:4 and grey input, grey to BGRA, 1/2 scaling, whole MCUs
+// written past the picture. 1/4 and 1/8 scaling missed libjpeg-turbo's BGRA by up to 7 and 15 steps on every one of
+// those boots and stay off. '422f', '444f' and 'yuvf' are the 4:2:0 path's other chroma and memory modes.
 //
 // Why the SMMU: a decode's destination is another process's IOSurface (scattered pages, half of the Switch's RAM above
 // the 32-bit boundary) and NVJPG has no scatter-gather, so each job maps the destination page by page into a window of
 // NVJPG's address space, and the scan's bytes (copied into a kernel buffer the parser bounded) into another; the rest
 // of each window stays unmapped, so the SMMU itself keeps the engine inside the job's memory, behind the checker
 // (TegraNVJPGJpeg.h: the extent a decode writes against the destination's planes). switchroot's bl31 leaves every
-// swgroup in bypass with the translation bits set; J3 proves translation by decoding through a window whose pages are
-// mapped out of order.
+// swgroup in bypass with the translation bits set.
 //
 // Firmware: linux-firmware's nvidia/tegra210/nvjpg.bin (firmware/SOURCE), booted non-securely as Linux drm/tegra
 // nvjpg.c does with falcon_boot (no FCE section, no clock gating register of its own, unlike VIC).
@@ -74,10 +77,10 @@ constexpr uint64_t kNvjpgPA = 0x54380000, kNvjpgSize = 0x40000;
 constexpr uint32_t kClass = TEGRA_HOST1X_CLASS_NVJPG;
 constexpr uint32_t kThiMethod0 = 0x40;  // THI METHOD0 (offset) then METHOD1 (data)
 constexpr uint64_t kMcPA = 0x70019000;
-constexpr uint32_t kPartition = 26;    // TEGRA_POWERGATE_NVJPG
-constexpr unsigned kClock = 195;       // TEGRA210_CLK_NVJPG: CAR bank Y bit 3, also its reset
-constexpr unsigned kNvdecClock = 194;  // TEGRA210_CLK_NVDEC: NVJPG's slcg clock
-constexpr uint64_t kArenaBytes = 1ULL << 20;
+constexpr uint32_t kPartition = 26;                           // TEGRA_POWERGATE_NVJPG
+constexpr unsigned kClock = 195;                              // TEGRA210_CLK_NVJPG: CAR bank Y bit 3, also its reset
+constexpr unsigned kNvdecClock = 194;                         // TEGRA210_CLK_NVDEC: NVJPG's slcg clock
+constexpr uint64_t kArenaBytes = 3ULL * SWITCH_HW_PAGE_SIZE;  // the setup slot, the status slot, the service's sink
 constexpr uint32_t kNvdecWaitMs = 20000;
 constexpr uint32_t kAsid = TEGRA_SMMU_ASID_NVJPG;  // 125 (VIC 127, the display 126)
 constexpr uint32_t kClockMHz = 408;
@@ -134,9 +137,16 @@ inline uint32_t jobBoundUs(uint64_t pixels)
 IOLock *gJobLock;    // one job at a time: map, run, unmap
 IOLock *gStateLock;  // suspend/resume against jobs
 uint32_t gSyncpt, gNext, gPicture;
-bool gUp, gWedged, gSuspended, gPublished;
+bool gUp, gWedged, gSuspended;
 TegraNVJPGBuffer gSetup, gStatus;
-TegraNVJPGTraits gTraits;
+const TegraNVJPGTraits kTraits = {
+    .clipped = false,
+    .formats = (1u << TEGRA_NVJPG_OUT_COUNT) - 1,
+    .chroma = 1u << TEGRA_NVJPG_CHROMA_MONO | 1u << TEGRA_NVJPG_CHROMA_420 | 1u << TEGRA_NVJPG_CHROMA_422H |
+              1u << TEGRA_NVJPG_CHROMA_444,
+    .scales = 0x3,
+    .greyRgb = true,
+};
 
 const char *falconState()
 {
@@ -161,15 +171,6 @@ inline uint32_t *table(uint32_t index)
 inline uint32_t windowTable(uint32_t window)
 {
     return 1 + (window ? kWindowTables[0] : 0);
-}
-
-// The table entries just written, to memory (the SMMU does not snoop the CPU's caches).
-void cleanDomain()
-{
-    uintptr_t low = 0;
-    uintptr_t high = 0;
-    if (gDomain.takeDirty(&low, &high))
-        switch_dcache_clean(reinterpret_cast<const void *>(low), high - low);
 }
 
 void smmuFlush()
@@ -328,18 +329,11 @@ void park()
     engineOff();
 }
 
-void timedOut(uint32_t fence, uint64_t us)
+[[noreturn]] void timedOut(uint32_t fence, uint64_t us)
 {
     char host[200];
     tegra_host1x_describe(host, sizeof(host));
-    if (gPublished) {
-        panic("TegraNVJPG: job fence %u not reached in %llu ms (syncpoint %u at %u); %s; %s", fence, us / 1000, gSyncpt,
-              tegra_host1x_syncpt_read(gSyncpt), falconState(), host);
-    }
-    if (gWedged)
-        return;
-    gWedged = true;
-    IOLog("TegraNVJPG: job fence %u not reached in %llu us (syncpoint %u at %u); %s; %s\n", fence, us, gSyncpt,
+    panic("TegraNVJPG: job fence %u not reached in %llu ms (syncpoint %u at %u); %s; %s", fence, us / 1000, gSyncpt,
           tegra_host1x_syncpt_read(gSyncpt), falconState(), host);
 }
 
@@ -441,18 +435,9 @@ void bringUp(void *, wait_result_t)
     gSyncpt = id;
     gNext = tegra_host1x_syncpt_read(id);
     gUp = true;
-    if (tegra_nvjpg_self_test(&gTraits) || gWedged) {  // J3; its FAIL line is out
-        gUp = false;
-        park();
-        giveBack();
-        return;
-    }
     tegra_host1x_set_sleep_client(engineSuspend, engineResume);
     tegra_host1x_set_strict();
-    // Proven: from here a job past its bound panics (TegraNVJPG.h).
-    gPublished = true;
-    if (tegra_nvjpg_publish())
-        gPublished = false;  // its FAIL line is out; the engine stays up, unused
+    tegra_nvjpg_publish();  // a FAIL line is its own; the engine stays up, unused
 }
 }  // namespace
 
@@ -463,12 +448,7 @@ extern "C" bool tegra_nvjpg_ready(void)
 
 extern "C" const TegraNVJPGTraits *tegra_nvjpg_traits(void)
 {
-    return &gTraits;
-}
-
-extern "C" uint32_t tegra_nvjpg_clock_mhz(void)
-{
-    return kClockMHz;
+    return &kTraits;
 }
 
 extern "C" int tegra_nvjpg_buffer(uint64_t size, TegraNVJPGBuffer *out)
@@ -518,17 +498,6 @@ extern "C" void tegra_nvjpg_window_clear(uint32_t window)
     bzero(pt, (uint64_t)gWindowMapped[window] * 4);
     switch_dcache_clean(pt, (uint64_t)gWindowMapped[window] * 4);
     gWindowMapped[window] = 0;
-    smmuFlush();
-}
-
-extern "C" void tegra_nvjpg_identity_override(uint64_t iova, uint64_t pa)
-{
-    uint32_t *p = gDomain.pte(iova, true);
-    if (!p)
-        return;
-    *p = TegraSMMUDomain::entry(pa, true);
-    gDomain.touch(p, sizeof(*p));
-    cleanDomain();
     smmuFlush();
 }
 

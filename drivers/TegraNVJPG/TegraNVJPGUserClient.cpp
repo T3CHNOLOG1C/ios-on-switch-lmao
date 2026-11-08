@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// J4: the AppleJPEGDriver service. CMPhoto (ImageIO's JPEG decodes, UIKit's eager decompression, Photos and its
+// J3: the AppleJPEGDriver service. CMPhoto (ImageIO's JPEG decodes, UIKit's eager decompression, Photos and its
 // thumbnails) and JPEGH1.videodecoder (VideoToolbox 'jpeg') open IOServiceMatching("AppleJPEGDriver") and talk to its
 // AppleJPEGDriverUserClient; this puts NVJPG behind that pair. The contract (drivers/TegraNVJPG/CONTRACT.md) was read
 // from 21H461: the callers in the dyld cache and Apple's com.apple.driver.AppleJPEGDriver 6.6.2 in the kernelcache.
@@ -16,7 +16,7 @@
 //          IOSurface in its pixel format ('420f', 'BGRA', 'RGBA', 32ARGB), at the request's DCT scale and offset. The
 //          kernel parses the file (TegraNVJPGJpeg.h; Apple's hardware parses the stream itself, so userland sends no
 //          tables) and plans the decode (TegraNVJPGRequest.h) in the calling thread: a refusal is the call's own
-//          result, kIOReturnUnsupported for what NVJPG (or this unit, per its self-test) does not do and
+//          result, kIOReturnUnsupported for what NVJPG does not do (TegraNVJPGTraits) and
 //          kIOReturnBadArgument for a request that contradicts the file or the surfaces; CMPhoto then decodes that
 //          image on the CPU, JPEGH1 that frame in software. Accepted requests are queued for the engine thread in
 //          order. Without a callback (+0x30) the call sleeps until its decode is done and returns its status; with one
@@ -97,7 +97,7 @@ struct {
 #endif
 
 IOLock *gStatsLock;
-bool gFirstLogged;
+uint32_t gFirstLogged;  // bit n: a decode into TEGRA_NVJPG_OUT_n has been logged
 
 // `why` is a literal: it is the refusal's key as well as its text.
 void refused(const char *why)
@@ -276,8 +276,10 @@ void engineThread(void *, wait_result_t)
         gStats.pixels += static_cast<uint64_t>(job->plan.extent.width) * job->plan.extent.height;
         gStats.bytes += job->engine.setup.bitstream_size;
 #endif
-        const bool first = (job->status == 0) && !gFirstLogged;
-        gFirstLogged = gFirstLogged || first;
+        const uint32_t format = 1u << job->plan.target.format;
+        const bool first = (job->status == 0) && (gFirstLogged & format) == 0u;
+        if (first)
+            gFirstLogged |= format;
         IOLockUnlock(gStatsLock);
         if (first) {
             IOLog("TegraNVJPG: first hardware decode done: %ux%u to %ux%u (format %u, 1/%u) in %llu us engine (%u "
@@ -743,12 +745,12 @@ extern "C" int tegra_nvjpg_publish(void)
     gInList = IONewData(uint64_t, kInPages);
     if (!gQueueLock || !gStatsLock || !gOutList || !gInList || tegra_nvjpg_buffer(SWITCH_HW_PAGE_SIZE, &gSink) ||
         !tegra_vic_surface_start()) {
-        IOLog("TegraNVJPG: J4 FAIL no memory for the service, or no IOCoreSurfaceRoot\n");
+        IOLog("TegraNVJPG: J3 FAIL no memory for the service, or no IOCoreSurfaceRoot\n");
         return -12;
     }
     thread_t thread = nullptr;
     if (kernel_thread_start(engineThread, nullptr, &thread) != KERN_SUCCESS) {
-        IOLog("TegraNVJPG: J4 FAIL could not start the engine thread\n");
+        IOLog("TegraNVJPG: J3 FAIL could not start the engine thread\n");
         return -12;
     }
     thread_deallocate(thread);
@@ -756,11 +758,11 @@ extern "C" int tegra_nvjpg_publish(void)
     AppleJPEGDriver *service = OSTypeAlloc(AppleJPEGDriver);
     if (!resources || !service || !service->init()) {
         OSSafeReleaseNULL(service);
-        IOLog("TegraNVJPG: J4 FAIL could not create the service\n");
+        IOLog("TegraNVJPG: J3 FAIL could not create the service\n");
         return -12;
     }
     // Apple's properties (start 0x433b8), as NVJPG has them: one core (CMPhoto's two-core strip decode needs two and
-    // RST logging), DCT scaling as proven, missing EOI (the copy appends one), the "interchange" formats (BGRA, RGBA
+    // RST logging), DCT scaling as NVJPG decodes it, missing EOI (the copy appends one), the "interchange" formats (BGRA, RGBA
     // and 4:2:2/4:4:4 input; CMPhoto's automatic mode, which ImageIO uses, takes the hardware only with them), no
     // 12-bit or compressed formats, no MCU alignment requirement (read by the encoder only).
     const bool rgb =
@@ -781,17 +783,17 @@ extern "C" int tegra_nvjpg_publish(void)
     service->setName("TegraNVJPG");  // not "AppleJPEGDriver": JPEGH1.videoencoder name-matches it (see the top)
     if (!service->attach(resources)) {
         service->release();
-        IOLog("TegraNVJPG: J4 FAIL could not attach the service\n");
+        IOLog("TegraNVJPG: J3 FAIL could not attach the service\n");
         return -12;
     }
     if (!service->start(resources)) {
         service->detach(resources);
         service->release();
-        IOLog("TegraNVJPG: J4 FAIL could not start the service\n");
+        IOLog("TegraNVJPG: J3 FAIL could not start the service\n");
         return -12;
     }
     service->registerService();
-    IOLog("TegraNVJPG: J4 ok AppleJPEGDriver published (user client AppleJPEGDriverUserClient; formats %#x, sampling "
+    IOLog("TegraNVJPG: J3 ok AppleJPEGDriver published (user client AppleJPEGDriverUserClient; formats %#x, sampling "
           "%#x, scales %#x, interchange formats %u, writes %s)\n",
           t->formats, t->chroma, t->scales, rgb ? 1u : 0u, t->clipped ? "clipped" : "whole MCUs");
     service->release();  // the attachment keeps it

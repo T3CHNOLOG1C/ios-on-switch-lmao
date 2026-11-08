@@ -455,7 +455,7 @@ TEST(GM20BRawReopenSource, ReopenKeepsTheHeapAndReplaysTheContext)
 		EXPECT_THAT(relocated, HasSubstr(reloc));
 	EXPECT_THAT(context, HasSubstr("p.inc(CB_SELECTOR_A,"));
 	const std::string begin = flat(definition(raw, "CommandBuffer *Device::begin()"));
-	expectBefore(begin, "reopen();", "p.m(INVALIDATE_SHADER_CACHES_NO_WFI,");
+	expectBefore(begin, "!reopen())", "p.m(INVALIDATE_SHADER_CACHES_NO_WFI,");
 }
 
 // No spin for GPFIFO or push room: every wait for room sleeps until a fence's interrupt, and the fence reports GET to nvif

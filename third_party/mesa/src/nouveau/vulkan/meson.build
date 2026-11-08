@@ -86,6 +86,7 @@ nvk_files = files(
   'nvk_switch_capture.c',
   'nvk_switch_capture.h',
   'nvk_shader.h',
+  'nvk_tiled_cache.h',
   'nvk_upload_queue.c',
   'nvk_upload_queue.h',
   'nvk_video_session.c',
