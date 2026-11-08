@@ -34,7 +34,8 @@ POWER = (
     'SwitchPower: 10000 ms: cpu0 c7 41.0% (310, 0 skipped, 0 frame wakes) wfi 40.0% busy 19.0%, cpu1 c7 70.2% (120, 0 '
     'skipped, 0 frame wakes) wfi 20.0% busy 9.8%, cpu2 c7 80.0% (90, 1 skipped, 0 frame wakes) wfi 15.0% busy 5.0%, '
     'cpu3 c7 2.0% ({wakes}, 0 skipped, {wakes} frame wakes) wfi 90.0% busy 8.0%; c7 timer exits 520, mean 88 us, boot '
-    'max {max} us, {late} late; emc ...'
+    'max {max} us, {late} late; EMC 6 moves 204:61.0% 1600:39.0%, {raises} raises: hint to top 400/{emc} us (BPMP '
+    'max 300 us); battery -900 mA x 4100 mV = -3690 mW'
 )
 RENDER = (
     'SwitchFrameRender: vsync 1266197624: woke 140 us after it; first submit 6330 us (cpu 5200, blocked 300 us in 2); '
@@ -84,13 +85,15 @@ class Stutter(unittest.TestCase):
         self.assertEqual(got['stutter.vsync-late'], PASS)
         self.assertEqual(got['stutter.frame-end-late'], PASS)
 
-    def test_c7_on_the_frame_core(self):
-        got = verdicts(POWER.format(wakes=1, max=126, late=0))
+    def test_c7_and_the_emc_raise(self):
+        got = verdicts(POWER.format(wakes=1, max=126, late=0, raises=3, emc=900))
         self.assertEqual(got['stutter.c7-frame-wakes'], PASS)
+        self.assertEqual(got['stutter.emc-raise'], PASS)
         self.assertEqual(got['stutter.c7-exit-max'], PASS)
         self.assertEqual(got['stutter.c7-exit-late'], PASS)
-        got = verdicts(POWER.format(wakes=40, max=410, late=3))
+        got = verdicts(POWER.format(wakes=40, max=410, late=3, raises=3, emc=5200))
         self.assertEqual(got['stutter.c7-frame-wakes'], FAIL)
+        self.assertEqual(got['stutter.emc-raise'], FAIL)
         self.assertEqual(got['stutter.c7-exit-max'], FAIL)
         self.assertEqual(got['stutter.c7-exit-late'], FAIL)
 

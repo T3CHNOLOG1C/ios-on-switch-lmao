@@ -109,6 +109,17 @@ STUTTER = [
     ),
     Check('stutter.c7-exit-late', OWNER, POWER, 'sum(late) == 0', process=KERNEL, regex=C7_EXITS, source=IDLE),
     Check(
+        'stutter.emc-raise',
+        OWNER,
+        POWER,
+        'max(max) <= 2000',
+        process=KERNEL,
+        regex=r'(?P<raises>\d+) raises: hint to top (?P<mean>\d+)/(?P<max>\d+) us \(BPMP max (?P<bpmp>\d+) us\)',
+        source='drivers/SwitchPower/SwitchEMC.cpp',
+        note='touch, first frame line or GPU submit to the EMC at its top rate, us: slower than the first frame '
+        "needs it leaves that frame's GPU work on a slow EMC",
+    ),
+    Check(
         'stutter.render-core-wait',
         OWNER,
         RENDER,
