@@ -102,6 +102,7 @@ kernel_driver(
         "drivers/TegraSMMU",
         "kits/SwitchCAR",
         "kits/SwitchDMA",
+        "kits/SwitchDT",
         "kits/SwitchMMIO",
         "kits/SwitchRefusal",
     ],

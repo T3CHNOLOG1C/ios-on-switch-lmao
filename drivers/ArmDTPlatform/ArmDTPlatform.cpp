@@ -19,6 +19,7 @@
 #include <libkern/c++/OSData.h>
 #include <libkern/c++/OSIterator.h>
 #include <pexpert/pexpert.h>
+#include "../../kits/SwitchDT/SwitchDTProperty.h"
 
 // Observation counters describe actual published nubs, not started drivers.
 extern "C" {
@@ -100,10 +101,8 @@ bool ArmDTPlatform::hasNVRAMProxy(IOService *provider)
     if (chosen == nullptr) {
         return false;
     }
-    const OSData *bankSize = OSDynamicCast(OSData, chosen->getProperty("nvram-bank-size"));
-    const OSData *proxyData = OSDynamicCast(OSData, chosen->getProperty("nvram-proxy-data"));
-    const bool valid = (bankSize != nullptr) && (bankSize->getLength() == sizeof(uint32_t)) && (proxyData != nullptr) &&
-                       (proxyData->getLength() != 0);
+    const bool valid = switch_dt_length(chosen, "nvram-bank-size") == sizeof(uint32_t) &&
+                       switch_dt_length(chosen, "nvram-proxy-data") != 0;
     chosen->release();
     return valid;
 }
@@ -193,8 +192,7 @@ bool ArmDTPlatform::configure(IOService *provider)
     const IORegistryEntry *child = nullptr;
     while ((child = OSDynamicCast(IORegistryEntry, iterator->getNextObject())) != nullptr) {
         count++;
-        const OSData *type = OSDynamicCast(OSData, child->getProperty("device_type"));
-        if ((type != nullptr) && (type->getLength() == 4) && (memcmp(type->getBytesNoCopy(), "cpu", 4) == 0)) {
+        if (switch_dt_string_is(child, "device_type", "cpu")) {
             cpuCount++;
         }
         if (strcmp(child->getName(), "arm-io") == 0) {

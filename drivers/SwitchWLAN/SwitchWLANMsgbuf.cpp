@@ -96,6 +96,7 @@ enum : uint8_t {
 constexpr uint32_t kIoctlReqPktId = 0xFFFE;
 constexpr uint32_t kControlBuffers = 8, kControlBufferSize = 8192;  // ioctl responses 0..7, events 8..15
 constexpr uint32_t kIoctlMax = 1518;                                // BRCMF_TX_IOCTL_MAX_MSG_SIZE
+constexpr unsigned kRxFlags = 18, kRxFrameMask = 0x07;  // msgbuf_rx_complete flags: BRCMF_MSGBUF_PKT_FLAGS_FRAME_*
 // brcmf_msgbuf's BRCMF_DEF_MAX_RXBUFPOST: what the chip takes when its shared area leaves max_rxbufpost 0.
 constexpr uint16_t kDefaultMaxRxPost = 255;
 // The TX flow ring: its id follows the two common H2D rings (BRCMF_H2D_MSGRING_FLOWRING_IDSTART), its indices
@@ -612,7 +613,7 @@ void Msgbuf::drain()
         struct Arrival {
             uint32_t id;
             uint16_t offset, length;
-            uint8_t flags;
+            uint8_t ifidx, kind;
         };
 
         Arrival arrivals[kDrainBudget];
@@ -631,7 +632,8 @@ void Msgbuf::drain()
                 length = kRxBufferSize - offset;
             }
             switch_dcache_clean_invalidate_lines(rxVa(id) + offset, length);
-            arrivals[arrived++] = {id, static_cast<uint16_t>(offset), static_cast<uint16_t>(length), item[1]};
+            arrivals[arrived++] = {id, static_cast<uint16_t>(offset), static_cast<uint16_t>(length), item[1],
+                                   static_cast<uint8_t>(le16(item + kRxFlags) & kRxFrameMask)};
         }
         if (arrived)
             switch_dcache_sync();
@@ -641,7 +643,7 @@ void Msgbuf::drain()
             ++data_.rxFrames;
             data_.rxBytes += a.length;
             if (frames_ && a.length >= kEthHeader)
-                frames_(context_, rxVa(a.id) + a.offset, a.length, a.flags);  // copied out here
+                frames_(context_, rxVa(a.id) + a.offset, a.length, a.ifidx, a.kind);  // copied out here
             if (postRx(a.id))
                 ++data_.rxReposted;
         }
@@ -683,6 +685,9 @@ bool Msgbuf::ioctlSubmit(uint32_t cmd, uint8_t ifidx, const uint8_t *data, size_
                          size_t whyLength)
 {
     size_t n = length > outLength ? length : outLength;
+    // brcmf_msgbuf_tx_ioctl: a longer request (actframe's whole brcmf_fil_af_params_le) declares its length as the
+    // output length and carries its first BRCMF_TX_IOCTL_MAX_MSG_SIZE bytes
+    const uint16_t declared = static_cast<uint16_t>(n > 0xffff ? 0xffff : n);
     if (n > kIoctlMax)
         n = kIoctlMax;
     memset(ioctlBuffer_.va, 0, n);
@@ -698,8 +703,8 @@ bool Msgbuf::ioctlSubmit(uint32_t cmd, uint8_t ifidx, const uint8_t *data, size_
     put32(p + 4, kIoctlReqPktId);
     put32(p + 8, cmd);
     put16(p + 12, ++transId_);
-    put16(p + 14, static_cast<uint16_t>(n));
-    put16(p + 16, static_cast<uint16_t>(n));
+    put16(p + 14, static_cast<uint16_t>(n));  // input_buf_len
+    put16(p + 16, declared);                  // output_buf_len
     put32(p + 24, ioctlBuffer_.pa);
     put32(p + 28, 0);
     replyReady_ = false;

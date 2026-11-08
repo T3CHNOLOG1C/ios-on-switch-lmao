@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// V5: the IOSurfaceAccelerator service. IOSurfaceAccelerator.framework (Core Animation's display clone for Screen
+// V3: the IOSurfaceAccelerator service. IOSurfaceAccelerator.framework (Core Animation's display clone for Screen
 // Recording and AirPlay, VideoToolbox's pixel transfers, ImageIO, WebKit, ...) opens IOServiceMatching(
 // "AppleM2ScalerCSCDriver") and talks to its IOSurfaceAcceleratorClient; this puts VIC behind that pair. The contract
 // (drivers/TegraVIC/CONTRACT.md) was read from 21H461: the framework's request builder, Apple's driver (sizes, sync and
@@ -180,6 +180,27 @@ void refused(IOReturn ret, const char *why)
     switch_refusal("TegraVIC", why, "IOSurfaceAccelerator transform refused (%s), the caller falls back", kind);
 }
 
+#if TEGRA_VIC_STATS
+extern "C" void proc_selfname(char *buf, int size);
+extern "C" int proc_selfpid(void);
+
+// Who allocates surfaces VIC cannot address, once a boot: each one costs the copy engine two copies a job, and the
+// fix is that allocator's row alignment.
+void firstBounce(const TegraVICSurfaceDesc *d, const char *side)
+{
+    static int logged;
+    if (__atomic_exchange_n(&logged, 1, __ATOMIC_RELAXED))
+        return;
+    char name[32];
+    proc_selfname(name, sizeof(name));
+    os_log(OS_LOG_DEFAULT,
+           "TegraVIC: first bounce this boot: %s[%d] %s '%c%c%c%c' %ux%u, row pitch %llu (VIC takes multiples of 256)",
+           name, proc_selfpid(), side, static_cast<char>(d->fourcc >> 24), static_cast<char>(d->fourcc >> 16),
+           static_cast<char>(d->fourcc >> 8), static_cast<char>(d->fourcc), d->width, d->height,
+           static_cast<unsigned long long>(d->planeBytesPerRow[0]));
+}
+#endif
+
 struct Job {
     Job *next;
     IOUserClient *client;  // retained
@@ -240,7 +261,7 @@ void copiedBack(void *arg, int err)
     Job *job = static_cast<Job *>(arg);
     tegra_vic_bounce_back_landed(job->backFrom);
     // The CPU may have pulled destination lines in while the engines wrote: readers must see DRAM.
-    tegra_vic_cache_pages(SWITCH_DCACHE_CLEAN_INVALIDATE, job->dstPages, job->dstPageCount);
+    switch_dcache_hw_pages(SWITCH_DCACHE_CLEAN_INVALIDATE, job->dstPages, job->dstPageCount);
     switch_dcache_sync();
     IODelete(job->dstPages, uint64_t, job->dstPageCount);
     job->dstPages = nullptr;
@@ -284,8 +305,8 @@ bool runJob(Job *job, IOReturn *status)
     // VIC and the copy engine do not snoop the CPU's caches: what the CPU wrote to the source must be in DRAM, and no
     // dirty line of the destination may be written back over what they write.
     if (readsSource)
-        tegra_vic_cache_pages(SWITCH_DCACHE_CLEAN, gPages[TEGRA_VIC_WINDOW_SRC], pages[0]);
-    tegra_vic_cache_pages(SWITCH_DCACHE_CLEAN_INVALIDATE, gPages[TEGRA_VIC_WINDOW_DST], pages[1]);
+        switch_dcache_hw_pages(SWITCH_DCACHE_CLEAN, gPages[TEGRA_VIC_WINDOW_SRC], pages[0]);
+    switch_dcache_hw_pages(SWITCH_DCACHE_CLEAN_INVALIDATE, gPages[TEGRA_VIC_WINDOW_DST], pages[1]);
     switch_dcache_sync();
     TegraVICBounce *srcBounce = &bounce[TEGRA_VIC_WINDOW_SRC];
     TegraVICBounce *dstBounce = &bounce[TEGRA_VIC_WINDOW_DST];
@@ -375,7 +396,7 @@ bool runJob(Job *job, IOReturn *status)
         job->dstPages = nullptr;
     }
     // The CPU may have pulled destination lines in while VIC wrote: readers must see DRAM.
-    tegra_vic_cache_pages(SWITCH_DCACHE_CLEAN_INVALIDATE, gPages[TEGRA_VIC_WINDOW_DST], pages[1]);
+    switch_dcache_hw_pages(SWITCH_DCACHE_CLEAN_INVALIDATE, gPages[TEGRA_VIC_WINDOW_DST], pages[1]);
     switch_dcache_sync();
     tegra_vic_surface_complete(&job->dst);
     tegra_vic_surface_complete(&job->src);
@@ -514,6 +535,10 @@ IOReturn transform(Conn *conn, const void *in, uint32_t size)
         why = staged(&job->dst.desc, &dstStage, &dstAs, &job->bounceDst);
         if (!why && job->plan.readsSource)
             why = staged(&job->src.desc, &srcStage, &srcAs, &job->bounceSrc);
+#if TEGRA_VIC_STATS
+        if (!why && (job->bounceSrc || job->bounceDst))
+            firstBounce(job->bounceSrc ? &job->src.desc : &job->dst.desc, job->bounceSrc ? "source" : "destination");
+#endif
         if (!why)
             why = tegra_vic_image_from(dstAs, kTegraVICWindowBase + TEGRA_VIC_WINDOW_DST * kTegraVICWindowBytes, &dst);
         if (!why && job->plan.readsSource)
@@ -527,7 +552,7 @@ IOReturn transform(Conn *conn, const void *in, uint32_t size)
                                   tegra_vic_config_address(), tegra_vic_filter_address(), &job->check);
         }
         if (why)
-            ret = kIOReturnUnsupported;  // a shape VIC (or this unit, per its self-test) does not do
+            ret = kIOReturnUnsupported;  // a shape VIC does not do (kTegraVICTraits)
     }
     if (ret) {
         refused(ret, why ? why : "surface lookup");
@@ -710,7 +735,7 @@ bool swizzle(const OSObject *object, const uintptr_t *base, uintptr_t *copy, con
     for (uint32_t f = 0; f < count; f++) {
         const int slot = slotOf(base, fns[f][0]);
         if (slot < 0) {
-            snprintf(line, size, "V5 FAIL no slot for a base method in %s's vtable",
+            snprintf(line, size, "V3 FAIL no slot for a base method in %s's vtable",
                      object->getMetaClass()->getClassName());
             return false;
         }
@@ -729,7 +754,7 @@ void putNumber(OSDictionary *d, const char *key, uint64_t value)
 }
 
 // What Core Animation (ScalerLimits, scaler_has_capability) and VideoToolbox (scalerCapabilities) read. Every value is
-// what VIC does as the self-test proved it; anything it lacks is 0, so those callers keep their own paths (HDR, film
+// what VIC does (kTegraVICTraits); anything it lacks is 0, so those callers keep their own paths (HDR, film
 // grain, colour management, histograms, compressed and 10-bit formats).
 OSDictionary *capabilities(const TegraVICTraits *t)
 {
@@ -796,7 +821,7 @@ extern "C" int tegra_vic_publish(void)
 {
     char line[200];
     if (!tegra_vic_surface_start()) {
-        IOLog("TegraVIC: V5 FAIL no IOCoreSurfaceRoot (IOSurface kext) to look surfaces up in\n");
+        IOLog("TegraVIC: V3 FAIL no IOCoreSurfaceRoot (IOSurface kext) to look surfaces up in\n");
         return -19;
     }
     // Apple's driver kext (normally already loaded as the display family's dependency).
@@ -807,7 +832,7 @@ extern "C" int tegra_vic_publish(void)
     OSObject *probe = OSMetaClass::allocClassWithName("IOSurfaceAcceleratorClient");
     if (!service || !OSDynamicCast(IOUserClient, probe)) {
         // NOLINTNEXTLINE(clang-analyzer-osx.cocoa.RetainCount): kept, as above
-        IOLog("TegraVIC: V5 FAIL Apple's AppleM2ScalerCSCDriver/IOSurfaceAcceleratorClient classes are not loaded "
+        IOLog("TegraVIC: V3 FAIL Apple's AppleM2ScalerCSCDriver/IOSurfaceAcceleratorClient classes are not loaded "
               "(kext load %#x)\n",
               loaded);
         return -19;
@@ -844,13 +869,13 @@ extern "C" int tegra_vic_publish(void)
     OSDictionary *caps = capabilities(tegra_vic_traits());
     if (!gConnLock || !gQueueLock || !gPages[0] || !gPages[1] || !caps || !service->init()) {
         OSSafeReleaseNULL(caps);
-        IOLog("TegraVIC: V5 FAIL no memory for the service\n");
+        IOLog("TegraVIC: V3 FAIL no memory for the service\n");
         return -12;
     }
     thread_t thread = nullptr;
     if (kernel_thread_start(engineThread, nullptr, &thread) != KERN_SUCCESS) {
         caps->release();
-        IOLog("TegraVIC: V5 FAIL could not start the engine thread\n");
+        IOLog("TegraVIC: V3 FAIL could not start the engine thread\n");
         return -12;
     }
     thread_deallocate(thread);
@@ -863,23 +888,23 @@ extern "C" int tegra_vic_publish(void)
     service->setProperty("TegraVICTraitPitchAlign", (unsigned long long)tegra_vic_traits()->pitchAlign, 32);
     IOService *resources = IOService::getResourceService();
     if (!resources || !service->attach(resources)) {
-        IOLog("TegraVIC: V5 FAIL could not attach the service\n");
+        IOLog("TegraVIC: V3 FAIL could not attach the service\n");
         return -12;
     }
     if (!service->start(resources)) {  // IOService::start (the copy's slot)
         service->detach(resources);
-        IOLog("TegraVIC: V5 FAIL could not start the service\n");
+        IOLog("TegraVIC: V3 FAIL could not start the service\n");
         return -12;
     }
     service->registerService();
     tegra_vic_present_start();
-    const char *present = "off (block linear in not proven: NVDEC's pictures are copied by the CPU)";
+    const char *present = "off (no 4:2:0 pass-through: NVDEC's pictures are copied by the CPU)";
     if (tegra_vic_present_ready()) {
-        present = "on (block linear in proven)";
+        present = "on";
     } else if (tegra_vic_traits()->blockLinearIn) {
         present = "off (no memory for its page lists)";
     }
-    IOLog("TegraVIC: V5 ok AppleM2ScalerCSCDriver published (Apple's classes, VIC's slots: newUserClient %d; "
+    IOLog("TegraVIC: V3 ok AppleM2ScalerCSCDriver published (Apple's classes, VIC's slots: newUserClient %d; "
           "IOSurfaceAcceleratorClient; BGRA, RGBA, 420v, 420f; transforms %#x; up to %ux%u, %ux up, %ux down); "
           "NVDEC present %s\n",
           s0, tegra_vic_traits()->rotations, TEGRA_VIC_MAX_DIM, TEGRA_VIC_MAX_DIM, TEGRA_VIC_MAX_UPSCALE,

@@ -22,7 +22,10 @@
 #include <pexpert/pexpert.h>
 #include "../ArmGIC/SwitchInterrupts.h"
 #include "../../kits/SwitchDMA/SwitchDcache.h"
-#include "../../kits/SwitchMMIO/SwitchMMIO.h"
+#include "../../kits/SwitchDMA/SwitchDMABuffer.h"
+#include "../../kits/SwitchDT/SwitchDTProperty.h"
+#include "../../kits/SwitchCAR/SwitchCAR.h"
+#include "../../kits/SwitchMMIO/SwitchMMIOWords.h"
 #include "../../kits/SwitchSysctl/SwitchSysctl.h"
 #include "../TegraDisplayFlip/TegraScanoutCopy.h"
 #include "../TegraDisplayFlip/TegraScanoutRing.h"
@@ -279,10 +282,10 @@ extern "C" __attribute__((weak)) void tegra_display_power_up(void)
 // Display controller A (hekate bdk/display/di.h, Linux drivers/gpu/drm/tegra/dc.h): 32-bit registers, word indices. INT_STATUS is write-1-
 // to-clear, INT_ENABLE lets a bit latch, INT_MASK routes a latched bit to the level-high line, GIC_SPI 73 = INTID 105 (mainline
 // tegra210.dtsi dc@54200000, hekate irq.h IRQ_DISPLAY). DC A's clock (CAR DISP1, L27) must run before its registers are read.
-static constexpr uint64_t kDisplayAPA = 0x54200000, kCarPA = 0x60006000;
+static constexpr uint64_t kDisplayAPA = 0x54200000;
 static constexpr uint32_t kDcIntStatus = 0x037, kDcIntMask = 0x038, kDcIntEnable = 0x039, kFrameEndInt = 1u << 1,
                           kVblankInt = 1u << 2;
-static constexpr uint32_t kDisplayAInterrupt = 105, kCarResetL = 0x004, kCarClockL = 0x010, kCarDisp1 = 1u << 27;
+static constexpr uint32_t kDisplayAInterrupt = 105, kCarDisp1Id = 27;  // Linux TEGRA210_CLK_DISP1
 // r17-touch: V_PULSE2, a raster-line interrupt, for the compositor's vsync phase (VsyncPhase.h). L4T dc_reg.h and
 // tegra_dc_init_vpulse2_int (T21x): INT bit 5; DISP_SIGNAL_OPTIONS0 V_PULSE_2_ENABLE bit 19; V_PULSE2_CONTROL H position 0,
 // LAST(1) (bit 8); V_PULSE2_POSITION_A START line 12:0 and END line 28:16, lines counted as L4T counts them (its V_BLANK line is
@@ -386,7 +389,7 @@ extern "C" void (*volatile switch_display_panic_hook)(const char *message);
 
 namespace {
 struct PanicRestore {
-    volatile uint32_t *dc;
+    SwitchMMIOWords dc;
     volatile uint64_t *pixels;
     uint64_t bytes;
     uint32_t options, stride, kind, hOffset, start;  // start: the boot framebuffer, where the panic console draws
@@ -414,7 +417,7 @@ void restorePitchOnPanic(const char *message)
             for (uint64_t i = 0; i < gPanicRestore.bytes / 8; ++i)
                 pixels[i] = 0xff000000ff000000ULL;
         }
-        volatile uint32_t *dc = gPanicRestore.dc;
+        const SwitchMMIOWords dc = gPanicRestore.dc;
         dc[kDcStateAccess] = dc[kDcStateAccess] & ~(kReadMuxActive | kWriteMuxActive);
         dc[kDcWindowHeader] = kWindowASelect;
         dc[kWinLineStride] = gPanicRestore.stride;
@@ -445,7 +448,7 @@ void restorePitchOnPanic(const char *message)
         dc[kDcStateControl] = request;
     } else if (gPanicRestore
                    .planes) {  // the plane probe covers the screen before the first frame: off, the console shows
-        volatile uint32_t *dc = gPanicRestore.dc;
+        const SwitchMMIOWords dc = gPanicRestore.dc;
         dc[kWinBBase + native_planes::kOptions] = 0;
         TegraDisplayColor::bypassForPanic(dc);
         __asm__ volatile("dsb sy" ::: "memory");
@@ -777,7 +780,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     // 250 ms after the start, that frame ends arrive.
     IOFilterInterruptEventSource *vblankSource = nullptr;
     IOMemoryMap *dcMap = nullptr;
-    volatile uint32_t *dc = nullptr;
+    SwitchMMIOWords dc;
     uint32_t dcEnable = 0, dcMask = 0;  // INT_ENABLE and INT_MASK as found, restored on stop
     // INT_MASK is written from outside the gate too (frame-end holds), so every write of it takes this lock.
     IOSimpleLock *intMaskLock = nullptr;
@@ -828,11 +831,10 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     bool doubleBuffer = false;
     static constexpr unsigned kScanBuffers = TegraScanoutRing::kMaxBuffers;
     static constexpr int kNoBuffer = TegraScanoutRing::kNone;
-    IOBufferMemoryDescriptor *scanBuffers[kScanBuffers] =
-        {};                                        // surfaces 1 and 2's pages ([0] unused: the boot framebuffer)
-    IOMemoryMap *scanMappings[kScanBuffers] = {};  // their write-combined views
-    uint64_t scanAddresses[kScanBuffers] = {};     // their physical addresses
-    TegraScanoutRing ring;                         // which surface is scanned, asked for, replaced, drawn
+    switch_dma_buffer scanBuffers[kScanBuffers] = {};  // surfaces 1 and 2's pages ([0] unused: the boot framebuffer)
+    IOMemoryMap *scanMappings[kScanBuffers] = {};      // their write-combined views
+    uint64_t scanAddresses[kScanBuffers] = {};         // their physical addresses
+    TegraScanoutRing ring;                             // which surface is scanned, asked for, replaced, drawn
     // The direct-scanout gate's probe (DisplaySmmuProbe.h): once, kProbeAfterFrames frame ends
     // after window A first scanned a client frame, with nothing in flight, DC A's CRC unit and the display's SMMU domain (ASID
     // TEGRA_SMMU_ASID_DISPLAY on the "dc" swgroup) prove window A reads the scanned buffer through an IOVA slot; then all of
@@ -842,8 +844,8 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     static constexpr uint32_t kDisplay0aTranslation = 1u << 1;  // client display0a (id 1) in TRANSLATION_ENABLE_0
     static constexpr uint64_t kProbeSlot = 0x10000000ULL;  // below DRAM (0x80000000): only a translation reaches it
     static constexpr unsigned kProbeTables = 64, kProbeAfterFrames = 600;  // r18-planes: 40 tables for the plane slots
-    IOBufferMemoryDescriptor *probeTables = nullptr;
-    uint64_t probeTablesPa = 0, probeAt = 0;
+    switch_dma_buffer probeTables = {};
+    uint64_t probeAt = 0;
     TegraSMMUDomain probeDomain;
     DisplaySmmuProbe probe;
     bool probeRan = false, probeUnderflow = false;
@@ -946,7 +948,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     static constexpr unsigned kFlipDeadlineMS = 100;
     // XNU's console tape (startConsoleTape), from start until the first client frame scans: the pages, their write-combined view
     // and physical address, and whether the console draws there (window A scans it; read by the filter and the console's wait).
-    IOBufferMemoryDescriptor *tapeBuffer = nullptr;
+    switch_dma_buffer tapeBuffer = {};
     IOMemoryMap *tapeMapping = nullptr;
     uint32_t tapeAddress = 0;
     volatile bool tapeAttached = false;
@@ -1362,7 +1364,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         return frameEnds < 2 || vsyncArmed || tapeAttached || tapeSettle || kickDeferred || presentDeferred ||
                ring.pending != kNoBuffer || ring.superseded != kNoBuffer || ring.drawing != kNoBuffer ||
                ring.held != kNoBuffer || (rotated && !rotationLatched) || probeRequest || probe.active() ||
-               (!probeRan && (probeTables != nullptr) && doubleBuffer) || (planesOn && planeLatch.requested()) ||
+               (!probeRan && (probeTables.memory != nullptr) && doubleBuffer) || (planesOn && planeLatch.requested()) ||
                planeProbe.active() || planeHeldSet;
     }
 
@@ -1438,7 +1440,8 @@ private:
             char gic[192];
             switch_interrupt_describe(kDisplayAInterrupt, gic, sizeof(gic));
             panic("SwitchDisplay: no DC A frame end in 250 ms: INT_STATUS %#x MASK %#x ENABLE %#x, %s",
-                  dc[kDcIntStatus], dc[kDcIntMask], dc[kDcIntEnable], gic);
+                  static_cast<uint32_t>(dc[kDcIntStatus]), static_cast<uint32_t>(dc[kDcIntMask]),
+                  static_cast<uint32_t>(dc[kDcIntEnable]), gic);
         }
         vsyncArmed = false;
         if (!vsyncTimer)
@@ -1467,12 +1470,11 @@ private:
     static bool vblankFilter(OSObject *owner, IOFilterInterruptEventSource *source)
     {
         NativeLegacyDisplay *self = static_cast<NativeLegacyDisplay *>(owner);
-        const uint32_t status =
-            switch_mmio_read32_word(self->dc, kDcIntStatus) & (kVblankInt | kFrameEndInt | kVpulse2Int);
+        const uint32_t status = self->dc[kDcIntStatus] & (kVblankInt | kFrameEndInt | kVpulse2Int);
         if (!status)
             return false;
         self->dc[kDcIntStatus] = status;
-        (void)switch_mmio_read32_word(self->dc, kDcIntStatus);  // read back: the line is low before ArmCpu's EOI
+        (void)self->dc[kDcIntStatus];  // read back: the line is low before ArmCpu's EOI
         if (gPanicRestore.panicking)
             return false;  // window A is the panic's (restorePitchOnPanic): no flip, no DSI command
         if (status & kVblankInt) {
@@ -1892,7 +1894,8 @@ private:
         switch_interrupt_describe(kDisplayAInterrupt, gic, sizeof(gic));
         panic("SwitchDisplay: no DC A V_PULSE2 in %u frame ends with the vsync phase on: INT_STATUS %#x MASK %#x "
               "ENABLE %#x, %s",
-              vpulseSilent, dc[kDcIntStatus], dc[kDcIntMask], dc[kDcIntEnable], gic);
+              vpulseSilent, static_cast<uint32_t>(dc[kDcIntStatus]), static_cast<uint32_t>(dc[kDcIntMask]),
+              static_cast<uint32_t>(dc[kDcIntEnable]), gic);
     }
 
     uint32_t lineNs() const
@@ -1959,8 +1962,10 @@ private:
         switch_interrupt_describe(kDisplayAInterrupt, gic, sizeof(gic));
         IOLog("SwitchDisplay: vsync phase off for this boot: V_PULSE2 never reached the CPU in %u flips (line %u; "
               "SIGNAL_OPTIONS0 %#x V_PULSE2 %#x/%#x INT_STATUS %#x MASK %#x ENABLE %#x, %s); vsync stays at V_BLANK\n",
-              phaseProbe, phaseLine, dc[kDcDispSignalOptions0], dc[kDcDispVpulse2Control], dc[kDcDispVpulse2Position],
-              dc[kDcIntStatus], dc[kDcIntMask], dc[kDcIntEnable], gic);
+              phaseProbe, phaseLine, static_cast<uint32_t>(dc[kDcDispSignalOptions0]),
+              static_cast<uint32_t>(dc[kDcDispVpulse2Control]), static_cast<uint32_t>(dc[kDcDispVpulse2Position]),
+              static_cast<uint32_t>(dc[kDcIntStatus]), static_cast<uint32_t>(dc[kDcIntMask]),
+              static_cast<uint32_t>(dc[kDcIntEnable]), gic);
     }
 
     // The compositor has no vsync client any more: it has nothing to draw until it registers again.
@@ -1994,20 +1999,13 @@ private:
         switch_interrupt_describe(kDisplayAInterrupt, gic, sizeof(gic));
         panic("SwitchDisplay: no DC A V_BLANK in %u frame ends with vsync armed: INT_STATUS %#x MASK %#x ENABLE "
               "%#x, %s",
-              vsyncSilent, dc[kDcIntStatus], dc[kDcIntMask], dc[kDcIntEnable], gic);
+              vsyncSilent, static_cast<uint32_t>(dc[kDcIntStatus]), static_cast<uint32_t>(dc[kDcIntMask]),
+              static_cast<uint32_t>(dc[kDcIntEnable]), gic);
     }
 
     static bool displayClocked()
     {
-        IODeviceMemory *memory = IODeviceMemory::withRange(kCarPA, 0x1000);
-        IOMemoryMap *car = memory ? memory->map(kIOMapAnywhere | kIOMapInhibitCache) : nullptr;
-        OSSafeReleaseNULL(memory);
-        if (!car)
-            return false;
-        const volatile uint32_t *regs = reinterpret_cast<const volatile uint32_t *>(car->getVirtualAddress());
-        const bool running = ((regs[kCarClockL / 4] & kCarDisp1) != 0u) && ((regs[kCarResetL / 4] & kCarDisp1) == 0u);
-        car->release();
-        return running;
+        return switch_car_clock_enabled(kCarDisp1Id) && !switch_car_reset_asserted(kCarDisp1Id);
     }
 
     bool startVblank(IOWorkLoop *loop)
@@ -2020,7 +2018,7 @@ private:
         OSSafeReleaseNULL(memory);
         if (!dcMap)
             panic("SwitchDisplay: cannot map DC A");
-        dc = reinterpret_cast<volatile uint32_t *>(dcMap->getVirtualAddress());
+        dc = SwitchMMIOWords(static_cast<uintptr_t>(dcMap->getVirtualAddress()));
         color->attach(dc);
         vblankSource = IOFilterInterruptEventSource::filterInterruptEventSource(
             this, &NativeLegacyDisplay::vblankFired, &NativeLegacyDisplay::vblankFilter, nub, 0);
@@ -2071,7 +2069,7 @@ private:
         dc[kDcIntStatus] = kVblankInt | kFrameEndInt | kVpulse2Int;
         vpulseProgrammed = vpulseSeen = false;
         color->detach();
-        dc = nullptr;
+        dc = SwitchMMIOWords();
         OSSafeReleaseNULL(dcMap);
         dcPending = 0;
     }
@@ -2179,39 +2177,30 @@ private:
     // page. Surface 1 is required (as before); without surface 2 the display double-buffers, said in one line.
     bool startScanBuffer(unsigned i, bool required)
     {
-        const IOOptionBits options = static_cast<IOOptionBits>(kIODirectionInOut) |
-                                     static_cast<IOOptionBits>(kIOMemoryPhysicallyContiguous) |
-                                     static_cast<IOOptionBits>(kIOMemoryMapperNone);
-        IOBufferMemoryDescriptor *buffer = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
-            kernel_task, options, kNativeBlockBytes, 0x00000000fffe0000ULL);
-        IOByteCount run = 0;
-        const uint64_t pa = buffer ? buffer->getPhysicalSegment(0, &run, kIOMemoryMapperNone) : 0;
+        // switch_dma_alloc zeroed the pages and cleaned them out of the kernel's cacheable alias, which nothing writes after
+        // this, so no dirty line can land on a frame the write-combined mapping wrote around the cache.
+        switch_dma_buffer buffer = {};
         IOMemoryMap *mapping = nullptr;
-        if (pa && run >= kNativeBlockBytes && !(pa & 0x1ffff) && pa + kNativeBlockBytes <= (1ULL << 32) &&
-            buffer->getBytesNoCopy()) {
-            // The allocator zeroed the pages through the kernel's cacheable alias. Write those lines back and drop them now,
-            // before the write-combined mapping writes the same memory around the cache; nothing writes through the cacheable
-            // alias after this, so no dirty line can later land on a frame.
-            switch_dcache_clean_invalidate(buffer->getBytesNoCopy(), kNativeBlockBytes);
-            mapping = mapScanout(pa);
+        if (switch_dma_alloc(&buffer, kNativeBlockBytes, 0x00000000fffe0000ULL) && !(buffer.pa & 0x1ffff)) {
+            mapping = mapScanout(buffer.pa);
             if (mapping && (!mapping->getVirtualAddress() || mapping->getLength() < kNativeBlockBytes))
                 OSSafeReleaseNULL(mapping);
         }
         if (!mapping) {
             if (required) {
-                panic("SwitchDisplay: no mapped, physically contiguous %#llx-byte buffer "
-                      "below 4 GiB for surface %u (got %#llx, %#llx contiguous)",
-                      kNativeBlockBytes, i, pa, (uint64_t)run);
+                panic("SwitchDisplay: no mapped, physically contiguous %#llx-byte buffer below 4 GiB for surface %u "
+                      "(got %#llx)",
+                      kNativeBlockBytes, i, buffer.pa);
             }
-            IOLog("SwitchDisplay: no physically contiguous %#llx-byte buffer below 4 GiB for surface %u (got %#llx, "
-                  "%#llx contiguous): double-buffered, a late frame delays the ones after it\n",
-                  kNativeBlockBytes, i, pa, static_cast<uint64_t>(run));
-            OSSafeReleaseNULL(buffer);
+            IOLog("SwitchDisplay: no physically contiguous %#llx-byte buffer below 4 GiB for surface %u (got %#llx): "
+                  "double-buffered, a late frame delays the ones after it\n",
+                  kNativeBlockBytes, i, buffer.pa);
+            switch_dma_free(&buffer);
             return false;
         }
         scanBuffers[i] = buffer;
         scanMappings[i] = mapping;
-        scanAddresses[i] = pa;
+        scanAddresses[i] = buffer.pa;
         return true;
     }
 
@@ -2225,17 +2214,8 @@ private:
         doubleBuffer = true;
         ring.reset(buffers);
         // The SMMU probe's page tables (directory + tables), physically contiguous below 4 GiB; none: no probe.
-        probeTables = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
-            kernel_task,
-            static_cast<IOOptionBits>(kIODirectionInOut) | static_cast<IOOptionBits>(kIOMemoryPhysicallyContiguous),
-            static_cast<uint64_t>(kProbeTables) * 4096, 0x00000000fffff000ULL);
-        IOByteCount run = 0;
-        probeTablesPa = probeTables ? probeTables->getPhysicalSegment(0, &run, kIOMemoryMapperNone) : 0;
-        if (!probeTablesPa || run < static_cast<uint64_t>(kProbeTables) * 4096 || probeTablesPa + run > (1ULL << 32) ||
-            !probeTables->getBytesNoCopy()) {
+        if (!switch_dma_alloc(&probeTables, static_cast<size_t>(kProbeTables) * 4096))
             IOLog("SwitchDisplay: no contiguous %u KiB for the SMMU probe's tables: probe off\n", kProbeTables * 4);
-            OSSafeReleaseNULL(probeTables);
-        }
         kickDeferred = false;
     }
 
@@ -2253,28 +2233,18 @@ private:
         if (!hwRotate)
             return;
         checkPitchWindow();
-        const IOOptionBits options = static_cast<IOOptionBits>(kIODirectionInOut) |
-                                     static_cast<IOOptionBits>(kIOMemoryPhysicallyContiguous) |
-                                     static_cast<IOOptionBits>(kIOMemoryMapperNone);
-        tapeBuffer =
-            IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task, options, kTapeBytes, 0x00000000fffff000ULL);
-        IOByteCount run = 0;
-        const uint64_t pa = tapeBuffer ? tapeBuffer->getPhysicalSegment(0, &run, kIOMemoryMapperNone) : 0;
-        if (pa && run >= kTapeBytes && pa + kTapeBytes <= (1ULL << 32) && tapeBuffer->getBytesNoCopy()) {
-            // As for surface 1: the zeroing went through the cacheable alias, which nothing writes after this.
-            switch_dcache_clean_invalidate(tapeBuffer->getBytesNoCopy(), kTapeBytes);
-            tapeMapping = mapScanout(pa, kTapeBytes);
-        }
+        // As for surface 1: switch_dma_alloc cleaned the zeroing out of the cacheable alias, which nothing writes after this.
+        if (switch_dma_alloc(&tapeBuffer, kTapeBytes))
+            tapeMapping = mapScanout(tapeBuffer.pa, kTapeBytes);
         if (!tapeMapping || !tapeMapping->getVirtualAddress() || tapeMapping->getLength() < kTapeBytes) {
-            IOLog("SwitchDisplay: no physically contiguous %#llx-byte console tape below 4 GiB (got %#llx, %#llx "
-                  "contiguous): "
-                  "the console scrolls in software\n",
-                  kTapeBytes, pa, static_cast<uint64_t>(run));
+            IOLog("SwitchDisplay: no physically contiguous %#llx-byte console tape below 4 GiB (got %#llx): the "
+                  "console scrolls in software\n",
+                  kTapeBytes, tapeBuffer.pa);
             OSSafeReleaseNULL(tapeMapping);
-            OSSafeReleaseNULL(tapeBuffer);
+            switch_dma_free(&tapeBuffer);
             return;
         }
-        tapeAddress = static_cast<uint32_t>(pa);
+        tapeAddress = static_cast<uint32_t>(tapeBuffer.pa);
         tapeStrideSet = false;
         tapeAttached = true;
         dc[kDcRegActControl] = pitchActControl & ~kWinAActHcntrSel;
@@ -2286,7 +2256,7 @@ private:
             tapeAttached = false;
             dc[kDcRegActControl] = pitchActControl;
             OSSafeReleaseNULL(tapeMapping);
-            OSSafeReleaseNULL(tapeBuffer);
+            switch_dma_free(&tapeBuffer);
             return;
         }
         chainPanicHook();
@@ -2304,7 +2274,7 @@ private:
         NativeLegacyDisplay *self = static_cast<NativeLegacyDisplay *>(owner);
         if (self->hwSuspended)
             return;  // unclocked for SC7
-        volatile uint32_t *dc = self->dc;
+        const SwitchMMIOWords dc = self->dc;
         __asm__ volatile("dsb sy" ::: "memory");
         dc[kDcWindowHeader] = kWindowASelect;
         if (!self->tapeStrideSet) {
@@ -2320,8 +2290,7 @@ private:
     static int tapeLatched(void *owner)
     {
         return static_cast<int>(
-            static_cast<int>((switch_mmio_read32_word(static_cast<NativeLegacyDisplay *>(owner)->dc, kDcStateControl) &
-                              kWinAActReq)) == 0u);
+            static_cast<int>((static_cast<NativeLegacyDisplay *>(owner)->dc[kDcStateControl] & kWinAActReq)) == 0u);
     }
 
     static int tapeWait(void *owner)
@@ -2361,7 +2330,8 @@ private:
         switch_interrupt_describe(kDisplayAInterrupt, gic, sizeof(gic));
         panic("SwitchDisplay: the console waited %u ms for a DC A frame end to scroll: INT_STATUS %#x MASK %#x "
               "ENABLE %#x, %s",
-              kTapeWaitMS, dc[kDcIntStatus], dc[kDcIntMask], dc[kDcIntEnable], gic);
+              kTapeWaitMS, static_cast<uint32_t>(dc[kDcIntStatus]), static_cast<uint32_t>(dc[kDcIntMask]),
+              static_cast<uint32_t>(dc[kDcIntEnable]), gic);
     }
 
     // Under the gate, once window A no longer scans the tape: the console (released at the first frame) leaves it, its pages go.
@@ -2376,7 +2346,7 @@ private:
         tapeSettle = false;
         thread_wakeup((event_t)&tapeFrames);  // a console still waiting to scroll: there is no tape now
         OSSafeReleaseNULL(tapeMapping);
-        OSSafeReleaseNULL(tapeBuffer);
+        switch_dma_free(&tapeBuffer);
     }
 
     // Under the gate, in a kick, right after native_legacy_prepare_scanout released XNU's console: its last scroll may still wait for
@@ -2401,7 +2371,8 @@ private:
                 return;
             panic("SwitchDisplay: window A never latched the console's last scroll in %u frames: STATE_CONTROL %#x "
                   "ACT_CONTROL %#x START %#x",
-                  kLatchFrames, dc[kDcStateControl], dc[kDcRegActControl], windowActive(kWinbufStartAddr));
+                  kLatchFrames, static_cast<uint32_t>(dc[kDcStateControl]), static_cast<uint32_t>(dc[kDcRegActControl]),
+                  windowActive(kWinbufStartAddr));
         }
         tapeSettle = false;
         if (kickDeferred) {
@@ -2436,8 +2407,9 @@ private:
               ring.pending != kNoBuffer ? surfaceAddress(ring.pending)
               : probe.onIova            ? (uint32_t)kProbeSlot
                                         : surfaceAddress(probeSurface),
-              kFlipDeadlineMS, frameEnds - flipRequested, dc[kDcStateControl], dc[kDcIntStatus], dc[kDcIntMask],
-              dc[kDcIntEnable], gic);
+              kFlipDeadlineMS, frameEnds - flipRequested, static_cast<uint32_t>(dc[kDcStateControl]),
+              static_cast<uint32_t>(dc[kDcIntStatus]), static_cast<uint32_t>(dc[kDcIntMask]),
+              static_cast<uint32_t>(dc[kDcIntEnable]), gic);
     }
 
     // Surface i's physical address (window A's START_ADDR); 0 is the boot framebuffer, also the pitch console's.
@@ -2619,7 +2591,7 @@ private:
                 return;
             panic("SwitchDisplay: window A never latched the flip to %#x in %u frames: STATE_CONTROL %#x "
                   "ACT_CONTROL %#x START %#x",
-                  surfaceAddress(asked), kLatchFrames, control, dc[kDcRegActControl], start);
+                  surfaceAddress(asked), kLatchFrames, control, static_cast<uint32_t>(dc[kDcRegActControl]), start);
         case TegraScanoutRing::kInconsistent:
             // Double-buffered already, this is the check the path had before r14: window A does not show the flip asked for.
             if (!ring.replace) {
@@ -2686,7 +2658,7 @@ private:
 
         void scan(bool iova) const
         {
-            volatile uint32_t *regs = d->dc;
+            const SwitchMMIOWords regs = d->dc;
             regs[kDcStateAccess] = regs[kDcStateAccess] & ~(kReadMuxActive | kWriteMuxActive);
             regs[kDcWindowHeader] = kWindowASelect;
             regs[kWinbufStartAddr] = iova ? static_cast<uint32_t>(kProbeSlot) : d->surfaceAddress(d->probeSurface);
@@ -2747,7 +2719,7 @@ private:
     bool probeAttach()
     {
         // With planes on, the domain is the plane probe's already (window A's surfaces 1:1 in it): it is extended, not made.
-        if (!planesAttached && !probeDomain.init(probeTables->getBytesNoCopy(), probeTablesPa, kProbeTables)) {
+        if (!planesAttached && !probeDomain.init(probeTables.va, probeTables.pa, kProbeTables)) {
             snprintf(probeLine, sizeof(probeLine), "the table buffer cannot hold a directory");
             return false;
         }
@@ -2768,7 +2740,7 @@ private:
         uintptr_t low = 0;
         uintptr_t high = 0;
         probeDomain.takeDirty(&low, &high);
-        switch_dcache_clean_invalidate(probeTables->getBytesNoCopy(), static_cast<uint64_t>(kProbeTables) * 4096);
+        switch_dcache_clean_invalidate(probeTables.va, static_cast<uint64_t>(kProbeTables) * 4096);
         probeSwgroupWas = tegra_smmu_read(TEGRA_SMMU_DC_ASID);
         return tegra_smmu_attach(TEGRA_SMMU_ASID_DISPLAY, probeDomain.ptb(), TEGRA_SMMU_DC_ASID,
                                  TEGRA_SMMU_TRANSLATION_ENABLE_0, kDisplay0aTranslation, probeLine,
@@ -2788,7 +2760,7 @@ private:
             }
         }
         if (!probe.active()) {
-            if (probeRan || !probeTables || !doubleBuffer || !rotationLatched || hwSuspended || scanoutStopped ||
+            if (probeRan || !probeTables.memory || !doubleBuffer || !rotationLatched || hwSuspended || scanoutStopped ||
                 tapeAttached || gPanicRestore.panicking)
                 return;
             if (!probeAt)
@@ -3039,7 +3011,7 @@ private:
                 panic("SwitchDisplay: window A never latched the rotation in %u frames: STATE_CONTROL %#x "
                       "ACT_CONTROL %#x OPTIONS %#x "
                       "STRIDE %#x KIND %#x H %#x",
-                      kLatchFrames, control, dc[kDcRegActControl], windowActive(kWinOptions),
+                      kLatchFrames, control, static_cast<uint32_t>(dc[kDcRegActControl]), windowActive(kWinOptions),
                       windowActive(kWinLineStride), windowActive(kWinbufSurfaceKind), windowActive(kWinbufHOffset));
             }
             const uint32_t options = windowActive(kWinOptions);
@@ -3156,7 +3128,7 @@ private:
         ring.reset(0);
         for (unsigned i = 1; i < kScanBuffers; ++i) {
             OSSafeReleaseNULL(scanMappings[i]);
-            OSSafeReleaseNULL(scanBuffers[i]);
+            switch_dma_free(&scanBuffers[i]);
             scanAddresses[i] = 0;
         }
         if (flipTimer) {
@@ -4906,11 +4878,7 @@ public:
         const OSObject *property = provider->getProperty("dot-pitch");
         if (!property)
             return kIOReturnNotFound;
-        const OSData *data = OSDynamicCast(OSData, property);
-        if (!data || data->getLength() != sizeof(*pitch))
-            return kIOReturnBadArgument;
-        memcpy(pitch, data->getBytesNoCopy(), sizeof(*pitch));
-        return kIOReturnSuccess;
+        return switch_osdata_value(property, pitch) ? kIOReturnSuccess : kIOReturnBadArgument;
     }
 
     IOReturn supportedFrameInfo(uint32_t index, uint32_t *count, char *key, uint32_t *flags) override
@@ -5325,9 +5293,9 @@ extern "C" void native_legacy_gpu_complete(void *display, int status)
 }
 
 // r18-planes, XNU kern_exec.c (native_switch_exec_environment, when it starts backboardd): may Core Animation detach layers?
-// Only on what is proven this boot: the plane probe passed (window B scans through the SMMU), and TegraVIC proved the
-// IOSurfaceAccelerator quarter turns (transforms 4 and 7), 4:2:0 to RGB and a row pitch (V4 pitch: 16, 64 or else 256
-// bytes), since on an internal display every rotated detached layer (here: every landscape video) is first copied through
+// Only when the plane probe passed this boot (window B scans through the SMMU) and TegraVIC's traits have the
+// IOSurfaceAccelerator quarter turns (transforms 4 and 7), 4:2:0 to RGB and a row pitch within ours (kTegraVICTraits),
+// since on an internal display every rotated detached layer (here: every landscape video) is first copied through
 // it into a destination Core Animation allocates, and what Core Animation does when that copy is refused is not known.
 // The alignment Core Animation sizes those destinations by is VIC's from start (native_planes::kPublishedRowAlignment).
 // Otherwise backboardd keeps CA_DISABLE_DETACHED=1 and nothing changes. One line per call.

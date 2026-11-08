@@ -9,13 +9,22 @@
 #include <errno.h>
 #endif
 
-const uint8_t bcm_awdl_events[] = {WLC_E_ACTION_FRAME_RX,    WLC_E_AWDL_AW,
-                                   WLC_E_AWDL_ROLE,          WLC_E_AWDL_EVENT,
-                                   WLC_E_AWDL_RX_PRB_RESP,   WLC_E_AWDL_RX_ACT_FRAME,
-                                   WLC_E_AWDL_WOWL_NULLPKT,  WLC_E_AWDL_PHYCAL_STATUS,
-                                   WLC_E_AWDL_OOB_AF_STATUS, WLC_E_AWDL_SCAN_STATUS,
-                                   WLC_E_AWDL_AW_START,      WLC_E_AWDL_AW_END,
-                                   WLC_E_AWDL_AW_EXT,        WLC_E_AWDL_PEER_CACHE_CONTROL};
+const uint8_t bcm_awdl_events[] = {BCM_E_ACTION_FRAME_COMPLETE,
+                                   BCM_E_ACTION_FRAME_OFF_CHAN_COMPLETE,
+                                   WLC_E_ACTION_FRAME_RX,
+                                   WLC_E_AWDL_AW,
+                                   WLC_E_AWDL_ROLE,
+                                   WLC_E_AWDL_EVENT,
+                                   WLC_E_AWDL_RX_PRB_RESP,
+                                   WLC_E_AWDL_RX_ACT_FRAME,
+                                   WLC_E_AWDL_WOWL_NULLPKT,
+                                   WLC_E_AWDL_PHYCAL_STATUS,
+                                   WLC_E_AWDL_OOB_AF_STATUS,
+                                   WLC_E_AWDL_SCAN_STATUS,
+                                   WLC_E_AWDL_AW_START,
+                                   WLC_E_AWDL_AW_END,
+                                   WLC_E_AWDL_AW_EXT,
+                                   WLC_E_AWDL_PEER_CACHE_CONTROL};
 const unsigned bcm_awdl_event_count = sizeof bcm_awdl_events;
 
 static uint16_t be16(const uint8_t *p)
@@ -125,7 +134,7 @@ size_t bcm_probe_request(unsigned item, uint8_t *out, size_t size)
 }
 
 const char *const bcm_monitor_probe_names[BCM_MONITOR_PROBE_COUNT] = {"WLC_GET_MONITOR", "monitor_promisc_level",
-                                                                      "sta_monitor"};
+                                                                      "sta_monitor", "af_flying_max", "tsf"};
 
 size_t bcm_monitor_probe_request(unsigned item, uint8_t *out, size_t size)
 {
@@ -148,9 +157,9 @@ size_t bcm_actframe_request(uint8_t *out, size_t size, const uint8_t *frame, siz
     if ((fc & 0x00fc) != 0x00d0)  // type management, subtype action
         return 0;
     const size_t body = len - BCM_80211_MGMT_HDR_LEN;
-    const size_t total = sizeof(name) + BCM_AF_PARAMS_HDR_LEN + body;
-    if (total > size)
+    if (size < BCM_ACTFRAME_REQUEST_LEN)
         return 0;
+    memset(out, 0, BCM_ACTFRAME_REQUEST_LEN);
     uint8_t *p = out;
     memcpy(p, name, sizeof(name));
     p += sizeof(name);
@@ -170,7 +179,7 @@ size_t bcm_actframe_request(uint8_t *out, size_t size, const uint8_t *frame, siz
     for (unsigned i = 0; i < 4; ++i)
         *p++ = (uint8_t)(packet_id >> (8 * i));
     memcpy(p, frame + BCM_80211_MGMT_HDR_LEN, body);
-    return total;
+    return BCM_ACTFRAME_REQUEST_LEN;
 }
 
 void bcm_probe_record(struct bcm_awdl_probe *p, unsigned item, int status, const uint8_t *reply, size_t length)
@@ -218,10 +227,10 @@ const char *bcm_awdl_api_name(enum bcm_awdl_api api)
 }
 
 struct awdl_radio_verdict awdl_radio_verdict_of(int query, int abi_ok, int has_native, int can_monitor, int can_inject,
-                                                const struct bcm_awdl_probe *probe)
+                                                int can_tx_action, int trial, const struct bcm_awdl_probe *probe)
 {
-    struct awdl_radio_verdict v = {AWDL_RADIO_OFF, AWDL_OFF_NOT, bcm_awdl_api_of(probe)};
-    const int soft = can_monitor && can_inject;
+    struct awdl_radio_verdict v = {AWDL_RADIO_OFF, AWDL_OFF_NOT, bcm_awdl_api_of(probe), 0};
+    const int soft = can_monitor && can_inject && can_tx_action;
     if (query == -EAGAIN) {
         v.mode = AWDL_RADIO_UNDECIDED;
     } else if (query < 0) {
@@ -234,6 +243,10 @@ struct awdl_radio_verdict awdl_radio_verdict_of(int query, int abi_ok, int has_n
         v.off = AWDL_OFF_NO_API;
     } else {
         v.mode = has_native && v.api != BCM_AWDL_API_NONE ? AWDL_RADIO_NATIVE : AWDL_RADIO_SOFT;
+    }
+    if (trial && (v.off == AWDL_OFF_NO_BACKEND || v.off == AWDL_OFF_NO_API)) {
+        v.mode = AWDL_RADIO_SOFT;
+        v.trial = 1;
     }
     return v;
 }
@@ -448,11 +461,21 @@ uint16_t bcm_chanspec_of(struct awdl_chan c)
         return 0;
     if (p <= 14)
         return (uint16_t)(0x1000 | p);  // 2.4 GHz, 20 MHz
-    if (c.opclass == 0x80 && c.number >= 6 && p >= c.number - 6) {
-        const unsigned sb = (unsigned)(p - (c.number - 6)) / 4;  // which 20 MHz of the block is primary
-        return (uint16_t)(0xc000u | 0x2000u | (sb << 8) | c.number);
+    const uint8_t centre = awdl_chan_centre80(p);
+    if ((c.opclass == 0x80 || c.opclass == 0x81) && centre) {
+        const unsigned sb = (unsigned)(p - (centre - 6)) / 4;  // which 20 MHz of the block is primary
+        return (uint16_t)(0xc000u | 0x2000u | (sb << 8) | centre);
     }
     return (uint16_t)(0xc000u | 0x1000u | p);  // 5 GHz, 20 MHz
+}
+
+uint16_t bcm_chanspec20(uint8_t channel, int d11n)
+{
+    if (!channel)
+        return 0;
+    if (d11n)  // brcmu_d11n_encchspec: band 2G 0x2000 / 5G 0x1000, BW_20 0x0800, no sideband 0x0300
+        return (uint16_t)((channel <= 14 ? 0x2000u : 0x1000u) | 0x0800u | 0x0300u | channel);
+    return (uint16_t)((channel <= 14 ? 0x0000u : 0xc000u) | 0x1000u | channel);  // d11ac: band, BW_20
 }
 
 uint8_t bcm_chanspec_primary(uint16_t chanspec)

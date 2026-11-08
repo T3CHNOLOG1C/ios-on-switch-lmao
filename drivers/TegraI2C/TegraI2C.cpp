@@ -32,6 +32,10 @@
 #ifndef TEGRA_I2C_HOST_MODEL
 #include "../../kits/SwitchDMA/SwitchDcache.h"
 #include "../../kits/SwitchMMIO/SwitchMMIO.h"
+// kernel/switch/diag/threads.c
+extern "C" void switch_print_thread(const void *thread, const char *who);
+extern "C" void switch_print_processors(const char *who);
+extern "C" void switch_sched_describe(char *buffer, size_t size, const void *thread);
 #endif
 
 extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
@@ -416,6 +420,9 @@ int sleepForAction(unsigned bus, Bus &b, uint64_t us)
 {
     uint64_t deadline = 0;
     clock_interval_to_deadline(static_cast<uint32_t>(us), kMicrosecondScale, &deadline);
+#ifndef TEGRA_I2C_HOST_MODEL
+    char atDeadline[320] = "";
+#endif
     for (bool grace = false;; grace = true) {
         while (b.active && IOLockSleepDeadline(b.irqLock, &b.active, deadline, THREAD_UNINT) != THREAD_TIMED_OUT) {
         }
@@ -438,11 +445,23 @@ int sleepForAction(unsigned bus, Bus &b, uint64_t us)
                 tegra_apbdma_describe(b.dma, dma, sizeof(dma));
                 panic("TegraI2C: I2C%u DMA end of count lost: %s", bus, dma);
             }
+#ifndef TEGRA_I2C_HOST_MODEL
+            // The line fired and its source masked it, but the shared work loop never ran the action: say where its
+            // thread is (state, wait, stack) before the panic.
+            IOLog("TegraI2C: at the deadline, work loop %s\n", atDeadline);
+            switch_print_thread(gLoop->getThread(), "TegraI2C: work loop");
+            switch_print_processors("TegraI2C");
+            for (unsigned other = 1; other <= kBuses; ++other)
+                IOLog("TegraI2C: I2C%u irqLock %p\n", other, gBus[other - 1].irqLock);
+#endif
             char gic[192];
             switch_interrupt_describe(intid(bus), gic, sizeof(gic));
             panic("TegraI2C: I2C%u interrupt lost (INTID %u): INT_STATUS %#x INT_MASK %#x FIFO_STATUS %#x, %s", bus,
                   intid(bus), status, mask, r32(b.regs, FIFO_STATUS), gic);
         }
+#ifndef TEGRA_I2C_HOST_MODEL
+        switch_sched_describe(atDeadline, sizeof(atDeadline), gLoop->getThread());
+#endif
         clock_interval_to_deadline(kGraceMs, kMillisecondScale, &deadline);
     }
     if (!b.busClear) {

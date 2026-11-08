@@ -138,6 +138,7 @@
 #include "SwitchBluetooth.h"
 #include "SwitchBluetoothLeFilter.h"
 #include "../../kits/SwitchDMA/SwitchDcache.h"
+#include "../../kits/SwitchDT/SwitchDTProperty.h"
 #include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
 #include "../../kits/SwitchRefusal/SwitchRefusal.h"
 #include "SwitchBluetoothLinks.h"
@@ -716,7 +717,7 @@ private:
     void linkCompletion(uint16_t opcode, bool status, uint8_t result);
     void linkLog(const char *direction, const char *line, const switch_bt_link *last = nullptr);
 
-    OSData *patch = nullptr;
+    const OSData *patch = nullptr;
     uint8_t address[6] = {};
     bool haveAddress = false;
     const char *addressFrom = "ADT";
@@ -882,9 +883,9 @@ OSDefineMetaClassAndStructors(SwitchBluetooth, IOService)
     void announceAddressToRails()
     {
         const IORegistryEntry *node = IORegistryEntry::fromPath("/arm-io/bluetooth", gIODTPlane);
-        const OSData *data = node ? OSDynamicCast(OSData, node->getProperty("local-mac-address")) : nullptr;
-        if (data && data->getLength() == 6)
-            switch_joycon_bluetooth_address(static_cast<const uint8_t *>(data->getBytesNoCopy()));
+        uint8_t unit[6];
+        if (switch_dt_value(node, "local-mac-address", &unit))
+            switch_joycon_bluetooth_address(unit);
         OSSafeReleaseNULL(node);
     }
 
@@ -950,7 +951,7 @@ bool SwitchBluetooth::start(IOService *provider)
     // The packager's /arm-io/bluetooth node (it is also the IOService bluetoothd finds by name). The patch must be
     // whole Write_RAM records ending in Launch_RAM before the chip ever sees it.
     if (const IORegistryEntry *node = IORegistryEntry::fromPath("/arm-io/bluetooth", gIODTPlane)) {
-        OSData *data = OSDynamicCast(OSData, node->getProperty("switch,patchram"));
+        const OSData *data = switch_dt_data(node, "switch,patchram");
         if (data && validPatch(static_cast<const uint8_t *>(data->getBytesNoCopy()), data->getLength())) {
             patch = data;
             patch->retain();
@@ -958,9 +959,7 @@ bool SwitchBluetooth::start(IOService *provider)
             IOLog("SwitchBluetooth: switch,patchram is not a .hcd record list (%u bytes); ignored\n",
                   data->getLength());
         }
-        data = OSDynamicCast(OSData, node->getProperty("local-mac-address"));  // the unit's, see publishAddress()
-        if (data && data->getLength() == 6) {
-            memcpy(address, data->getBytesNoCopy(), 6);
+        if (switch_dt_value(node, "local-mac-address", &address)) {  // the unit's, see publishAddress()
             haveAddress = true;
             if (__atomic_load_n(&gStagedState, __ATOMIC_ACQUIRE) == kStagedFound && !memcmp(address, gStaged, 6)) {
                 addressFrom = "staged";

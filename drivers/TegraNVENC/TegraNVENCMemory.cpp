@@ -8,7 +8,6 @@
 #include "../TegraSMMU/TegraSMMU.h"
 #include "../TegraSMMU/TegraSMMUEngine.h"
 #include "../../kits/SwitchDMA/SwitchDMABuffer.h"
-#include "../../kits/SwitchDMA/SwitchDcache.h"
 
 namespace {
 constexpr uint64_t kWindowBase = 1ULL << 30, kWindowBytes = 1ULL << 30;
@@ -24,16 +23,6 @@ const TegraSMMUSwgroup kGroups[] = {
 TegraSMMUEngine gSpace;
 uint64_t gWired;  // atomic: bytes of every live buffer
 }  // namespace
-
-extern "C" void tegra_nvenc_cache_clean(const void *va, size_t size)
-{
-    switch_dcache_clean(va, size);
-}
-
-extern "C" void tegra_nvenc_cache_flush(const void *va, size_t size)
-{
-    switch_dcache_clean_invalidate(va, size);
-}
 
 extern "C" int tegra_nvenc_memory_init(const switch_dma_buffer *firmware, const switch_dma_buffer *setup,
                                        const switch_dma_buffer *scratch, char *line, size_t size)
