@@ -39,7 +39,6 @@ USER_FILES = ('bootargs.txt',)
 # boot package's, so a deploy keeps them.
 INSTALL_PART = re.compile(r'([A-Z0-9]+)\.SII\.([0-9]{3})')
 HASH_CHUNK = 8 << 20
-MOUNT_TRIES = 3
 
 
 class RefusedError(Exception):
@@ -248,22 +247,10 @@ def mounted(identifier: str, log: host.Log, read_only: bool = False, owners: boo
         # macOS's own mount of a card enforces owners, which closes root's 0700 folders to the user
         disks.unmount(identifier, log)
     with tempfile.TemporaryDirectory(prefix='switch-', ignore_cleanup_errors=True) as directory:
-        args = ['mount']
-        if read_only:
-            args.append('readOnly')
-        args += ['-mountOptions', 'nobrowse' if owners else 'nobrowse,noowners', '-mountPoint', directory, identifier]
-        where = None
-        for attempt in range(MOUNT_TRIES):
-            host.run('diskutil', *args, log=log, check=attempt + 1 == MOUNT_TRIES)
-            where = host.mount_point(identifier)
-            if where and os.path.realpath(where) == os.path.realpath(directory):
-                break
-            # After a partition table write macOS mounts the card's volumes itself, and can take this one between
-            # our check and our mount; what we would write into `directory` would then land on the Mac's disk.
-            if where:
-                disks.unmount(identifier, log)
-        else:
-            raise host.HostError(f'{identifier} would not mount at {directory} (macOS has it at {where or "nowhere"})')
+        mode = ['readOnly'] if read_only else []
+        disks.mount_at(
+            identifier, directory, [*mode, '-mountOptions', 'nobrowse' if owners else 'nobrowse,noowners'], log
+        )
         try:
             if owners and os.geteuid() == 0:
                 host.run('diskutil', 'enableOwnership', directory, log=log)

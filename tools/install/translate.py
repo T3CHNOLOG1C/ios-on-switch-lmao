@@ -52,6 +52,8 @@ def make_delta(args: argparse.Namespace, log: host.Log) -> None:
         disks.attached(Path(args.image), log, writable=False) as image,
         disks.mounted(_volume(image, volume_uuid), log, owners=False, read_only=True) as root,
     ):
+        if not any(root.iterdir()):
+            raise host.HostError(f'{args.role}: the volume mounted at {root} is empty')
         command = [args.driver, '--role', args.role, '--tool', args.tool, '--volume', str(root), '--out', args.out]
         for trust in args.apple_trustcache:
             command += ['--apple-trustcache', trust]
