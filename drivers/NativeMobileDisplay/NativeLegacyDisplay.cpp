@@ -5204,11 +5204,11 @@ public:
 #undef LEAF
 };
 
-// OSDefineMetaClassAndStructors(NativeLegacyDisplay, IOMobileFramebufferLegacy), registered under J120's class name. iPadOS
-// finds the internal display as an AppleCLCD: VideoToolbox's and MediaToolbox's FigGetAlignmentForIOSurfaceOutput match
-// IOServiceMatching("AppleCLCD") for the display pipe's alignment, and the poster extensions' sandbox profiles allow
-// iokit-get-properties on the iokit-registry-entry-class AppleCLCD. Apple's AppleCLCD (AppleMobileDispH9G) is not prelinked
-// here, so the name is free.
+// OSDefineMetaClassAndStructors(NativeLegacyDisplay, IOMobileFramebufferLegacy), registered under the class name of J120's
+// and J181's internal display (AppleMobileDispH9G's and AppleMobileDispH12P's IOClass). iPadOS finds the internal display
+// as an AppleCLCD: VideoToolbox's and MediaToolbox's FigGetAlignmentForIOSurfaceOutput match IOServiceMatching("AppleCLCD")
+// for the display pipe's alignment, and the poster extensions' sandbox profiles allow iokit-get-properties on the
+// iokit-registry-entry-class AppleCLCD. Neither kext is prelinked here, so the name is free.
 OSDefineMetaClassWithInit(NativeLegacyDisplay, IOMobileFramebufferLegacy, ) NativeLegacyDisplay::MetaClass::MetaClass()
     : OSMetaClass("AppleCLCD", NativeLegacyDisplay::superClass, sizeof(NativeLegacyDisplay))
 {}

@@ -43,6 +43,11 @@ kernel_driver(
         "IOMobileFramebufferLegacy",
         "IOSurface",
     ],
+    # The IPSW kind's iPad (SWITCH_IPSW_DEVICE_*): SwitchFrameInfo.h's key set.
+    copts = [
+        "-include",
+        "{build}/ipsw-volumes/switch_ipsw_volumes.h",
+    ],
     hdr_deps = [
         "drivers/ArmGIC",
         "drivers/SwitchPower",
