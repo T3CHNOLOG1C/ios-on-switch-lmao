@@ -92,6 +92,36 @@ class SystemAppsTest(unittest.TestCase):
         self.assertTrue(self.sentinel.is_file())
 
 
+class LaunchServicesRebuildTest(unittest.TestCase):
+    def setUp(self):
+        self.data = Path(tempfile.mkdtemp())
+        caches = self.data / 'mobile/Containers/Data/InternalDaemon/097FB1B3/Library/Caches'
+        caches.mkdir(parents=True)
+        self.store = caches / 'com.apple.LaunchServices-35651614-v2.csstore'
+        self.store.write_bytes(b'store')
+        self.other = caches / 'com.apple.LaunchServices.dirty'
+        self.other.write_bytes(b'')
+
+    def test_ios_27_rebuilds_and_17_does_not(self):
+        self.assertTrue(system_apps.rebuilds_launchservices('27.2'))
+        self.assertFalse(system_apps.rebuilds_launchservices('17.7.11'))
+        self.assertFalse(system_apps.rebuilds_launchservices(None))
+
+    def test_a_requested_rebuild_removes_only_the_store(self):
+        system_apps.request_migration(self.data, None, Log(), force=True, rebuild=True)
+        self.assertFalse(self.store.exists())
+        self.assertTrue(self.other.exists())
+        self.assertTrue((self.data / system_apps.SENTINEL).is_file())
+
+    def test_a_migration_without_rebuild_keeps_the_store(self):
+        system_apps.request_migration(self.data, None, Log(), force=True)
+        self.assertTrue(self.store.exists())
+
+    def test_no_migration_no_rebuild(self):
+        self.assertFalse(system_apps.request_migration(self.data, system_apps.digest(self.data), Log(), rebuild=True))
+        self.assertTrue(self.store.exists())
+
+
 class RestageTest(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
