@@ -1261,6 +1261,8 @@ panic_trap_to_debugger(const char *panic_format_str, va_list *panic_args, unsign
 	read_lbr();
 #endif
 
+	switch_panic_early(panic_format_str, panic_args, panic_caller);
+
 	/* For very early panics before XNU serial initialization. */
 	if (PE_kputc == NULL) {
 		char buf[EARLY_PANIC_BUFLEN];
@@ -1341,7 +1343,6 @@ panic_trap_to_debugger(const char *panic_format_str, va_list *panic_args, unsign
 
 	/* Never hide pointers from panic logs. */
 	doprnt_hide_pointers = FALSE;
-	switch_panic_early(panic_format_str, panic_args, panic_caller);
 	switch_diag_panic(panic_format_str, panic_args, panic_caller);
 
 	if (ctx != NULL) {
