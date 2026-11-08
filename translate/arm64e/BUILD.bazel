@@ -148,6 +148,7 @@ py_test(
     name = "shapes_test",
     size = "small",
     srcs = ["xnu/prelink26/shapes_test.py"],
+    imports = ["xnu/prelink26"],
     deps = [":prelink26"],
 )
 
