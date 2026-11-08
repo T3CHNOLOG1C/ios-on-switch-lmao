@@ -956,7 +956,11 @@ private:
     bool heapPlace(const uint8_t *bytes, uint32_t size, uint64_t &offset);
     void build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs, const PlacedProgram &fs,
                const uint32_t *blob, const char *keyString, bool caTransform);
-    std::vector<uint32_t> constexprTsc_;
+    // The constexpr samplers' header indices, the pack's then the runtime records' (addRecord, under lock_). A slot is written
+    // once, before the state that names it is published, and never moves: a draw reads it without lock_.
+    static constexpr uint32_t kConstexprSamplers = 256;  // PackEntry::sampler is a byte
+    uint32_t constexprTsc_[kConstexprSamplers] = {};
+    uint32_t constexprCount_ = 0;
 
     // the states the runtime made (addRecord), never removed: Pipeline::rec points into them
     struct Completed {

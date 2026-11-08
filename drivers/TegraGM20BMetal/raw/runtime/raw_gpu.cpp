@@ -369,9 +369,13 @@ bool Device::init(std::string &err)
         neutralTsc_ = nextTsc_++;
     }
     const uint32_t *cs = pack_.section<uint32_t>(PackSamplers);
+    if (pack_.header()->samplers > kConstexprSamplers) {
+        err = "the pack's constexpr samplers do not fit its entries' sampler byte";
+        return false;
+    }
     for (uint32_t i = 0; i < pack_.header()->samplers; i++) {
         memcpy(tsc_.cpu + 32 * nextTsc_, cs + 8 * i, 32);
-        constexprTsc_.push_back(nextTsc_++);
+        constexprTsc_[constexprCount_++] = nextTsc_++;
     }
     // SET_CT_WRITE(i), as the baseline leaves it where a state's registers do not set it
     const uint32_t *base = pack_.section<uint32_t>(PackBaseline);

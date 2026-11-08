@@ -63,13 +63,13 @@ Pipeline *Device::addRecord(const RuntimeRecord &r, bool caTransform, std::strin
         auto known = completedSamplers_.find(words);
         if (known == completedSamplers_.end()) {
             uint32_t tsc = 0;
-            if (constexprTsc_.size() > 0xFF || !takeTsc(tsc)) {
+            if (constexprCount_ == kConstexprSamplers || !takeTsc(tsc)) {
                 why = "no room for its sampler headers";
                 return nullptr;
             }
             memcpy(tsc_.cpu + 32 * tsc, words.data(), 32);
-            constexprTsc_.push_back(tsc);
-            known = completedSamplers_.emplace(words, uint8_t(constexprTsc_.size() - 1)).first;
+            constexprTsc_[constexprCount_] = tsc;
+            known = completedSamplers_.emplace(words, uint8_t(constexprCount_++)).first;
         }
         e.sampler = known->second;
     }
