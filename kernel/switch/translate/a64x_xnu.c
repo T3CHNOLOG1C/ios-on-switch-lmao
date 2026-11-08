@@ -336,7 +336,7 @@ static void a64x_find_islands(struct a64x_image *im, const struct a64x_layout *l
             kfree_data(buf, lay->dic_size);
         }
     }
-    struct a64x_islands is = {im->data, fs, 0, 0, false, false, 0, 0, 0};
+    struct a64x_islands is = {im->data, fs, 0, 0, false, false, 0, 0, 0, 0};
     uint8_t *dic_only = im->data;
     im->data = NULL; /* the pass sees instruction sections only, not the islands it is finding */
     struct a64x_code_map cm = {im, img_is_code, im->map_flags, NULL};

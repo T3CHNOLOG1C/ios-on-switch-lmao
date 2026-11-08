@@ -141,7 +141,7 @@ uint64_t islandMask(const std::initializer_list<uint32_t> words)
 {
     const std::vector<uint32_t> w(words);
     uint8_t data[8] = {};
-    a64x_islands is = {data, nullptr, 0, 0, false, false, 0, 0, 0};
+    a64x_islands is = {data, nullptr, 0, 0, false, false, 0, 0, 0, 0};
     a64x_islands_page(&is, w.data(), static_cast<uint32_t>(w.size()), 0, 0x1000, nullptr);
     a64x_islands_end(&is, w.size());
     uint64_t mask = 0;
@@ -159,6 +159,12 @@ TEST(Islands, ATableOfSmallSixtyFourBitValuesIsData)
 TEST(Islands, CodeThatEndsInACallOrABranchBeforePaddingStaysCode)
 {
     EXPECT_EQ(0u, islandMask({0xAA0003E8, 0x94000010, 0, 0xAA0003E8, 0xD65F0FFF, 0, 0xAA0003E8, 0xD63F0100}));
+}
+
+TEST(Islands, DataRightBehindItsCodeIsDataAndTheCodeStays)
+{
+    // A call that does not return, then a constant, then padding.
+    EXPECT_EQ(0b010000u, islandMask({0xAA0003E8, 0xD65F0FFF, 0xAA0003E8, 0x94000010, 0x1FFFFFFF, 0}));
 }
 
 }  // namespace

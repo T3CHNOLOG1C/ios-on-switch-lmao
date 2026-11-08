@@ -140,9 +140,10 @@ uint32_t a64x_dead_checks(const uint32_t *in, uint32_t *out, uint32_t n, uint64_
  * Data islands in an image translated page by page (no plan, no whole-image reachability): the words of its
  * instruction sections are cut into runs at UDF/zero words, at non-code words and at function starts
  * (LC_FUNCTION_STARTS); a run holding at least one unallocated encoding per 32 words is data (assembler tables:
- * K256, sincos coefficients, Hann windows are 8-50% unallocated; compiled code has none), and so is a piece that runs
- * into padding without ending its code (a64x_ends_code): a table of 64-bit values below 2^32 is single words between
- * zero halves, each read alone (lzfse's mask table: 0x1fffffff decodes as an FP16 FNMSUB). LC_DATA_IN_CODE ranges are
+ * K256, sincos coefficients, Hann windows are 8-50% unallocated; compiled code has none), and so is what a piece runs
+ * into padding with, after its last word that ends code (a64x_ends_code): a table of 64-bit values below 2^32 is
+ * single words between zero halves, each read alone (lzfse's mask table: 0x1fffffff decodes as an FP16 FNMSUB), and
+ * a jump table can sit right behind the code that dispatches through it. LC_DATA_IN_CODE ranges are
  * marked by the caller. Streamed: pages in order, the open run carries over page boundaries.
  */
 bool a64x_unallocated(uint32_t w)
@@ -163,19 +164,24 @@ static void piece_close(struct a64x_islands *is, uint64_t end, bool padded)
 		 * (Requiring two unallocated words per piece would keep 4 more obfuscated-code rewrites in the iPadOS cache but
 		 * miss one data word in each cache: silent corruption is the worse failure, so one word is enough.)
 		 */
-        bool data =
-            is->sticky || (is->pnun && is->pnun * 32 >= end - is->piece) || (padded && !a64x_ends_code(is->last));
+        bool data = is->sticky || (is->pnun && is->pnun * 32 >= end - is->piece);
+        uint64_t from = is->piece;
+        if (!data && padded && !a64x_ends_code(is->last)) {
+            data = true;
+            from = is->tail; /* the code up to its last call stays */
+        }
         if (data) {
-            for (uint64_t k = is->piece; k < end; k++) {
+            for (uint64_t k = from; k < end; k++) {
                 is->data[k >> 3] |= (uint8_t)(1u << (k & 7));
             }
             if (!is->sticky)
                 is->runs++;
             is->sticky = true;
-            is->words += end - is->piece;
+            is->words += end - from;
         }
     }
     is->piece = end;
+    is->tail = end;
     is->pnun = 0;
 }
 
@@ -218,10 +224,13 @@ void a64x_islands_page(struct a64x_islands *is, const uint32_t *w, uint32_t n, u
         if (fs || !is->open) {
             islands_close(is, k, false);
             is->open = true;
-            is->piece = k;
+            is->piece = is->tail = k;
         }
         is->pnun += a64x_unallocated(w[i]);
         is->last = w[i];
+        if (a64x_ends_code(w[i])) {
+            is->tail = k + 1;
+        }
         if (terminator(w[i])) {
             piece_close(is, k + 1, false);
         }

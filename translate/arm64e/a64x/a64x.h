@@ -187,6 +187,7 @@ struct a64x_islands {
     uint64_t piece, pnun;  /* open piece: first word, unallocated words in it */
     bool open, sticky;
     uint64_t runs, words; /* stats: data runs and words found */
+    uint64_t tail;        /* the open piece's first word after its last call (BL, BLR) */
     uint32_t last;        /* the open piece's last word */
 };
 

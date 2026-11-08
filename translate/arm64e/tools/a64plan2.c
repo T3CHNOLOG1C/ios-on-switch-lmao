@@ -753,7 +753,7 @@ static void reach_pass(void)
  * builder's stub elimination, code behind unresolved indirect branches) stay code.
  */
 static uint64_t isl_runs, isl_words, isl_mod, isl_sites, code_runs, code_runs_mod, code_mod_words, code_sites,
-    reached_impossible;
+    reached_impossible, tail_runs, tail_words;
 static FILE *isl_out;
 static uint64_t ri_hist[4];
 static uint64_t cls_unreached_code[64];
@@ -829,10 +829,28 @@ static void drop_data_islands(void)
 			 */
             if (nun && (uint64_t)nun * 32 >= y - x)
                 bad = true;
-            /* Into padding (not into reached code) without ending its code: data (a64x_ends_code). */
+            /*
+			 * Into padding (not into reached code) without ending its code: the words after the last one that ends code
+			 * are data (a64x_ends_code), the code before them stays (dav1d's assembly keeps each jump table right behind
+			 * the blocks it dispatches to).
+			 */
             const bool padded = y == xn || !BITV(codebits[f], y) || !(u32(fb[f], 4 * y) >> 16);
-            if (padded && !a64x_ends_code(u32(fb[f], 4 * (y - 1))))
-                bad = true;
+            if (!bad && padded && !a64x_ends_code(u32(fb[f], 4 * (y - 1)))) {
+                uint64_t t = y - 1;
+                while (t > x && !a64x_ends_code(u32(fb[f], 4 * (t - 1))))
+                    t--;
+                if (t == x) {
+                    bad = true;
+                } else {
+                    tail_runs++;
+                    tail_words += y - t;
+                    if (isl_out)
+                        fprintf(isl_out, "TAIL %llx +%llu %s\n", (unsigned long long)(fm[q].addr + 4 * (t - x0)),
+                                (unsigned long long)(y - t), sec_of(va));
+                    for (uint64_t z = t; z < y; z++)
+                        codebits[f][z >> 3] &= (uint8_t)~(1 << (z & 7));
+                }
+            }
             if (bad) {
                 isl_runs++;
                 isl_words += y - x;
@@ -877,9 +895,11 @@ static void drop_data_islands(void)
     printf("impossible words in reached code: sve %llu sme %llu amx %llu unallocated %llu\n",
            (unsigned long long)ri_hist[0], (unsigned long long)ri_hist[1], (unsigned long long)ri_hist[2],
            (unsigned long long)ri_hist[3]);
-    printf("data islands: %llu runs, %llu words, %llu would-be-rewritten words (%llu LSE sites) left alone\n",
-           (unsigned long long)isl_runs, (unsigned long long)isl_words, (unsigned long long)isl_mod,
-           (unsigned long long)isl_sites);
+    printf(
+        "data islands: %llu runs, %llu words, %llu would-be-rewritten words (%llu LSE sites) left alone; data behind "
+        "code: %llu runs, %llu words\n",
+        (unsigned long long)isl_runs, (unsigned long long)isl_words, (unsigned long long)isl_mod,
+        (unsigned long long)isl_sites, (unsigned long long)tail_runs, (unsigned long long)tail_words);
     printf("unreached code-like runs: %llu (%llu with %llu rewrites, %llu LSE sites); by section:",
            (unsigned long long)code_runs, (unsigned long long)code_runs_mod, (unsigned long long)code_mod_words,
            (unsigned long long)code_sites);
@@ -1730,7 +1750,7 @@ int a64x_cmd_plan2(int argc, char **argv)
             for (uint64_t k = 0; k < n; k++)
                 if (BITV(fsbits[f], x0 + k))
                     fsl[k >> 3] |= 1 << (k & 7);
-            struct a64x_islands is = {data, fsl, 0, 0, false, false, 0, 0, 0};
+            struct a64x_islands is = {data, fsl, 0, 0, false, false, 0, 0, 0, 0};
 
             struct ctx_t {
                 uint8_t *bits;
