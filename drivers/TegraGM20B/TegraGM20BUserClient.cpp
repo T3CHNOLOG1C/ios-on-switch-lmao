@@ -875,7 +875,7 @@ OSDefineMetaClassAndStructors(AGXDeviceUserClient, IOUserClient)
 	lock_ = IOLockAlloc();
 	if (!lock_ || tgm_vm_new(&vm_))
 		return false;
-	tgm_vm_claim(vm_, this);
+	tgm_vm_claim_connection(vm_, this);
 	// fence page: pool memory (write-combined), GPU-mapped in the kernel range, read-only to the client
 	if (tgm_fence_page_get(&fence_va_, &fence_pa_) ||
 	    tgm_mem_new(vm_, &fence_pa_, 1, &fence_mem_) ||

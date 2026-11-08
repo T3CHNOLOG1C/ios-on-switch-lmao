@@ -817,6 +817,7 @@ struct tgm_vm {
 	int imports_lost;         /* one could not be recorded: taken as importing every page */
 	struct tgm_tlb_space tlb; /* GPU-ordered maps (TegraGM20BTlb.h) */
 	const void *owner;        /* tgm_vm_claim: the connection whose channels alone address it */
+	const void *connection; /* tgm_vm_claim_connection: the client whose pushes a hang reads */
 };
 
 struct tgm_import {
@@ -948,6 +949,12 @@ void tgm_vm_del(struct tgm_vm **pvm)
 void tgm_vm_claim(struct tgm_vm *vm, const void *owner)
 {
 	vm->owner = owner;
+}
+
+void tgm_vm_claim_connection(struct tgm_vm *vm, const void *connection)
+{
+	vm->owner = connection;
+	vm->connection = connection;
 }
 
 static int stats_on(void);
@@ -1351,7 +1358,7 @@ static void chan_describe(struct tgm_chan *chan, char *buf, unsigned int len)
 	tgm_hang_engine(eng, engine, sizeof(engine));
 	tgm_hang_note(&chan->hang, tgm_chan_completed(chan) + 1, chan->submitted,
 		      chan->chan.gpfifo.map.ptr, chan->chan.gpfifo.max, chan->ring_va,
-		      CHAN_PUSH_BYTES, chan->vm->owner, note, sizeof(note));
+		      CHAN_PUSH_BYTES, chan->vm->connection, note, sizeof(note));
 	tegra_gm20b_mc_errors(&mc_int, &mc_err, &mc_adr);
 	scnprintf(
 		buf, len,
@@ -4097,12 +4104,35 @@ int tgm_writer_done(uint32_t uid, uint32_t seqno)
 	return done;
 }
 
+/* live_lock held: what a wait for `uid` reaching `seqno` is late on. A kernel copy that sits on an acquire completes
+ * nothing of its own, so its lateness is the first writer it acquires on that has not completed; only once they all
+ * have is it the copy's. */
+static struct tgm_chan *late_writer(u32 uid, u32 seqno, const struct tgm_relayout_writer *acquired,
+				    u32 nacquired, u32 *late_seqno)
+{
+	struct tgm_chan *chan = NULL;
+	u32 i = 0;
+
+	for (i = 0; i < nacquired; i++) {
+		chan = live_by_uid(acquired[i].uid);
+		if (chan && !chan->error &&
+		    (s32)(tgm_chan_completed(chan) - acquired[i].seqno) < 0) {
+			*late_seqno = acquired[i].seqno;
+			return chan;
+		}
+	}
+	*late_seqno = seqno;
+	return live_by_uid(uid);
+}
+
 /* No bound of its own: a writer that stops progressing is recovered (killed, its fence released) as
  * tegra_gm20b_sync_for_cpu's is, which ends the wait; a lost interrupt is nvxnu_wake_due's panic. */
-void tgm_writer_wait(uint32_t uid, uint32_t seqno)
+static void writer_wait(u32 uid, u32 seqno, const struct tgm_relayout_writer *acquired,
+			u32 nacquired)
 {
 	struct tgm_chan *chan = NULL;
 	enum tgm_hang verdict = TGM_HANG_STUCK;
+	u32 late = 0;
 
 	for (;;) {
 		const u64 end = nvxnu_nanotime() + TGM_WRITER_HANG_NS;
@@ -4121,13 +4151,24 @@ void tgm_writer_wait(uint32_t uid, uint32_t seqno)
 			continue;
 		verdict = TGM_HANG_PROGRESSING;
 		mutex_lock(&live_lock);
-		chan = live_by_uid(uid);
+		chan = late_writer(uid, seqno, acquired, nacquired, &late);
 		if (chan)
-			verdict = hang_recover(chan, "IOSurface lock", seqno, TGM_WRITER_HANG_NS);
+			verdict = hang_recover(chan, "IOSurface lock", late, TGM_WRITER_HANG_NS);
 		if (verdict == TGM_HANG_STUCK)
-			tgm_chan_hung(chan, "IOSurface lock", seqno, TGM_WRITER_HANG_NS);
+			tgm_chan_hung(chan, "IOSurface lock", late, TGM_WRITER_HANG_NS);
 		mutex_unlock(&live_lock);
 	}
+}
+
+void tgm_writer_wait(uint32_t uid, uint32_t seqno)
+{
+	writer_wait(uid, seqno, NULL, 0);
+}
+
+void tgm_copy_wait(uint32_t uid, uint32_t seqno, const struct tgm_relayout_writer *acquired,
+		   uint32_t nacquired)
+{
+	writer_wait(uid, seqno, acquired, nacquired);
 }
 
 int tgm_writer_fence_va(struct tgm_vm *vm, uint32_t uid, uint64_t *va)
