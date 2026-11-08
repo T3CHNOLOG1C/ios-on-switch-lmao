@@ -5972,30 +5972,14 @@ native_switch_overlay_image(const struct image_params *imgp)
 
 /*
  * Switch: the two read-only Apple cryptex mounts (SwitchRawMount.h native_switch_raw_cache_prepare mounts the
- * original System and App cryptex APFS volumes at /private/preboot/Cryptexes/{OS,App}). Real iOS grafts these onto the
- * preboot volume (libignition), so their executables are "on an authorized cryptex / system volume" and meet the self
- * launch constraint every launchd system service and BrowserEngineKit web process requires (21H461 AMFI:
- * on-system-volume or on-authorized-authapfs-volume, launch-type 1, validation-category 1). We attach and mount them
- * instead of grafting, so that fact is otherwise absent and WebKit's BEWebContentProcess/BENetworkingProcess/
- * BERenderingProcess and the App-cryptex daemons (webbookmarksd, SafariBookmarksSyncAgent, Safari.History) die with a
- * Launch Constraint Violation before launch. Supply the graft's answer for vnodes on exactly these two mounts, by the
- * mount_t the kernel recorded when it mounted them (never a path string). This changes only the launch-constraint
- * decision: code-signing, cdhash and trust-cache enforcement are unchanged and happen during image activation, so a
- * binary on these mounts still has to match Apple's static trust cache exactly and nothing on Data gains anything.
+ * System and App cryptex APFS volumes at /private/preboot/Cryptexes/{OS,App} where iOS grafts them). Recorded by
+ * mount_t, never by path: VNOP_IOCTL answers FSIOC_AUTH_FS for their files as APFS does for a graft's
+ * (kernel/switch/vfs/auth_fs.c), which AMFI's launch constraints read as on-authorized-authapfs-volume.
  */
 mount_t native_owner_cryptex_mount[2] = {NULL, NULL};
 /* The Preboot mount the two cryptexes stand in a graft on (vfs_syscalls.c getfsstat64_callback reports its mount point
  * for them, as a graft's files would; their own f_mntonname is unchanged). */
 mount_t native_owner_cryptex_host = NULL;
-static bool
-native_switch_cryptex_image(const struct image_params *imgp)
-{
-	mount_t mp = imgp->ip_vp ? vnode_mount(imgp->ip_vp) : NULL;
-	if (!mp || !(vfs_flags(mp) & MNT_RDONLY)) return false;
-	for (unsigned i = 0; i < 2; ++i)
-		if (native_owner_cryptex_mount[i] && mp == native_owner_cryptex_mount[i]) return true;
-	return false;
-}
 
 /*
  * exec_extract_strings
@@ -9355,11 +9339,10 @@ process_signature(proc_t p, struct image_params *imgp)
 		goto done;
 	}
 
-	/* call the launch constraints hook (Switch: not for the Data overlay's executables, native_switch_overlay_image,
-	 * nor for the two grafted-equivalent Apple cryptex mounts, native_switch_cryptex_image; trust cache still enforced) */
+	/* call the launch constraints hook (Switch: not for the Data overlay's executables, native_switch_overlay_image;
+	 * trust cache still enforced) */
 	os_reason_t launch_constraint_reason;
-	error = (native_switch_overlay_image(imgp) || native_switch_cryptex_image(imgp)) ?
-	    0 : mac_proc_check_launch_constraints(p, imgp, &launch_constraint_reason);
+	error = native_switch_overlay_image(imgp) ? 0 : mac_proc_check_launch_constraints(p, imgp, &launch_constraint_reason);
 	if (error != 0) {
 		signature_failure_reason = launch_constraint_reason;
 		goto done;

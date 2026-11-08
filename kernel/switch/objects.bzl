@@ -28,6 +28,7 @@ SWITCH_OBJECTS = {
         ("bsd/kern/lockdown_mode.c", "sysctl/lockdown.c", [], ["12377.121.6"]),
         ("bsd/kern/kern_shutdown.c", "shutdown/shutdown.c", []),
         ("bsd/vfs/vfs_lookup.c", "vfs/pretranslated.c", []),
+        ("bsd/vfs/kpi_vfs.c", "vfs/auth_fs.c", []),
         # The translator's core is //translate/arm64e's (its host tools and tests build the same files).
         ("bsd/kern/mach_loader.c", "translate/a64x_xnu.c", [], ["12377.121.6"]),
         ("bsd/kern/mach_loader.c", "//translate/arm64e/a64x/a64x_classify.c", [], ["12377.121.6"]),
