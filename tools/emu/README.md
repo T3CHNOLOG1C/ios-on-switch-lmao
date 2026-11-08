@@ -20,10 +20,12 @@ or a mount requested by a job launchd spawned.
 
 `--kind` builds `//:boot` with `--//ipsw:kind` in the output base `bazel run` itself uses. `--bazel-flag` passes flags
 to that build (for example `--bazel-flag=--config=agent`). `--package DIR` boots an existing `//:boot` output instead,
-and `--kernel` names its prelinked kernel for the live log. Guest time follows executed instructions
-(`-icount shift=auto`, one host thread for all four cores), so a busy Mac cannot expire a driver's timeout before the
-device it waits for has run: with one thread per core (`--mttcg`) and the Mac at load 50, drivers panicked on interrupts
-that had not been lost. `--mttcg` is faster on an idle Mac. The run directory is `out/emu/<kind>-<time>` unless `--out`
+and `--kernel` names its prelinked kernel for the live log. Guest time follows executed instructions, one
+nanosecond each (`-icount shift=0`, one host thread for all four cores), so neither a busy Mac nor TCG's own speed can
+expire a driver's timeout before the work it waits for has run. Kernel log times are then instruction-scaled seconds,
+close to the A57's CPU time, not wall time. With one thread per core (`--mttcg`) at load 50, or with guest time kept to
+the wall clock (`shift=auto`), drivers panicked on interrupts that had not been lost. `--mttcg` is faster on an idle
+Mac. The run directory is `out/emu/<kind>-<time>` unless `--out`
 names one:
 
 | File | What |

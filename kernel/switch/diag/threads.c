@@ -166,3 +166,27 @@ void switch_print_processors(const char *who)
                active ? active->thread_id : 0, active ? active->sched_pri : -1, cdp ? cdp->cpu_signal : 0);
     }
 }
+
+/*
+ * One line of what the scheduler is doing: `thread`'s state, priority and queue, then each processor's state and its
+ * active thread (tid, task pid, priority). Formatting only, no console: a driver takes it at a deadline and prints it
+ * only if it panics later.
+ */
+void switch_sched_describe(char *buffer, size_t size, const void *ref)
+{
+    thread_t thread = (thread_t)(uintptr_t)ref;
+    int used = 0;
+    if (thread != NULL) {
+        used = snprintf(buffer, size, "T%llu state %#x pri %d/%d runq %d chosen %d |", thread->thread_id,
+                        (unsigned)thread->state, thread->base_pri, thread->sched_pri,
+                        thread->__runq.runq ? thread->__runq.runq->cpu_id : -1,
+                        thread->chosen_processor ? thread->chosen_processor->cpu_id : -1);
+    }
+    for (processor_t processor = processor_list; processor != NULL && used >= 0 && (size_t)used < size;
+         processor = processor->processor_list) {
+        thread_t active = processor->active_thread;
+        used += snprintf(buffer + used, size - (size_t)used, " cpu%d st%d T%llu/p%d/%d", processor->cpu_id,
+                         (int)processor->state, active ? active->thread_id : 0,
+                         active ? task_pid(get_threadtask(active)) : -1, active ? active->sched_pri : -1);
+    }
+}
