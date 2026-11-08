@@ -125,11 +125,6 @@ size_t copyWords();
 void emitCopyToLevel(Push &p, const MipChain &c, uint64_t chainVa, uint32_t level, const Pitch &src, uint32_t fmt2d,
                      uint32_t sx, uint32_t sy, uint32_t dx, uint32_t dy, uint32_t w, uint32_t h);
 
-// The reverse: `w` x `h` texels of chain level `level` at (sx, sy) into a pitch surface at (dx, dy), 1:1 (copyFromTexture ...
-// sourceLevel: n, Core Animation's average-luma read of its last level), with the same waits
-void emitCopyFromLevel(Push &p, const MipChain &c, uint64_t chainVa, uint32_t level, const Pitch &dst, uint32_t fmt2d,
-                       uint32_t sx, uint32_t sy, uint32_t dx, uint32_t dy, uint32_t w, uint32_t h);
-
 // The CPU reference of one chain step: level n+1 from level n exactly as the 2D engine's bilinear blit samples under
 // kGm20bSampling (u = (x + 0.5) * w_n / w_{n+1} - 0.5, clamp to edge, unorm8 per component, weights at 1/256): the host
 // tests' oracle.

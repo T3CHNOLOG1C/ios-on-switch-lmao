@@ -345,6 +345,8 @@ bool Kernel::channel(uint32_t engines, uint32_t &channel, const volatile uint32_
     }
     channel = r.channel;
     fence = reinterpret_cast<const volatile uint32_t *>(uintptr_t(fenceMap_) + r.fence_offset);
+    std::lock_guard<std::mutex> l(lostLock_);
+    opened_.fetch_add(1, std::memory_order_release);
     uint32_t reused = r.channel;
     lostChannel_.compare_exchange_strong(reused, 0, std::memory_order_relaxed);
     return true;
@@ -393,9 +395,10 @@ int Kernel::order(uint32_t channel, uint32_t flags, uint32_t seqno, uint32_t &wa
 {
     const TegraGM20BAbiOrder in = {channel, flags, seqno, 0};
     TegraGM20BAbiOrderReply r = {};
+    const uint32_t at = opened();
     const int kr = call(TegraGM20BMethodOrder, &in, sizeof in, &r, sizeof r);
     if (kr == kIOReturnNotResponding)
-        markLost(channel);
+        markLost(channel, at);
     waits = kr == KERN_SUCCESS ? r.waits : 0;
     return kr;
 }
@@ -412,6 +415,7 @@ bool Kernel::exec(uint32_t channel, const TegraGM20BAbiPush *pushes, uint32_t co
     const size_t in = offsetof(TegraGM20BAbiExec, pushes) + count * sizeof pushes[0];
     TegraGM20BAbiExecReply r = {};
     const bool listed = surfaces && (info_.flags & TegraGM20BInfoExecSurfaces);
+    const uint32_t at = opened();
     for (;;) {
         if (listed) {
             size_t bytes = 0;
@@ -424,7 +428,7 @@ bool Kernel::exec(uint32_t channel, const TegraGM20BAbiPush *pushes, uint32_t co
             return true;
         }
         if (kr == kIOReturnNotResponding)
-            markLost(channel);
+            markLost(channel, at);
         if (kr != kIOReturnBusy || !last) {
             err_ = failed("Exec", kr);
             return false;
@@ -446,8 +450,11 @@ bool Kernel::status(uint32_t channel, TegraGM20BAbiStatus &st)
     return false;
 }
 
-void Kernel::markLost(uint32_t channel)
+void Kernel::markLost(uint32_t channel, uint32_t opened)
 {
+    std::lock_guard<std::mutex> l(lostLock_);
+    if (opened != opened_.load(std::memory_order_relaxed))
+        return;
     TegraGM20BAbiStatus st;
     status(channel, st);  // none: the channel already destroyed (another thread's reopen), the cause unknown
     lostFaultVa_.store(st.fault_va, std::memory_order_relaxed);
@@ -458,9 +465,10 @@ void Kernel::markLost(uint32_t channel)
 bool Kernel::wait(uint32_t channel, uint32_t seqno, uint64_t timeoutNs)
 {
     TegraGM20BAbiWaitFence w = {channel, seqno, timeoutNs};
+    const uint32_t at = opened();
     const int kr = call(TegraGM20BMethodWaitFence, &w, sizeof w, nullptr, 0);
     if (kr == kIOReturnNotResponding)
-        markLost(channel);
+        markLost(channel, at);
     if (kr != KERN_SUCCESS) {
         err_ = "WaitFence failed";
         return false;

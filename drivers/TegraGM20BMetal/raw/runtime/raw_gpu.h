@@ -486,10 +486,6 @@ public:
     void convertPlanar(const Texture &t);
     // generateMipmaps of a mipmapped texture (Texture::chain) on the 2D engine: each later level from the one above, in place
     void generate(Texture &t);
-    // `w` x `h` texels of chain level `level` of `t` at (sx, sy) into the pitch texture `dst` at (dx, dy) (copyFromTexture of a
-    // level below the first); 1:1 on the 2D engine
-    void copyFromLevel(const Texture &t, uint32_t level, uint32_t sx, uint32_t sy, const Texture &dst, uint32_t dx,
-                       uint32_t dy, uint32_t w, uint32_t h);
     void end();
 
 private:
@@ -800,8 +796,8 @@ public:
     }
 
     struct Stats {
-        std::atomic<uint64_t> commits{0}, pushBytes{0}, uploadBytes{0}, ringWaits{0}, imports{0}, importBytes{0},
-            poolBytes{0}, poolChunks{0}, cleanBytes{0}, poolStalls{0};
+        std::atomic<uint64_t> commits{0}, pushBytes{0}, uploadBytes{0}, ringWaits{0}, ringsOutgrown{0}, imports{0},
+            importBytes{0}, poolBytes{0}, poolChunks{0}, cleanBytes{0}, poolStalls{0};
         // surface imports made (a kernel import each) and found live, since open
         std::atomic<uint64_t> importsMade{0}, importHits{0};
         // diagnostics: color targets the raw path rendered whose address or pitch is not a multiple of 128 (NVK renders
@@ -810,8 +806,8 @@ public:
         // color targets in rows the raw path rendered through a block-linear shadow, beside a block-linear one in their pass
         std::atomic<uint64_t> rtMixed{0};
         std::atomic<uint32_t> rtUnalignedPitch{0}, rtUnalignedVa{0};
-        // mip chains: made, chain bytes, generated, copies out of a level
-        std::atomic<uint64_t> chains{0}, chainBytes{0}, chainGenerates{0}, chainCopies{0};
+        // mip chains: made, chain bytes, generated
+        std::atomic<uint64_t> chains{0}, chainBytes{0}, chainGenerates{0};
         // write-combined buffers: live bytes, and the buffers that asked for one and got pool memory (the WC pool full)
         std::atomic<uint64_t> wcBytes{0}, wcFallbacks{0};
         // the copy engine's work encoded: launches and the bytes they write (copies, remaps, the pass prologue's shadow copies)
@@ -874,6 +870,8 @@ private:
         };
 
         std::deque<Span> inflight;
+        std::vector<Bo>
+            outgrown;  // what the open command buffer grew out of (Device::alloc): freed once its work completes
     };
 
     struct Chunk {
@@ -913,6 +911,8 @@ private:
     Ring push_, upload_;
     // rings replaced by larger ones, freed once the GPU passed the seqno
     std::vector<std::pair<Bo, uint32_t>> grownOut_;
+    bool overflowing_ = false;       // the open command buffer outgrew a ring with no memory for a larger one
+    std::vector<uint8_t> overflow_;  // where it is written then (never submitted)
     uint32_t channel_ = 0, lastSeqno_ = 0;
     // the channel's fence word; before there is a channel a zero, which every seqno submitted so far (none) has passed
     const volatile uint32_t *fence_ = &kNoFence;
@@ -1058,6 +1058,8 @@ private:
     mutable std::atomic<uint32_t> killedError_{0};
     uint8_t *alloc(Ring &r, uint32_t bytes, uint32_t align, uint64_t &va);
     void retire(Ring &r, uint32_t seqno);
+    bool ownWords(const Ring &r, uint64_t at, uint64_t bytes) const;
+    bool outgrow(Ring &r, uint32_t bytes, uint64_t &at);
     uint32_t allocTic();
     void freeTic(uint32_t tic);  // lock_ held
     void writeTic(const Texture &t);

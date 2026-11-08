@@ -348,21 +348,6 @@ void emitCopyToLevel(Push &p, const MipChain &c, uint64_t chainVa, uint32_t leve
     end(p);
 }
 
-void emitCopyFromLevel(Push &p, const MipChain &c, uint64_t chainVa, uint32_t level, const Pitch &dst, uint32_t fmt2d,
-                       uint32_t sx, uint32_t sy, uint32_t dx, uint32_t dy, uint32_t w, uint32_t h)
-{
-    if (level >= c.levels || !w || !h)
-        return;
-    const MipLevel &s = c.level[level];
-    if (sx + w > s.width || sy + h > s.height || dx + w > dst.width || dy + h > dst.height)
-        return;
-    begin(p);
-    surface(p, TWOD_SET_DST_FORMAT, fmt2d, false, 0, dst.pitch, dst.width, dst.height, dst.va);
-    surface(p, TWOD_SET_SRC_FORMAT, fmt2d, true, s.yLog2, 0, s.width, s.height, chainVa + s.offset);
-    blit(p, FILTER_POINT, dx, dy, w, h, 1ull << 32, 1ull << 32, uint64_t(sx) << 32, uint64_t(sy) << 32);
-    end(p);
-}
-
 // ---- reference ----
 
 void referenceDownsample(const uint8_t *src, uint32_t srcPitch, uint32_t sw, uint32_t sh, uint8_t *dst,
