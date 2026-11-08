@@ -105,6 +105,8 @@ constexpr size_t kDedicatedSpares = 2;
 // programs, of which the render server uses a few hundred. Bound in steps as they are placed, with room after the last one
 // for the GPU's instruction prefetch past a program's end.
 constexpr uint64_t kHeapCap = 8 << 20, kHeapStep = 256 << 10, kHeapSlack = 0x1000;
+// INVALIDATE_SHADER_CACHES_NO_WFI (cla097.h): INSTRUCTION bit 0, CONSTANT bit 12
+constexpr uint32_t kInvalidateInstruction = 1u << 0, kInvalidateConstant = 1u << 12;
 constexpr uint32_t kMaxSegments = TegraGM20BMaxPushes;
 // NVK's copies of pitch memory (nouveau_copy_rect: LAUNCH_DMA PIPELINED, FLUSH_ENABLE, SRC/DST_MEMORY_LAYOUT PITCH, MULTI_LINE_ENABLE)
 constexpr uint32_t kLaunchPitch = 1u | 1u << 2 | 1u << 7 | 1u << 8 | 1u << 9;
@@ -431,8 +433,8 @@ bool Device::openChannel(std::string &err)
 // lock_ held: program `prog`'s slot in the heap, copied out of the pack the first time a state uses it, its
 // SET_PIPELINE_PROGRAM value and its shader data's GPU address (0: none). A slot is a few KiB copied once per process from the
 // pack's pages, so the CPU copies it (the copy engine would want the pack's pages imported, wired, for the whole process); the
-// next submission's prologue invalidates the shader and constant caches before any draw reads it. False: the heap is full (that
-// state stays m2v's).
+// prologue of the next submission committed after it invalidates the instruction caches too (CommandBuffer::commit), and every
+// prologue the constant cache, before any draw reads it. False: the heap is full (that state stays m2v's).
 bool Device::place(uint32_t prog, uint32_t &program, uint64_t &data)
 {
     const PackProgram &p = pack_.section<PackProgram>(PackPrograms)[prog];
@@ -458,7 +460,8 @@ bool Device::heapGrow(uint64_t end)
         const uint64_t step = std::min(heap_.bytes - heapBound_, (end - heapBound_ + kHeapStep - 1) & ~(kHeapStep - 1));
         Bo part;
         uint8_t *cpu = heap_.cpu + heapBound_;
-        if (!k_.importPages(cpu, step, part) || !k_.bindImportAt(cpu, part, heap_.va + heapBound_, kPteKindPitch))
+        if (!k_.importPages(cpu, step, part, 0, true) ||
+            !k_.bindImportAt(cpu, part, heap_.va + heapBound_, kPteKindPitch))
             return false;
         heapParts_.push_back(part);
         heapBound_ += step;
@@ -1981,6 +1984,7 @@ bool Device::reopen()
         std::lock_guard<std::mutex> l(lock_);
         for (Backing *b : backings_)
             b->lastUse = 0;
+        heapInvalidated_ = ~0ull;
     }
     memset(rootPush_, 0, sizeof rootPush_);
     restart_ = 0;
@@ -2060,13 +2064,15 @@ CommandBuffer *Device::begin()
         if (commitCount_ % 64 == 0)
             trimBackings();
     }
-    // submission prologue, as NVK opens each submission: header/sampler caches (headers written since), shader and texture caches
+    // submission prologue, as NVK opens each submission: header/sampler caches (headers written since), constant, shader data and
+    // texture caches, and the instruction caches where commit finds the heap grew
     uint64_t va;
     uint32_t *start = reinterpret_cast<uint32_t *>(alloc(push_, 64 * 4, 256, va));
     Push p{start, start + 64};
     p.m(INVALIDATE_SAMPLER_CACHE_NO_WFI, 0);
     p.m(INVALIDATE_TEXTURE_HEADER_CACHE_NO_WFI, 0);
-    p.m(INVALIDATE_SHADER_CACHES_NO_WFI, 0x1000);
+    p.inc(INVALIDATE_SHADER_CACHES_NO_WFI, {kInvalidateConstant});
+    cb.shaderInvalidate_ = p.at - 1;
     p.m(INVALIDATE_SHADER_CACHES, 0x14);
     p.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
     p.m(INVALIDATE_SHADER_CACHES_NO_WFI, 0x10);
@@ -2211,6 +2217,13 @@ BlitEncoder *CommandBuffer::blit()
 bool CommandBuffer::commit(uint32_t &seqno)
 {
     Device &d = *dev_;
+    {
+        std::lock_guard<std::mutex> l(d.lock_);
+        if (shaderInvalidate_ && d.heapPlaced_ != d.heapInvalidated_) {
+            *shaderInvalidate_ = kInvalidateConstant | kInvalidateInstruction;
+            d.heapInvalidated_ = d.heapPlaced_;
+        }
+    }
     // CPU writes the GPU reads: to memory, by address (no set/way operation, nothing global)
     uint64_t cleaned = 0;
 #if defined(__aarch64__)

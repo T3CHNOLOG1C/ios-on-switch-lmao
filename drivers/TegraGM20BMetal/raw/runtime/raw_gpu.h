@@ -550,6 +550,9 @@ private:
     DepthStencilRegs ds_;                   // and its depth/stencil registers
     const Pipeline *extrasLive_ = nullptr;  // and the state whose extras it holds (Pipeline::restore)
     bool drawn_ = false;  // a draw was encoded (NVK resets the restart index at a command buffer's first)
+    // the prologue's INVALIDATE_SHADER_CACHES_NO_WFI data word, which commit gives the INSTRUCTION bit when programs were placed
+    // in the heap since the last submission that invalidated the instruction cache
+    uint32_t *shaderInvalidate_ = nullptr;
     void segment(uint32_t *from, uint32_t *to);
 };
 
@@ -923,6 +926,9 @@ private:
     std::unordered_map<uint32_t, Pipeline> pipelines_;
     std::vector<uint32_t> placed_;  // each pack program's heap offset, ~0u: not placed
     uint64_t heapPlaced_ = 0;
+    // heapPlaced_ as of the last submission whose prologue invalidated the SMs' instruction caches, ~0: none on this channel.
+    // The instruction cache prefetches past a program's end, where heapPlace puts the next program.
+    uint64_t heapInvalidated_ = ~0ull;
     uint32_t ctWrite_[8] = {};  // SET_CT_WRITE(i) as the baseline leaves it
     bool place(uint32_t prog, uint32_t &program, uint64_t &data);
     bool heapGrow(uint64_t end);

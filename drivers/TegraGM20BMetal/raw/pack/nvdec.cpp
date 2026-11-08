@@ -396,6 +396,8 @@ void Decoder::method(uint32_t subc, uint32_t mthd, uint32_t data, bool fromMme)
     case INVALIDATE_SHADER_CACHES:
     case INVALIDATE_SHADER_CACHES_NO_WFI:
         barrier("SHINV");
+        if (data & 1)  // INSTRUCTION
+            barrier("ICINV");
         break;
     default:
         break;

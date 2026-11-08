@@ -234,12 +234,12 @@ bool Kernel::import(void *addr, uint64_t bytes, Bo &bo, uint32_t kind, uint32_t 
     return bindImport(addr, bo, kind);
 }
 
-bool Kernel::importPages(void *addr, uint64_t bytes, Bo &bo, uint32_t surfaceId)
+bool Kernel::importPages(void *addr, uint64_t bytes, Bo &bo, uint32_t surfaceId, bool gpuReads)
 {
     const uint64_t page = info_.page_size;
     const uintptr_t base = uintptr_t(addr) & ~uintptr_t(page - 1);
     const uint64_t span = ((uintptr_t(addr) + bytes + page - 1) & ~uintptr_t(page - 1)) - base;
-    const bool gpuReads = surfaceId && !importsWritten_.load(std::memory_order_relaxed);
+    gpuReads = gpuReads || (surfaceId && !importsWritten_.load(std::memory_order_relaxed));
     TegraGM20BAbiBoImport in = {base, span, surfaceId, gpuReads ? uint32_t(TegraGM20BImportGpuReads) : 0};
     TegraGM20BAbiBoAllocReply r = {};
     bo = {};
