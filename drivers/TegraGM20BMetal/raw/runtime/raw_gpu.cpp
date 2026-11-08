@@ -14,6 +14,7 @@
 #include <mach/mach.h>
 #include <os/log.h>
 #include <pthread.h>
+#include <time.h>
 #include <unistd.h>
 #include <algorithm>
 #include <chrono>
@@ -412,10 +413,12 @@ bool Device::ensureChannel()
     std::lock_guard<std::mutex> l(channelLock_);
     if (channelReady_.load(std::memory_order_relaxed))
         return true;
-    if (channelFailed_)
+    const uint64_t now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+    if (channelFailed_ && now < channelRetryNs_)
         return false;
     if (!openChannel(channelError_)) {
         channelFailed_ = true;
+        channelRetryNs_ = now + kChannelRetryNs;
         return false;
     }
     channelReady_.store(true, std::memory_order_release);

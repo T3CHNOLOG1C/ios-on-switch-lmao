@@ -50,17 +50,11 @@ static void markWritten(RMCommandBuffer *cb)
             if (compute)
                 markDirty(c.obj);
             break;
-        case OpInvocation: {  // compute and other recorded calls: every buffer and texture they name
-            NSInvocation *inv = (__bridge NSInvocation *)c.obj;
-            for (NSUInteger i = 2; i < inv.methodSignature.numberOfArguments; i++) {
-                if (*[inv.methodSignature getArgumentTypeAtIndex:i] != '@')
-                    continue;
-                __unsafe_unretained id arg = nil;
-                [inv getArgument:&arg atIndex:i];
-                markDirty((__bridge void *)arg);
-            }
+        case OpInvocation:  // compute and other recorded calls: every buffer and texture they name
+            raw::forEachObject((__bridge NSInvocation *)c.obj, [](id o) {
+                markDirty((__bridge void *)o);
+            });
             break;
-        }
         default:
             break;
         }
@@ -117,9 +111,10 @@ void finish(RMCommandBuffer *cb, NSError *error)
         for (const Cmd &c : cb->_tape)
             if (c.op == OpSignalEvent)
                 [(id<MTLSharedEvent>)(__bridge id)c.obj setSignaledValue:c.c];
-    // Completion can come before the submitting thread's scheduled() (the completion thread wakes on the fence of work it was
-    // just handed): the scheduled handlers then run here, before the completed ones. Ones scheduled() already queued run first,
-    // the completed ones queued behind them on the handler queue.
+    // A completed command buffer is scheduled. Its scheduled handlers scheduled() never took run here, before the completed ones:
+    // one whose fence passed before its submitting thread's scheduled() (the completion thread wakes on work it was just handed),
+    // one that never reached a GPU. Ones scheduled() already queued run first, the completed ones queued behind them on the
+    // handler queue.
     NSArray *handlers, *scheduledHandlers = nil;
     bool behindScheduled = false;
     {
@@ -137,7 +132,7 @@ void finish(RMCommandBuffer *cb, NSError *error)
         handlers = cb->_completedHandlers;
         cb->_completedHandlers = nil;
         cb->_completedSent = true;
-        cb->_scheduledSent = true;  // a completed command buffer is scheduled; its own scheduled() runs no more
+        cb->_scheduledSent = true;  // scheduled() runs no more
     }
     void (^run)(void) = ^{
         for (MTLCommandBufferHandler h in scheduledHandlers)

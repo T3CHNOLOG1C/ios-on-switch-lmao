@@ -14,8 +14,11 @@
 #include "NativeBridgeMetalFrontend.h"
 #include "bridge/NativeMetalObjects.h"
 #ifdef RAW_FACADE  // the same frames through the raw path's Metal facade (runtime/RawMetal.mm) instead of the frontend + m2v + NVK
+#include <IOKit/IOReturn.h>
 #include "../runtime/RawMetal.h"
+#include "TegraGM20BABI.h"
 #define FRAME_PATH "raw-facade"
+extern "C" void mock_iokit_fail_next(unsigned method, unsigned count, int kr);
 #else
 #define FRAME_PATH "nvk"
 #endif
@@ -109,6 +112,9 @@ int main(int argc, char **argv)
             fprintf(stderr, "NO DEVICE: %s\n", why.UTF8String);
             return 1;
         }
+        // FRAME_REFUSE_CHANNEL: the kernel refuses the raw device's first channel (its frames go to m2v until it gets one)
+        if (getenv("FRAME_REFUSE_CHANNEL"))
+            mock_iokit_fail_next(TegraGM20BMethodChannelCreate, 1, kIOReturnNoResources);
         // FRAME_COMPLETE=<dir>|memory: the runtime makes the records of the states the pack lacks (RawComplete.h), kept in <dir>;
         // FRAME_COMPLETE_SETTLE=<frame>: two seconds before that frame, so the frames after draw the states it made
         if (const char *complete = getenv("FRAME_COMPLETE"))
