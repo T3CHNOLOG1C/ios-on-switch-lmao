@@ -1317,7 +1317,7 @@ bool Device::createMipTexture(uint32_t width, uint32_t height, uint32_t format, 
 {
     const FormatInfo *f = formatInfo(format);
     const uint32_t fmt2d = fx::twodFormat(format);
-    if (!f || !fmt2d || f->srgb || levels < 2 || !f->rt)
+    if (!f || levels < 2 || !f->rt || xrForm(format) != XrForm::None)
         return false;
     Texture::Chain *c = new Texture::Chain;
     if (!fx::mipChainLayout(width, height, levels, f->bpp, c->layout) || !shape(width, height, format, t)) {
@@ -3628,7 +3628,7 @@ void BlitEncoder::convertPlanar(const Texture &t)
 void BlitEncoder::generate(Texture &t)
 {
     Texture::Chain *c = t.chain;
-    if (!c)
+    if (!c || !c->fmt2d)  // (the facade sends those to m2v: PredMipmapsFormat)
         return;
     const uint32_t last = c->layout.levels - 1;
     room(uint32_t(fx::generateWords(c->layout, 0, last)));
@@ -3642,7 +3642,8 @@ void BlitEncoder::copyFromLevel(const Texture &t, uint32_t level, uint32_t sx, u
     const Texture::Chain *c = t.chain;
     if (!c)
         return;
-    if (dst.blockLinear) {  // the copy engine, block-linear to block-linear (the 2D engine's destination here is pitch)
+    if (dst.blockLinear ||
+        !c->fmt2d) {  // the copy engine (the 2D engine's destination here is pitch, of a format it takes)
         Texture from;
         if (chainLevelImage(t, level, from))
             copyTexels(from, sx, sy, dst, dx, dy, w, h);

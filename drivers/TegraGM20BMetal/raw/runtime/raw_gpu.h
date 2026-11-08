@@ -180,7 +180,7 @@ struct Texture {
     struct Chain {
         fx::MipChain layout;
         uint64_t va = 0;
-        uint32_t fmt2d = 0;
+        uint32_t fmt2d = 0;  // the 2D engine's surface format (fx::twodFormat); 0: it does not filter this one
         uint32_t levelTic[fx::kMaxLevels] = {};  // a view of each level alone (Device::levelTic), made on first use
     } *chain = nullptr;
 
@@ -649,7 +649,7 @@ public:
     // Memoryless (a pass gives it a backing); Depth32Float_Stencil8 among them, as zeta (Texture::zeta)
     bool createMemoryless(uint32_t width, uint32_t height, uint32_t format, Texture &t);
     // A mipmapped 2D texture of `levels` levels: level 0 of its block-linear chain (Texture::chain), its header the chain's.
-    // False: not one the raw path keeps (a format the 2D engine does not filter, no memory).
+    // False: not one the raw path keeps (not a render target format, extended range, no memory).
     bool createMipTexture(uint32_t width, uint32_t height, uint32_t format, uint32_t levels, Texture &t);
     // The texture header of level `level` of mipmapped texture `t`'s chain alone, as NVK's view of that level (a pass into
     // the level fetches its color through it); 0: none

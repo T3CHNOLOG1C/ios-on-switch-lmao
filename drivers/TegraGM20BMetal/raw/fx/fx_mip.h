@@ -82,8 +82,8 @@ uint32_t gobOffsetFermi(uint32_t xB, uint32_t y);
 void mipChainTic(const MipChain &c, uint64_t va, uint32_t tic0, bool srgb, uint32_t baseLevel, uint32_t levelCount,
                  uint32_t out[8]);
 
-// FERMI_TWOD_A surface format of an MTLPixelFormat the 2D engine filters faithfully (cl902d.h SET_SRC_FORMAT), 0: none (the
-// texture then stays as it is today: no chain)
+// FERMI_TWOD_A surface format of an MTLPixelFormat the 2D engine filters faithfully (cl902d.h SET_SRC_FORMAT), 0: none (a
+// chain of that format is kept, and its generateMipmaps is not the 2D engine's)
 uint32_t twodFormat(uint32_t mtlPixelFormat);
 
 // A pitch-linear surface of the raw path (a raw::Texture: va, pitch, width, height)

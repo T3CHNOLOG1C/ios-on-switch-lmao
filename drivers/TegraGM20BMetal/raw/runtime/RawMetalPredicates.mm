@@ -69,8 +69,8 @@ bool rawShape(MTLTextureDescriptor *d)
            d.depth <= 1 && !turned && keptFormat(d);
 }
 
-// A mipmapped texture the raw path keeps as a block-linear chain of its levels (raw::Device::createMipTexture, raw/fx): 2D, one sample, one layer, no rotation, of a format the 2D engine filters (not sRGB) and renders; chains on (the
-// device's self-test). Private, memoryless (r7r: Core Animation makes 776x24 mipmapped surfaces memoryless too, kept here as
+// A mipmapped texture the raw path keeps as a block-linear chain of its levels (raw::Device::createMipTexture, raw/fx): 2D, one
+// sample, one layer, no rotation, of a format the raw path renders and holds as it is (not extended range). Private, memoryless (r7r: Core Animation makes 776x24 mipmapped surfaces memoryless too, kept here as
 // private ones, a superset) or shared: CA::OGL::MetalContext::update_surface copies IOSurface content it draws with a trilinear
 // minification filter into a texture of the surface texture's descriptor (shared) with every level, then generates them (on
 // the 18:13 boot of 11-06, 49 command buffers of a 1280x720 one went to m2v). A shared one's CPU access reads and writes the
@@ -85,7 +85,7 @@ bool chainShape(MTLTextureDescriptor *d)
            d.depth <= 1 && !turned &&
            (d.storageMode == MTLStorageModePrivate || d.storageMode == MTLStorageModeMemoryless ||
             d.storageMode == MTLStorageModeShared) &&
-           f && f->rt && !f->srgb && raw::fx::twodFormat(uint32_t(d.pixelFormat));
+           f && f->rt && raw::xrForm(uint32_t(d.pixelFormat)) == raw::XrForm::None;
 }
 
 // A memoryless Depth32Float_Stencil8 texture, 2D, one level, one sample, no rotation: the raw path's zeta (raw_zeta.h). A stored

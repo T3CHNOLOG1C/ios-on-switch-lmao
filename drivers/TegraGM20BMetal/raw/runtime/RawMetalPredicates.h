@@ -52,6 +52,7 @@ enum RMPred : uint8_t {
     PredBlitWholeTexCopy,
     PredCompute,
     PredMipmaps,
+    PredMipmapsFormat,  // a mipmapped texture's generateMipmaps in a format the 2D engine does not filter: a = format
     PredEvent,
     // found while encoding (the raw encode ran up to here and was thrown away)
     PredEncPlanarCopy,
@@ -107,6 +108,7 @@ static constexpr const char *kPredNames[] = {"-",
                                              "blit.whole",
                                              "compute",
                                              "mipmaps",
+                                             "mipmaps.fmt",
                                              "event",
                                              "enc.planarcopy",
                                              "enc.planarclamp",
