@@ -790,3 +790,24 @@ TEST(GM20BRailSource, RailDownStopsTheGpuCallouts)
 	expectBefore(power, "nvxnu_irq_suspend();", "tgm_recover_suspend();");
 	expectBefore(power, "tgm_recover_suspend();", "regulator_disable(");
 }
+
+// IOGPUDeviceSetDisplayParams is scalar method 0x21 in iOS 17's IOGPU.framework and IOConnectTrap2 index 8 in iOS 27's;
+// XNU answers a trap index with no trap behind it kIOReturnSuccess, so the device connection serves index 8 and refuses
+// every other by name instead of letting it pass unseen.
+TEST(GM20BDeviceSource, DisplayParamsArriveByMethodAndByTrap)
+{
+	const std::string client = SourceText("../TegraGM20BDeviceClient.cpp");
+	EXPECT_THAT(
+		flat(definition(client, "IOExternalTrap "
+					"*TegraGM20BDeviceUserClient::getTargetAndTrapForIndex(")),
+		HasSubstr("*targetP = this; if (index == kSetDisplayParamsTrap) return "
+			  "&displayParams; switch_refusal_k("));
+	EXPECT_THAT(flat(client), HasSubstr("constexpr UInt32 kSetDisplayParamsTrap = 8;"));
+	EXPECT_THAT(
+		flat(definition(client, "IOReturn TegraGM20BDeviceUserClient::setDisplayParams(")),
+		HasSubstr("storeDeadline(reinterpret_cast<uint64_t>(nextVblank), "
+			  "reinterpret_cast<uint64_t>(interval));"));
+	EXPECT_THAT(flat(client),
+		    HasSubstr("case kSetDisplayParams: if (arguments->scalarInputCount != "
+			      "2) return kIOReturnBadArgument; storeDeadline("));
+}
