@@ -904,6 +904,7 @@ nvkmd_darwin_create_pdev(struct vk_object_base *log_obj,
       .has_map_fixed = true,
       .has_overmap = true,
       .has_host_import = (info.flags & TegraGM20BInfoHostImport) != 0,
+      .has_tiled_cache = (info.flags & TegraGM20BInfoTiledCache) != 0,
    };
 
    uint64_t os_page_size = 4096;

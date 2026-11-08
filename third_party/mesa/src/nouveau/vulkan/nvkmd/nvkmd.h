@@ -123,6 +123,7 @@ struct nvkmd_info {
    bool has_overmap;
    bool has_compression;
    bool has_host_import;
+   bool has_tiled_cache;
 };
 
 struct nvkmd_pdev_ops {
