@@ -215,18 +215,14 @@ static bool submitLocked(RMCommandBuffer *cb)
 }
 
 // A command buffer some of whose encoders go to m2v and some do not, with no refusal of its own and no shared event: its segments
-// (each run of encoders of one driver), else none (it goes whole, as its reason says).
-// Off since r7p8 (a freeze 20 s after the home screen whose cause the logs did not name; the split was active just before it):
-// every command buffer goes whole, as before r12. It comes back once the stall line (rawStall) or m2v's bounded queue slot wait
-// names the cause.
-static constexpr bool kSplit = false;
-
+// (each run of encoders of one driver), else none (it goes whole, as its reason says). m2v replays only the encoders it must: a
+// replayed draw costs m2v's encode (~0.28 ms each on the device, 11-06), so a whole frame for one refused pass cost tens of ms.
 static void planSegments(RMCommandBuffer *cb)
 {
     cb->_segs.clear();
     cb->_segNext = 0;
     [cb closeEncoder];
-    if (!kSplit || cb->_reason == WhyRaw || cb->_whole)
+    if (cb->_reason == WhyRaw || cb->_whole)
         return;
     bool raw = false, m2v = false;
     for (size_t at = 0; at < cb->_tape.size(); at++) {
@@ -312,7 +308,15 @@ static bool submitSegments(RMCommandBuffer *cb)
         } else {
             r.stats.splitM2v++;
             const uint64_t began = nowUs();
+#if SWITCH_FRAME_TIMELINE
+            cb->_frame.mark(switch_frame::ReplayStart);
+            tTwinTicks = 0;
+#endif
             id<MTLCommandBuffer> m = r.fallback ? replay(cb, s.from, s.to, true) : nil;
+#if SWITCH_FRAME_TIMELINE
+            cb->_frame.mark(switch_frame::ReplayEnd);
+            cb->_frame.set(switch_frame::Twins, tTwinTicks);
+#endif
             if (!m) {
                 cb->_segError = [NSError errorWithDomain:MTLCommandBufferErrorDomain
                                                     code:MTLCommandBufferErrorInternal
@@ -370,6 +374,9 @@ static bool submitSegments(RMCommandBuffer *cb)
             }];
             [m commit];
             r.stats.replayUs += nowUs() - began;
+#if SWITCH_FRAME_TIMELINE
+            noteReplay(cb->_frame, cb->_frame.mark(switch_frame::Returned));
+#endif
         }
         cb->_segNext++;
     }

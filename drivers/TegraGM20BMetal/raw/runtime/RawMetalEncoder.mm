@@ -87,6 +87,18 @@
     (void)s;
 }
 
+// (RawResidency.h: everything is resident; m2v's encoders take them as no-ops too)
+- (void)useResidencySet:(id)set
+{
+    (void)set;
+}
+
+- (void)useResidencySets:(const __unsafe_unretained id *)sets count:(NSUInteger)count
+{
+    (void)sets;
+    (void)count;
+}
+
 - (void)updateFence:(id<MTLFence>)fence
 {
     [_cb retain:fence];

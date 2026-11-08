@@ -228,6 +228,16 @@ extern "C" uint64_t cap_instruction_invalidates(void)
     return gC.instructionInval;
 }
 
+// `bytes` at GPU VA `va` as the GPU reads them; false where they are not in one bound range
+extern "C" bool cap_read(uint64_t va, void *out, uint64_t bytes)
+{
+    std::lock_guard<std::mutex> l(gLock);
+    const uint8_t *h = host(va, bytes);
+    if (h)
+        memcpy(out, h, bytes);
+    return h != nullptr;
+}
+
 extern "C" uint32_t cap_reg3d(uint32_t mthd)
 {
     std::lock_guard<std::mutex> l(gLock);

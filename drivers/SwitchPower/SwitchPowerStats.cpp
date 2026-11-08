@@ -32,7 +32,10 @@ uint64_t ticksToUs(uint64_t ticks)
 
 size_t appendIdle(char *line, size_t size, size_t n, uint64_t window)
 {
-    uint64_t exits = 0, exitTicks = 0, exitMax = 0, late = 0;
+    uint64_t exits = 0;
+    uint64_t exitTicks = 0;
+    uint64_t exitMax = 0;
+    uint64_t late = 0;
     for (uint32_t cpu = 0; cpu < kCores && n < size; ++cpu) {
         switch_idle_counts now;
         if (switch_idle_read_counts(cpu, &now))

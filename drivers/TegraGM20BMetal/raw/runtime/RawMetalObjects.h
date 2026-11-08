@@ -11,6 +11,7 @@
 #include "SwitchFrameTimeline.h"
 #include "raw_gpu.h"
 #include "RawMetalPredicates.h"
+#include "RawResidency.h"
 
 @class RMDevice, RMCommandBuffer;
 
@@ -204,6 +205,7 @@ inline Cmd cmd(Op op, uint8_t stage = 0, uint16_t index = 0)
 @interface RMQueue : RMObject {
 @public
     dispatch_queue_t _completionQueue;
+    raw::ResidencySets _residency;
 }
 @end
 
@@ -216,6 +218,7 @@ struct RMSegment {
 @interface RMCommandBuffer : RMObject {
 @public
     uint64_t _protection;  // setProtectionOptions: (kept, no effect)
+    raw::ResidencySets _residency;
     // Its encoders: each one's first command (OpRender, OpBlit, OpCompute) carries index 1 where it goes to m2v (a refusal taken
     // while it was the active encoder: _encRefused, written into it as the next encoder begins or at commit, _encAt the
     // command's place). A refusal outside any encoder keeps the command buffer whole (_whole). One whose encoders are some raw's
@@ -331,6 +334,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
 #if SWITCH_FRAME_TIMELINE
 extern std::atomic<uint64_t> gSurfaceTextures, gTwinsMade;
 extern thread_local uint64_t tTwinTicks;
+void countTwin(id object, uint64_t ticks);  // the rates line's tw= (RawMetalReplay.mm)
 #endif
 static inline id twinOf(id object)
 {
@@ -342,8 +346,10 @@ static inline id twinOf(id object)
     if (!((RMObject *)object)->_twin) {
         const uint64_t began = mach_absolute_time();
         id twin = [(RMObject *)object rmTwin];
-        tTwinTicks += mach_absolute_time() - began;
+        const uint64_t took = mach_absolute_time() - began;
+        tTwinTicks += took;
         gTwinsMade.fetch_add(1, std::memory_order_relaxed);
+        countTwin(object, took);
         return twin;
     }
 #endif

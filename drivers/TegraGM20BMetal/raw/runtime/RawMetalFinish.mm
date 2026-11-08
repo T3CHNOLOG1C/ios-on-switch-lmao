@@ -80,21 +80,20 @@ void scheduled(RMCommandBuffer *cb)
         // the handler queue
         if (!handlers.count)
             cb->_scheduledDone = true;
+        else  // queued under the lock: a finish() that finds them not done queues its handlers behind them
+            dispatch_async(gRM->handlers, ^{
+                for (MTLCommandBufferHandler h in handlers)
+                    h((id<MTLCommandBuffer>)cb);
+                {
+                    std::lock_guard<std::mutex> g(cb->_lock);
+                    cb->_scheduledDone = true;
+                    // a handler added meanwhile ran at once (addScheduledHandler)
+                }
+                cb->_changed.notify_all();
+            });
     }
-    if (!handlers.count) {
+    if (!handlers.count)
         cb->_changed.notify_all();
-        return;
-    }
-    dispatch_async(gRM->handlers, ^{
-        for (MTLCommandBufferHandler h in handlers)
-            h((id<MTLCommandBuffer>)cb);
-        {
-            std::lock_guard<std::mutex> l(cb->_lock);
-            cb->_scheduledDone = true;
-            // a handler added meanwhile ran at once (addScheduledHandler)
-        }
-        cb->_changed.notify_all();
-    });
 }
 
 // Completed: CPU-signalled events, written resources marked, handlers (on the queue's completion queue when it has one), the
@@ -112,25 +111,34 @@ void finish(RMCommandBuffer *cb, NSError *error)
         for (const Cmd &c : cb->_tape)
             if (c.op == OpSignalEvent)
                 [(id<MTLSharedEvent>)(__bridge id)c.obj setSignaledValue:c.c];
-    NSArray *handlers, *unscheduled = nil;
+    // A completed command buffer is scheduled. Its scheduled handlers scheduled() never took run here, before the completed ones:
+    // one whose fence passed before its submitting thread's scheduled() (the completion thread wakes on work it was just handed),
+    // one that never reached a GPU. Ones scheduled() already queued run first, the completed ones queued behind them on the
+    // handler queue.
+    NSArray *handlers, *scheduledHandlers = nil;
+    bool behindScheduled = false;
     {
         std::lock_guard<std::mutex> l(cb->_lock);
+        if (!cb->_scheduledSent) {
+            scheduledHandlers = cb->_scheduledHandlers;
+            cb->_scheduledHandlers = nil;
+            cb->_gpuStart = hostSeconds();
+#if SWITCH_FRAME_TIMELINE
+            gRM->stats.scheduledByFinish++;
+#endif
+        } else {
+            behindScheduled = !cb->_scheduledDone;
+        }
         cb->_status = error ? MTLCommandBufferStatusError : MTLCommandBufferStatusCompleted;
         cb->_error = error;
         cb->_gpuEnd = hostSeconds();
         handlers = cb->_completedHandlers;
         cb->_completedHandlers = nil;
         cb->_completedSent = true;
-        // a completed command buffer is scheduled: its scheduled handlers scheduled() never took run here, first (one that
-        // completes before its submit thread schedules it, or that never reaches a GPU), and scheduled() runs no more
-        if (!cb->_scheduledSent) {
-            unscheduled = cb->_scheduledHandlers;
-            cb->_scheduledHandlers = nil;
-        }
-        cb->_scheduledSent = true;
+        cb->_scheduledSent = true;  // scheduled() runs no more
     }
     void (^run)(void) = ^{
-        for (MTLCommandBufferHandler h in unscheduled)
+        for (MTLCommandBufferHandler h in scheduledHandlers)
             h((id<MTLCommandBuffer>)cb);
         for (MTLCommandBufferHandler h in handlers)
             h((id<MTLCommandBuffer>)cb);
@@ -149,7 +157,14 @@ void finish(RMCommandBuffer *cb, NSError *error)
 #endif
     };
     dispatch_queue_t q = cb->_queue ? cb->_queue->_completionQueue : nil;
-    if (q)
+    if (behindScheduled)
+        dispatch_async(gRM->handlers, ^{
+            if (q)
+                dispatch_async(q, run);
+            else
+                run();
+        });
+    else if (q)
         dispatch_async(q, run);
     else
         run();

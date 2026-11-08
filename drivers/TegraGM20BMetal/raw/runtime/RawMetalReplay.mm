@@ -4,6 +4,17 @@
 // ---- object mapping for the m2v replay ----
 #if SWITCH_FRAME_TIMELINE
 thread_local uint64_t tTwinTicks;
+
+void countTwin(id object, uint64_t ticks)
+{
+    Stats &s = gRM->stats;
+    if ([object isKindOfClass:[RMTexture class]]) {
+        s.twinTextures++;
+        s.twinTextureUs += ticks * 1000 / switch_frame::ticksPerMs();
+    } else {
+        ([object isKindOfClass:[RMBuffer class]] ? s.twinBuffers : s.twinOthers)++;
+    }
+}
 #endif
 
 static MTLRenderPassDescriptor *twinPass(MTLRenderPassDescriptor *pass)
@@ -45,6 +56,8 @@ id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool pa
     if (!m)
         return nil;
     m.label = cb.label;
+    cb->_queue->_residency.useOn(m);
+    cb->_residency.useOn(m);
     id enc = nil;
     // What the CPU wrote that this work reads, cleaned to memory before m2v's submission (m2v cleans an import only when it
     // makes it): the ranges a draw of a pack state reads, as raw::RenderEncoder::prepare cleans them (its uniform windows, its
@@ -387,6 +400,12 @@ id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool pa
     __asm__ volatile("dsb sy" ::: "memory");
 #endif
     gRM->stats.replayClean += cleaned;
+#if SWITCH_FRAME_TIMELINE
+    gRM->stats.replayDraws +=
+        uint64_t(std::count_if(cb->_tape.begin() + from, cb->_tape.begin() + to, [](const Cmd &c) {
+            return c.op == OpDraw || c.op == OpDrawIndexed;
+        }));
+#endif
     noteSurfaceWrites(cb, from, to);
     return m;
 }

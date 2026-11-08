@@ -886,10 +886,17 @@ private:
     std::mutex lock_;
     Kernel k_;
     Pack pack_;
-    // heap_: the shader heap's GPU VA reservation and CPU range (bytes: their size), bound from its start (heapBound_) in parts
-    // as programs are placed
+    // heap_: the shader heap's GPU VA reservation (bytes: the program window), bound from its start (heapBound_) in parts of
+    // host memory as programs are placed
     Bo heap_, tic_, tsc_, root_, zero_, tickets_;
-    std::vector<Bo> heapParts_;
+
+    struct HeapPart {
+        uint64_t offset = 0, bytes = 0;  // in the heap
+        uint8_t *cpu = nullptr;
+        Bo bo;
+    };
+
+    std::vector<HeapPart> heapParts_;
     uint64_t heapBound_ = 0;
     Ring push_, upload_;
     // rings replaced by larger ones, freed once the GPU passed the seqno
@@ -920,6 +927,7 @@ private:
     uint32_t ctWrite_[8] = {};  // SET_CT_WRITE(i) as the baseline leaves it
     bool place(uint32_t prog, uint32_t &program, uint64_t &data);
     bool heapGrow(uint64_t end);
+    const HeapPart *heapPartAt(uint64_t at) const;
     bool heapPlace(const uint8_t *bytes, uint32_t size, uint64_t &offset);
     void build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs, const PlacedProgram &fs,
                const uint32_t *blob, const char *keyString, bool caTransform);
