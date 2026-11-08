@@ -2578,6 +2578,7 @@ private:
 
     // Under the gate, a block-linear frame complete in drawSurface(): the first one switches window A to the rotated layout (and,
     // double-buffered, to surface 1), later ones flip when double-buffered; single-buffered they are already on screen.
+    // NOLINTNEXTLINE(misc-no-recursion): kickSwapQueue's kicking flag stops re-entry; a nested kick only loops
     void presentBlock()
     {
         if (gPanicRestore.panicking)
