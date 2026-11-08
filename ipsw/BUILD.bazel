@@ -50,6 +50,12 @@ alias(
     actual = "@ipsw//:app_cryptex_trust_cache",
 )
 
+# The System cryptex's trust cache (an IM4P 'trcs'), for the UUID the kernel authenticates that cryptex's files by.
+alias(
+    name = "system_cryptex_trust_cache",
+    actual = "@ipsw//:system_cryptex_trust_cache",
+)
+
 # iOS 27: what the boot package carries of the pretranslate run (pretranslated/<kind>/, made offline from the decrypted
 # images by //translate/arm64e/pretranslate's driver, which needs root to mount them): the trust modules, the dyld
 # cache list and the pins the image composer's own run must match. Empty for a kind with no derived "pretranslated".

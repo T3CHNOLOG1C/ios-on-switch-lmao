@@ -206,6 +206,7 @@ boot_package(
         "//conditions:default": ":smp",
     }),
     static_trust = "//ipsw:static_system_trust",
+    system_trust = "//ipsw:system_cryptex_trust_cache",
     xcode_env = select({
         "//install:from_release": None,
         "//conditions:default": "@xcode//:xcode.env",
