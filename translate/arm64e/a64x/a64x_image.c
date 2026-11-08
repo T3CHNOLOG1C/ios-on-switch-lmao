@@ -50,8 +50,9 @@ uint32_t a64x_translate_page(const uint32_t *in, uint32_t *out, uint32_t nwords,
             uint64_t stub_va = sr->va + 4ull * cursor;
             uint32_t dead = a64x_dead_regs_window(in, (int)nwords, (int)i);
             /* V temporaries: those dead within the page (path walk as for X registers) need no save */
-            uint32_t vdead =
-                a64x_class_uses_vtemps(c) ? a64x_dead_vregs_flow(in, (int)nwords, (int)i, 0xFFFFFFFFu, 2000, false) : 0;
+            uint32_t vdead = a64x_class_uses_vtemps(c)
+                                 ? a64x_dead_vregs_flow(in, (int)nwords, (int)i, 0xFFFFFFFFu, 2000, false, sr->walk)
+                                 : 0;
             int n = a64x_stub_v(w, site, stub_va, dead, vdead, stub_buf, A64X_STUB_MAX);
             uint32_t b = n > 0 ? a64x_branch(site, stub_va) : 0;
             if (n > 0 && n <= A64X_STUB_MAX && b && cursor + (uint32_t)n <= sr->cap_words) {

@@ -143,6 +143,8 @@ struct pt {
     struct shared *sh;
     size_t nsh, capsh;
     struct a64x_pt_result *r;
+    void *walk_buf;
+    struct a64x_walk walk; /* FN_MAX_WORDS words: a whole function, or the window after a site */
     bool oom;
 };
 
@@ -234,18 +236,18 @@ static void liveness(const struct pt *p, uint64_t site, bool vtemps, uint32_t *d
         if ((end - start) / 4 <= FN_MAX_WORDS) {
             const uint32_t *fn = (const uint32_t *)(const void *)(m->base + start);
             int n = (int)((end - start) / 4), at = (int)((site - start) / 4);
-            *dead = a64x_dead_regs_flow_fn(fn, n, at, LIVE_CANDIDATES, LIVE_BUDGET);
+            *dead = a64x_dead_regs_flow_fn(fn, n, at, LIVE_CANDIDATES, LIVE_BUDGET, &p->walk);
             if (vtemps)
-                *vdead = a64x_dead_vregs_flow(fn, n, at, 0xFFFFFFFFu, LIVE_BUDGET, true);
+                *vdead = a64x_dead_vregs_flow(fn, n, at, 0xFFFFFFFFu, LIVE_BUDGET, true, &p->walk);
             return;
         }
     }
     uint64_t avail = (exec_end - site) / 4;
     int n = (int)(avail < 16384 ? avail : 16384);
     const uint32_t *w = (const uint32_t *)(const void *)(m->base + site);
-    *dead = a64x_dead_regs_flow(w, n, 0, LIVE_CANDIDATES, LIVE_BUDGET);
+    *dead = a64x_dead_regs_flow(w, n, 0, LIVE_CANDIDATES, LIVE_BUDGET, &p->walk);
     if (vtemps)
-        *vdead = a64x_dead_vregs_flow(w, n, 0, 0xFFFFFFFFu, LIVE_BUDGET, false);
+        *vdead = a64x_dead_vregs_flow(w, n, 0, 0xFFFFFFFFu, LIVE_BUDGET, false, &p->walk);
 }
 
 /* the V registers a stub of w uses as temporaries */
@@ -411,6 +413,7 @@ static void free_pt(struct pt *p)
     free(p->h3);
     free(p->h5);
     free(p->sh);
+    free(p->walk_buf);
     free((void *)p->data);
     free((void *)p->entries);
 }
@@ -484,9 +487,12 @@ int a64x_pretranslate(const struct a64x_macho *m, uint8_t *out, struct a64x_pt_r
     a64x_pt_tail(m, &p.tail, &p.tail_end);
     r->tail_words = (p.tail_end - p.tail) / 4;
     load_function_starts(&p);
+    p.walk_buf = malloc(A64X_WALK_BYTES(FN_MAX_WORDS));
+    p.walk = a64x_walk_in(p.walk_buf, FN_MAX_WORDS);
     p.entries = a64x_pt_entries(m, p.data);
-    int rc = p.entries ? translate(&p, map_flags, r->why, sizeof(r->why))
-                       : fail(r->why, sizeof(r->why), "no entry map (out of memory or unreadable fixups)");
+    int rc = !p.walk_buf ? fail(r->why, sizeof(r->why), "out of memory")
+             : p.entries ? translate(&p, map_flags, r->why, sizeof(r->why))
+                         : fail(r->why, sizeof(r->why), "no entry map (out of memory or unreadable fixups)");
     free_pt(&p);
     if (rc) {
         memcpy(out, m->base, m->size);
