@@ -14,6 +14,9 @@ from pathlib import Path
 from tools.install import card as cards, compose, delta, disks, host, owners, populate, pretranslate, space
 
 VAR = '/private/var'
+# installd checks each staged system app against Apple's detached signature (/System/Library/AppSignatures), whose
+# CodeDirectory hashes the original executable's pages: the copies Data's migration installs keep Apple's bytes.
+STAGED_APPS = VAR + '/staged_system_apps/'
 
 
 @dataclass(frozen=True)
@@ -40,6 +43,11 @@ def _os_entries(deltas: pretranslate.Deltas | None) -> list[dict]:
     return deltas.entries('os') if deltas and 'os' in deltas else []
 
 
+def data_entries(entries: list[dict]) -> list[dict]:
+    """Return the os delta's entries Data's copy of /private/var takes, paths relative to it."""
+    return delta.entries_under([e for e in entries if not e['path'].startswith(STAGED_APPS)], VAR)
+
+
 def _write(image: Path, volumes: dict[str, str], inputs: Inputs, log: host.Log) -> dict[str, dict[int, owners.Owner]]:
     """Fill Data and Preboot; return each one's owners by inode."""
     data_owners, preboot_owners = owners.Journal(), owners.Journal()
@@ -57,7 +65,7 @@ def _write(image: Path, volumes: dict[str, str], inputs: Inputs, log: host.Log) 
         data_owners.root, preboot_owners.root = data, preboot
         populate.seed_data(system, data, data_owners, log, reseed=True)
         if entries:
-            delta.apply(data, delta.entries_under(entries, VAR), log, 'Data')
+            delta.apply(data, data_entries(entries), log, 'Data')
             rest = [e for e in entries if not e['path'].startswith(VAR + '/')]
             inputs.deltas.overlay_system(data, originals.__getitem__, rest, data_owners)
         populate.stage_cryptexes(preboot, inputs.spec, inputs.images, preboot_owners, log)

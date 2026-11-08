@@ -14,7 +14,9 @@ Steps:
                    when the card's iOS is another kind than the build's (its System volume is not the IPSW's)
   3 overlay        <Data>/Switch/overlay := the package's overlay/; when its /Applications changed, writes
                    <Data>/datamigrator/migrate so the next boot registers the apps (system_apps.py; --rerun-migration
-                   writes it regardless, e.g. after a migration the power cut short); also removes the
+                   writes it regardless, e.g. after a migration the power cut short); copies back from the System
+                   volume the staged system apps MobileInstallation still wants that the last migration consumed
+                   without installing, and asks for the migration that installs them; also removes the
                    r3 Wi-Fi bring-up's configd Debug logging profile (STALE_LOGGING_PROFILES) if a card still has
                    it; and stages hekate's "Dump Joy-Con BT" (the FAT's switchroot/joycon_mac.ini, only read) as
                    <Data>/Switch/bluetooth/{host-address, joycon-pairing.plist}, removed when the FAT has none
@@ -39,6 +41,7 @@ import plistlib
 import sys
 import time
 from pathlib import Path
+from typing import NamedTuple
 
 if __package__ in (None, ''):
     sys.path.insert(0, str(Path(os.path.abspath(__file__)).parents[2]))
@@ -192,7 +195,21 @@ def _stage_gpu(args: argparse.Namespace, data_root: Path, log: host.Log) -> None
         raise host.HostError('GPU bundle NOT staged')
 
 
-def _write(args: argparse.Namespace, data_root: Path, fat: object, pairing: dict | None, log: host.Log) -> bool:
+class Volumes(NamedTuple):
+    """The card's volumes a deploy writes or reads besides Data: the FAT and the System volume."""
+
+    fat: str
+    system: str | None
+
+
+def _restage_system_apps(system: str | None, data_root: Path, log: host.Log) -> bool:
+    if not system:
+        return False
+    with cards.mounted(system, log, read_only=True) as system_root:
+        return system_apps.restage(system_root, data_root, log)
+
+
+def _write(args: argparse.Namespace, data_root: Path, volumes: Volumes, pairing: dict | None, log: host.Log) -> bool:
     """Write the deploy to the mounted Data volume (and the FAT); False when the launchd check fails."""
     renamed.migrate_data(data_root, log)
     out = Path(args.logs_out or paths.state_dir() / 'device-logs' / time.strftime('boot-%m%d-%H%M'))
@@ -202,11 +219,12 @@ def _write(args: argparse.Namespace, data_root: Path, fat: object, pairing: dict
     if args.harvest:
         harvest_dir = args.harvest_script and str(Path(args.harvest_script).parent)
         pull_logs.harvest(data_root, out, log, harvest_dir, args.corpus)
-    with cards.mounted(fat.identifier, log) as fat_root:
+    with cards.mounted(volumes.fat, log) as fat_root:
         cards.sync_boot_entry(fat_root, args.boot_package, log)
     apps = system_apps.digest(data_root)
     cards.sync_overlay(data_root, args.boot_package, log)
-    system_apps.request_migration(data_root, apps, log, force=args.rerun_migration)
+    restaged = _restage_system_apps(volumes.system, data_root, log)
+    system_apps.request_migration(data_root, apps, log, force=args.rerun_migration or restaged)
     remove_stale_logging_profiles(data_root, log)
     if not args.no_joycon_pairing:
         joycon_pairing.stage(data_root, pairing, log)
@@ -249,8 +267,9 @@ def main(argv: list[str] | None = None) -> int:
             if preboot:
                 with cards.mounted(preboot, log) as preboot_root:
                     renamed.migrate_preboot(preboot_root, spec, log)
+            system = pull_logs.data_volume(card, spec['volumes'].get('system', {}).get('uuid', '').upper())
             with cards.mounted(data, log) as data_root:
-                ok = _write(args, data_root, fat, pairing, log)
+                ok = _write(args, data_root, Volumes(fat.identifier, system), pairing, log)
             if not args.no_eject:
                 _eject(card, target, log)
         log('deployed')
