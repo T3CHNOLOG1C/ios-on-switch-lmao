@@ -10,7 +10,7 @@
 
 __BEGIN_DECLS
 
-void switch_print_blocked_kext_threads(const char *(*name_of)(const void *), unsigned max_threads);
+void switch_print_blocked_threads(unsigned max_threads);
 void switch_print_thread(const void *thread, const char *who);
 void switch_print_processors(const char *who);
 void switch_sched_describe(char *buffer, size_t size, const void *thread);

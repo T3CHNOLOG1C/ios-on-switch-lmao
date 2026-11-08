@@ -15,12 +15,11 @@
 #include <libkern/OSKextLib.h>
 #include <libkern/c++/OSData.h>
 #include <libkern/c++/OSSymbol.h>
-#include <mach/kmod.h>
 #include <net/kpi_interface.h>
 #include "SwitchWLANApple80211.h"
 #include "SwitchWLANNet.h"
 
-extern kmod_info_t g_kernel_kmod_info;
+extern "C" OSReturn switch_kernel_classes(void (*initialize)());
 extern "C" void switch_wlan_family_static_init(void) __asm__("__GLOBAL__sub_I_SwitchWLANFamily.cpp");
 
 namespace {
@@ -215,11 +214,7 @@ const char *registerClasses()
         controller->getClassSize() != sizeof(IOEthernetController) ||
         interface->getClassSize() != sizeof(IOEthernetInterface))
         return "the loaded IONetworkingFamily is not the " SWITCH_ABI_KIND " one";
-    void *handle = OSMetaClass::preModLoad(g_kernel_kmod_info.name);
-    if (!handle)
-        return "preModLoad failed";
-    switch_wlan_family_static_init();
-    if (OSMetaClass::postModLoad(handle) != kOSReturnSuccess ||
+    if (switch_kernel_classes(switch_wlan_family_static_init) != kOSReturnSuccess ||
         lookupClass("IO80211Controller") != &IO80211Controller::gMetaClass ||
         lookupClass("IO80211Interface") != &IO80211Interface::gMetaClass)
         return "registering IO80211Controller and IO80211Interface failed";
