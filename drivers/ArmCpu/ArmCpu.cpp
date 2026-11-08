@@ -1099,6 +1099,12 @@ void ArmCpu::initCPU(bool boot)
         signalCPU(this);
         return;
     }
+    if (gController == nullptr) {
+        // xnu-12377 boots the boot processor inside ml_processor_register (processor_boot), before start() has set
+        // up the interrupt controller; the self-IPI below would find no handler in this core's cpu_data.
+        ml_install_interrupt_handler(this, static_cast<int>(logicalId), this,
+                                     reinterpret_cast<IOInterruptHandler>(&ArmCpu::dispatch), nullptr);
+    }
     enableGic();
     enableCPUTimeBase(true);
     setCPUState(kIOCPUStateRunning);
