@@ -49,12 +49,20 @@ FRAME = (
 )
 
 
+RATES = (
+    'TegraGM20BMetal: backboardd raw 5s c=300(60.0/s) m2v=0 sw=0 cpu={cpu} acq=0 enc=120us/c d=9.0 p=2.0 b=0.10 '
+    'defer=0 abort=0 rw=0 pool=16MB/4 grow=0 imp=12/40MB clean=0.0KB/c ce=0/0KB ev=0/0 ws={ws}/{wsus}us wc=0/0us '
+    'sp=0/0'
+)
+
+
 def record(message: str, second: int = 0) -> dict:
+    raw = message.startswith('TegraGM20BMetal: ')
     return {
         'timestamp': f'2026-11-08 09:00:{second:02d}.000000+0000',
         'bootUUID': 'BOOTA000',
-        'processImagePath': '/System/Library/Kernels/kernel.development',
-        'subsystem': '',
+        'processImagePath': '/usr/libexec/backboardd' if raw else '/System/Library/Kernels/kernel.development',
+        'subsystem': 'com.brunostjohn.switch.TegraGM20BMetal' if raw else '',
         'category': '',
         'messageType': 'Default',
         'eventMessage': message,
@@ -112,6 +120,17 @@ class Stutter(unittest.TestCase):
         )
         self.assertEqual(verdicts(line.format(mean=9000, max=14000))['stutter.gpu-raise'], PASS)
         self.assertEqual(verdicts(line.format(mean=9000, max=250000))['stutter.gpu-raise'], FAIL)
+
+    def test_render_thread_cpu_waits_on_the_raw_path(self):
+        got = verdicts(RATES.format(cpu=0, ws=300, wsus=900))
+        self.assertEqual(got['stutter.raw-scheduled-wait'], PASS)
+        self.assertEqual(got['stutter.raw-completed-wait'], PASS)
+        self.assertEqual(got['stutter.raw-cpu-ordered'], PASS)
+        self.assertEqual(got['stutter.raw-ring-waits'], PASS)
+        self.assertEqual(got['stutter.raw-pool-stalls'], PASS)
+        got = verdicts(RATES.format(cpu=4, ws=300, wsus=48000))
+        self.assertEqual(got['stutter.raw-scheduled-wait'], FAIL)
+        self.assertEqual(got['stutter.raw-cpu-ordered'], FAIL)
 
 
 if __name__ == '__main__':

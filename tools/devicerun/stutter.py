@@ -15,6 +15,9 @@ POWER = 'SwitchPower: '
 RENDER = 'SwitchFrameRender: vsync'
 DISPLAY = 'drivers/NativeMobileDisplay/NativeLegacyDisplay.cpp'
 IDLE = 'drivers/SwitchPower/SwitchPowerStats.cpp, kernel/switch/idle/idle.c'
+RAW = 'com.brunostjohn.switch.TegraGM20BMetal'
+RATES = 'drivers/TegraGM20BMetal/raw/runtime/RawMetalRates.mm'
+RENDER_SERVER = 'backboardd'
 LONG = (
     r'long \d+: idle (?P<idle>\d+)/\d+ ca (?P<ca>\d+)/\d+ gpu (?P<gpu>\d+)/\d+ queue (?P<queue>\d+)/\d+ '
     r'latch (?P<latch>\d+)/\d+ rate (?P<rate>\d+)/\d+'
@@ -159,5 +162,57 @@ STUTTER = [
         regex=r'raise mean (?P<mean>\d+) ns max (?P<max>\d+) ns',
         source='drivers/TegraGM20B/gpu.c',
         note='76.8 -> 768 MHz before the kick that needs it, ns: a PL change and two 2 us delays',
+    ),
+    Check(
+        'stutter.raw-scheduled-wait',
+        OWNER,
+        'raw ',
+        'max(us) <= 5000',
+        process=RENDER_SERVER,
+        subsystem=RAW,
+        regex=r' ws=(?P<waits>\d+)/(?P<us>\d+)us',
+        source=RATES,
+        note="the render thread blocked in waitUntilScheduled, us per 5 s: a scheduled-handler hop or m2v's scheduling",
+    ),
+    Check(
+        'stutter.raw-completed-wait',
+        OWNER,
+        'raw ',
+        'sum(waits) == 0',
+        process=RENDER_SERVER,
+        subsystem=RAW,
+        regex=r' wc=(?P<waits>\d+)/(?P<us>\d+)us',
+        source=RATES,
+        note='the render server waited for the GPU to finish a command buffer',
+    ),
+    Check(
+        'stutter.raw-cpu-ordered',
+        OWNER,
+        'raw ',
+        'sum(cpu) == 0',
+        subsystem=RAW,
+        regex=r' sw=\d+ cpu=(?P<cpu>\d+) ',
+        source=RATES,
+        note='raw and m2v ordered by a CPU wait instead of the GPU',
+    ),
+    Check(
+        'stutter.raw-ring-waits',
+        OWNER,
+        'raw ',
+        'sum(rw) == 0',
+        subsystem=RAW,
+        regex=r' rw=(?P<rw>\d+) pool=',
+        source=RATES,
+        note='the encoder waited for ring space',
+    ),
+    Check(
+        'stutter.raw-pool-stalls',
+        OWNER,
+        'raw ',
+        'sum(grow) == 0',
+        subsystem=RAW,
+        regex=r' grow=(?P<grow>\d+) ',
+        source=RATES,
+        note='an allocation waited for the pool to grow',
     ),
 ]

@@ -292,8 +292,9 @@ static void giveRecording(RMCommandBuffer *b)
 - (void)waitUntilScheduled
 {
     std::unique_lock<std::mutex> l(_lock);
-    if (!_committed)
+    if (!_committed || _scheduledDone)
         return;
+    const BlockedWait blocked(gRM->stats.scheduledWaits, gRM->stats.scheduledWaitUs);
     if (_changed.wait_for(l, kHeldGrace, [&] {
             return _scheduledDone;
         }))
@@ -321,8 +322,9 @@ static void giveRecording(RMCommandBuffer *b)
 - (void)waitUntilCompleted
 {
     std::unique_lock<std::mutex> l(_lock);
-    if (!_committed)
+    if (!_committed || _completedDone)
         return;
+    const BlockedWait blocked(gRM->stats.completedWaits, gRM->stats.completedWaitUs);
     if (!_changed.wait_for(l, kWaitLimit, [&] {
             return _completedDone;
         }))
