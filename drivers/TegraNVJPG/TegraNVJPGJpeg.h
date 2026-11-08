@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// JPEG headers to NVJPG's decoder setup. Plain C, header only: the kernel (TegraNVJPG.cpp, TegraNVJPGSelfTest.cpp,
-// TegraNVJPGUserClient.cpp) and the host test (test/nvjpg_host.c, which checks it against libjpeg-turbo's own parse)
-// compile the same code.
+// JPEG headers to NVJPG's decoder setup. Plain C, header only: the kernel (TegraNVJPG.cpp, TegraNVJPGUserClient.cpp)
+// and the host test (test/nvjpg_host.c, which checks it against libjpeg-turbo's own parse) compile the same code.
 //
 // What NVJPG 1.0 decodes (nvidia/nvjpg_drv.h "baseline sequential profile"; averne's oss-nvjpg and FFmpeg nvtegra
 // MJPEG on the Switch): Huffman-coded sequential DCT with 8-bit samples (SOF0, and SOF1 within the same limits), one
@@ -498,8 +497,8 @@ typedef struct {
 } TegraNVJPGTarget;
 
 // What a decode writes: the visible picture, and per plane the rows and bytes per row the engine may touch. `padded`:
-// the engine writes whole MCUs (the extent then covers the MCU grid, scaled); 0 once the boot self-test measured it
-// clips to the picture (TegraNVJPGTraits).
+// the engine writes whole MCUs (the extent then covers the MCU grid, scaled); 0 for an engine that clips to the
+// picture (TegraNVJPGTraits).
 typedef struct {
     uint32_t width, height;  // the picture after scaling (libjpeg's jdiv_round_up(size, 2^scale))
     uint32_t planes;
@@ -640,25 +639,6 @@ static inline const char *tegra_nvjpg_setup_output(const TegraNVJPGImage *img, c
         break;
     }
     return NULL;
-}
-
-// The same conversion in integer arithmetic, for the self-test's expected RGB (and the host test's check of the
-// coefficients above against the float formula).
-static inline uint8_t tegra_nvjpg_clamp8(int32_t v)
-{
-    if (v < 0)
-        return 0;
-    return (uint8_t)(v > 255 ? 255 : v);
-}
-
-static inline void tegra_nvjpg_jfif_rgb(uint32_t y, uint32_t cb, uint32_t cr, uint8_t rgb[3])
-{
-    const int32_t Y = (int32_t)y * kTegraNVJPGJfif[0];
-    const int32_t u = (int32_t)cb - 128;
-    const int32_t v = (int32_t)cr - 128;
-    rgb[0] = tegra_nvjpg_clamp8((Y + kTegraNVJPGJfif[1] * v + 32768) / 65536);
-    rgb[1] = tegra_nvjpg_clamp8((Y + kTegraNVJPGJfif[2] * u + kTegraNVJPGJfif[3] * v + 32768) / 65536);
-    rgb[2] = tegra_nvjpg_clamp8((Y + kTegraNVJPGJfif[4] * u + 32768) / 65536);
 }
 
 #ifdef __cplusplus
