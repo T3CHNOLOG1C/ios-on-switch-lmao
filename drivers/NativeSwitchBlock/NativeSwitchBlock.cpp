@@ -23,7 +23,6 @@
 #include <IOKit/IOPlatformExpert.h>
 #include <os/log.h>
 #include <IOKit/IOWorkLoop.h>
-#include <libkern/c++/OSKext.h>
 #include <IOKit/IOKitKeys.h>
 #include <IOKit/storage/IOBlockStorageDevice.h>
 #include <IOKit/storage/IOMedia.h>
@@ -4872,21 +4871,11 @@ extern "C" int native_verified_block_manifest_sha384(dev_t device, const char *u
 }
 
 extern "C" volatile uint32_t armcpu_core_timer[8], armcpu_core_sgi[8];
-extern "C" void switch_print_blocked_kext_threads(const char *(*name_of)(const void *), unsigned max_threads);
+extern "C" void switch_print_blocked_threads(unsigned max_threads);
+extern "C" void switch_print_processors(const char *who);
 extern "C" void switch_iokit_jobs(int *outstanding, int *threads, int *waiting, int *max_threads);
 
 namespace {
-// Bundle identifier of the kext containing `address` (kexts are never unloaded here).
-const char *kextName(const void *address)
-{
-    OSKext *kext = OSKext::lookupKextWithAddress(reinterpret_cast<vm_address_t>(address));
-    if (!kext)
-        return nullptr;
-    const char *name = kext->getIdentifierCString();
-    kext->release();
-    return name;
-}
-
 // The service-plane subtree under the block device: class, name, busy count and
 // IOService state bits (2 registered, 4 matched, 8 first published, 0x10 first matched).
 // NOLINTNEXTLINE(misc-no-recursion): the service plane below the device is a few levels deep; *budget bounds it
@@ -4928,7 +4917,8 @@ extern "C" void switch_raw_root_wait_diagnostic(void)
     switch_iokit_jobs(&outstanding, &threads, &waiting, &maxThreads);
     IOLog("SwitchSD: IOKit matching jobs outstanding=%d config threads=%d waiting=%d max=%d\n", outstanding, threads,
           waiting, maxThreads);
-    switch_print_blocked_kext_threads(kextName, 6);
+    switch_print_processors("SwitchSD");
+    switch_print_blocked_threads(40);
 }
 
 // FAT-profile entry points: the FAT image path is gone.

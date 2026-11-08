@@ -3,9 +3,10 @@ only the steps it reaches:
 
     boot_args.py ............................ boot-args.txt
     overlay.py plan  (manifest) ............. overlay-plan.json
-    adt_edit.py      (board ADT, Apple's tree of the IPSW's iPad, plan, iOS 27 cache list and os trust module) ... ios.adt
+    adt_edit.py      (board ADT, Apple's tree of the IPSW's iPad, plan, iOS 27 cache list, the roles' trust modules)
+                                         ...... ios.adt
     overlay.py trust (plan, Mach-Os) ........ overlay.trustcache
-    trust.py         (IPSW, overlay, GPU, iOS 27 pretranslated) ... trustcache.bundle
+    trust.py         (IPSW, overlay, GPU, iOS 27 pretranslated) ... trustcache.bundle, all in one static module
     build_native_loader.py layout (kernel, ADT, bundle, seed, boot-args)
                                          ...... plan.json, the window's 1 MiB LZ4 blocks in 96 shards (by the MiB
                                                 each starts in)
@@ -219,17 +220,16 @@ def _boot_package_impl(ctx):
     if pretranslated.cache_list:
         args.add("--a64x-cache-pretranslated", pretranslated.cache_list)
         adt_inputs.append(pretranslated.cache_list)
-    os_trust = [f for f in pretranslated.trust if f.basename == "os.trustcache"]
-    if os_trust:
-        args.add("--switch-pretranslated-trust", os_trust[0])
-        adt_inputs += os_trust
-    cryptexes = [
-        ("os", ctx.file.system_trust, "system_cryptex.trustcache"),
-        ("app", ctx.file.app_trust, "app_cryptex.trustcache"),
-    ]
-    for cryptex, apple, translated in cryptexes:
-        modules = [apple] + [f for f in pretranslated.trust if f.basename == translated]
-        args.add_all(modules, before_each = "--switch-%s-cryptex-trust" % cryptex)
+
+    # Each role's CDHashes, which the kernel authenticates the role's files by: the cryptexes' (Apple's trust cache and,
+    # on iOS 27, its pretranslated module) and the pretranslated tree's.
+    roles = {
+        "os-cryptex": [ctx.file.system_trust] + [f for f in pretranslated.trust if f.basename == "system_cryptex.trustcache"],
+        "app-cryptex": [ctx.file.app_trust] + [f for f in pretranslated.trust if f.basename == "app_cryptex.trustcache"],
+        "pretranslated": [f for f in pretranslated.trust if f.basename == "os.trustcache"],
+    }
+    for role, modules in roles.items():
+        args.add_all(modules, before_each = "--cdhashes", format_each = role + "=%s")
         adt_inputs += modules
     args.add("--out", adt)
     _run(ctx, ctx.executable._adt_edit, [args], adt_inputs, [adt], "BootAdt", "Giving the ADT its iPad identity")
@@ -247,12 +247,12 @@ def _boot_package_impl(ctx):
     if len(gpu) > 1:
         fail("the GPU trust cache must be one file")
     bundle = out("trustcache.bundle")
+    modules = [ctx.file.system_trust, ctx.file.app_trust, overlay_trust] + gpu + pretranslated.trust
     args = ctx.actions.args()
     args.add("--static", ctx.file.static_trust)
-    args.add("--app", ctx.file.app_trust)
-    args.add_all([overlay_trust] + gpu + pretranslated.trust, before_each = "--module")
+    args.add_all(modules, before_each = "--module")
     args.add("--out", bundle)
-    _run(ctx, ctx.executable._trust, [args], [ctx.file.static_trust, ctx.file.app_trust, overlay_trust] + gpu + pretranslated.trust, [bundle], "BootTrust", "Bundling the static trust caches")
+    _run(ctx, ctx.executable._trust, [args], [ctx.file.static_trust] + modules, [bundle], "BootTrust", "Merging the trust caches into the static module")
 
     # --- the kernel window and the loader --------------------------------------------------------------------------
     # The prelinked kernel as linked: Xcode's strip and llvm-objcopy both refuse its layout ("string table not at the
@@ -397,9 +397,9 @@ boot_package = rule(
         "kernel": attr.label(mandatory = True, allow_single_file = True),
         "adt": attr.label(mandatory = True, allow_single_file = True, doc = "the board ADT (//boot:adt)"),
         "_apple_adt": attr.label(default = "//ipsw:device_tree", allow_single_file = True),
-        "static_trust": attr.label(mandatory = True, allow_single_file = True),
-        "app_trust": attr.label(mandatory = True, allow_single_file = True),
-        "system_trust": attr.label(mandatory = True, allow_single_file = True),
+        "static_trust": attr.label(mandatory = True, allow_single_file = True, doc = "the StaticTrustCache module"),
+        "app_trust": attr.label(mandatory = True, allow_single_file = True, doc = "the App cryptex's module"),
+        "system_trust": attr.label(mandatory = True, allow_single_file = True, doc = "the System cryptex's module"),
         "data_seed": attr.label(mandatory = True, allow_single_file = True),
         "script_template": attr.label(mandatory = True, allow_single_file = True),
         "bl31": attr.label(mandatory = True, allow_single_file = True),
