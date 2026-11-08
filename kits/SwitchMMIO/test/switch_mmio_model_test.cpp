@@ -59,6 +59,12 @@ TEST_F(SwitchMMIO, FlushedWriteIsReadBack)
     EXPECT_EQ(reads, std::vector<uintptr_t>{at(0x18)});
 }
 
+TEST_F(SwitchMMIO, WordIndexedReadIsTheWordsByteOffset)
+{
+    gRegisters[at(0x4c)] = 0x1234;
+    EXPECT_EQ(switch_mmio_read32_word(reinterpret_cast<const volatile uint32_t *>(base()), 0x13), 0x1234u);
+}
+
 TEST_F(SwitchMMIO, FieldMacros)
 {
     static_assert(SWITCH_BIT(5) == 0x20u);

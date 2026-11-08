@@ -21,6 +21,7 @@
 #include <libkern/crypto/aes.h>
 #include <libkern/crypto/sha2.h>
 #include "AKSKeyWrap.h"
+#include "../../kits/SwitchMMIO/SwitchMMIO.h"
 
 extern "C" void proc_selfname(char *buf, int size);
 #if DEVELOPMENT || DEBUG
@@ -72,12 +73,12 @@ void decryptBlock(void *context, const uint8_t in[16], uint8_t out[16])
     aks::wipe(block, sizeof block);
 }
 
-volatile uint32_t *mapRegisters(uint64_t physical, IOMemoryMap **map)
+volatile uint8_t *mapRegisters(uint64_t physical, IOMemoryMap **map)
 {
     IODeviceMemory *memory = IODeviceMemory::withRange(physical, 0x1000);
     *map = memory ? memory->map(kIOMapAnywhere | kIOMapInhibitCache) : nullptr;
     OSSafeReleaseNULL(memory);
-    return *map ? reinterpret_cast<volatile uint32_t *>((*map)->getVirtualAddress()) : nullptr;
+    return *map ? reinterpret_cast<volatile uint8_t *>((*map)->getVirtualAddress()) : nullptr;
 }
 
 // The class KEK for (keybag, class) keyed into both AES directions; false while corecrypto is not registered.
@@ -113,26 +114,26 @@ extern "C" void native_aks_device_key_start(void)
         return;
     IOMemoryMap *carMap = nullptr;
     IOMemoryMap *fuseMap = nullptr;
-    volatile uint32_t *car = mapRegisters(kCarPA, &carMap);
-    const volatile uint32_t *fuse = mapRegisters(kFusePagePA, &fuseMap);
+    volatile uint8_t *car = mapRegisters(kCarPA, &carMap);
+    const volatile uint8_t *fuse = mapRegisters(kFusePagePA, &fuseMap);
     if (!car || !fuse)
         panic("AppleKeyStore: cannot map CAR/FUSE for the device key");
-    const uint32_t clocks = car[kCarClkOutEnbH / 4];
-    const uint32_t resets = car[kCarRstDevicesH / 4];
+    const uint32_t clocks = switch_mmio_read32(car, kCarClkOutEnbH);
+    const uint32_t resets = switch_mmio_read32(car, kCarRstDevicesH);
     if (!(clocks & kFuseClockBit) || (resets & kFuseClockBit)) {
         panic("AppleKeyStore: FUSE clock off or in reset (CLK_OUT_ENB_H %#x RST_DEVICES_H %#x), no device key", clocks,
               resets);
     }
-    const uint32_t misc = car[kCarMiscClkEnb / 4];
+    const uint32_t misc = switch_mmio_read32(car, kCarMiscClkEnb);
     if (!(misc & kFuseVisible)) {
-        car[kCarMiscClkEnb / 4] = misc | kFuseVisible;
-        (void)car[kCarMiscClkEnb / 4];
+        switch_mmio_write32(car, kCarMiscClkEnb, misc | kFuseVisible);
+        (void)switch_mmio_read32(car, kCarMiscClkEnb);
     }
     uint32_t uid[sizeof kFuseUid / sizeof kFuseUid[0]];
     for (size_t i = 0; i < sizeof uid / sizeof uid[0]; ++i)
-        uid[i] = fuse[(kFuseBase + kFuseUid[i]) / 4];
+        uid[i] = switch_mmio_read32(fuse, kFuseBase + kFuseUid[i]);
     if (!(misc & kFuseVisible))
-        car[kCarMiscClkEnb / 4] = misc;
+        switch_mmio_write32(car, kCarMiscClkEnb, misc);
     OSSafeReleaseNULL(fuseMap);
     OSSafeReleaseNULL(carMap);
     // lot code 0 (uid[2]) is what U-Boot already builds MACs from; zero or all ones means the fuses did not answer.
