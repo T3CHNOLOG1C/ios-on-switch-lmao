@@ -815,6 +815,31 @@ TEST(GM20BDeviceSource, DisplayParamsArriveByMethodAndByTrap)
 			      "2) return kIOReturnBadArgument; storeDeadline("));
 }
 
+// A hang's line reads the hung submission's pushes through the user client that claimed the channel's space, and only
+// that: the kernel's copiers (the tiling move, the copy engine's plane copies) claim theirs with their own state, which
+// is no AGXDeviceUserClient. A live channel's client is not freed under it: hang recovery describes channels on the
+// live list under live_lock, and the client's free() takes every channel off it before it frees its lock.
+TEST(GM20BHangSource, OnlyAConnectionsPushesAreRead)
+{
+	EXPECT_THAT(flat(definition(gpu(), "static void chan_describe(")),
+		    HasSubstr("CHAN_PUSH_BYTES, chan->vm->connection, note, sizeof(note));"));
+	EXPECT_THAT(flat(definition(client(), "bool AGXDeviceUserClient::setUp(")),
+		    HasSubstr("tgm_vm_claim_connection(vm_, this);"));
+	EXPECT_THAT(client(), Not(HasSubstr("tgm_vm_claim(")));
+	const std::string relayout = SourceText("../TegraGM20BRelayout.cpp");
+	EXPECT_THAT(flat(definition(relayout, "bool openSpace()")),
+		    HasSubstr("tgm_vm_claim(r.vm, &gRelayout);"));
+	EXPECT_THAT(relayout, Not(HasSubstr("tgm_vm_claim_connection(")));
+	const std::string copy = SourceText("../TegraGM20BCopy.cpp");
+	EXPECT_THAT(flat(definition(copy, "bool openSpace()")),
+		    HasSubstr("tgm_vm_claim(c.vm, &gCopy);"));
+	EXPECT_THAT(copy, Not(HasSubstr("tgm_vm_claim_connection(")));
+	expectBefore(flat(definition(client(), "void AGXDeviceUserClient::free()")),
+		     "for (auto &chan : chans_) tgm_chan_del(&chan);", "IOLockFree(lock_);");
+	expectBefore(flat(definition(gpu(), "void tgm_chan_del(struct tgm_chan **pchan)")),
+		     "mutex_lock(&live_lock); list_del(&chan->live);", "chan_free(chan);");
+}
+
 // The tiling move and the copy engine's plane copies follow the surface's running writers through tgm_relayout_waits:
 // acquires in their own push (TegraGM20BRelayout.h tgm_relayout_follow), a refusal for one they cannot acquire on, never a
 // CPU wait. The kernel's own client channels' fences sit in the fence view's last slot, which every space maps and the
@@ -831,9 +856,20 @@ TEST(GM20BRelayoutSource, KernelCopiesOrderOnTheGpu)
 		waits,
 		HasSubstr("\"gpu-order\", \"writer-unordered\", \"a kernel copy goes ahead of"));
 	EXPECT_THAT(waits, Not(HasSubstr("tgm_writer_wait(")));
-	EXPECT_THAT(flat(definition(relayout, "int move(")),
+	const std::string move = flat(definition(relayout, "int move("));
+	EXPECT_THAT(move,
 		    HasSubstr("tgm_relayout_waits(r.vm, tgm_chan_uid(chan), writers, nwriters, "
 			      "waits, 0)"));
+	// its wait is late on the writer an acquire sits on, so recovery finds that writer, not the copy behind it
+	EXPECT_THAT(move, HasSubstr("acquired[i] = {waits[i].uid, waits[i].seqno};"));
+	EXPECT_THAT(move, HasSubstr("tgm_copy_wait(tgm_chan_uid(chan), seqno, acquired, nwaits);"));
+	EXPECT_THAT(move, Not(HasSubstr("tgm_writer_wait(")));
+	const std::string late = flat(definition(gpu(), "static struct tgm_chan *late_writer("));
+	EXPECT_THAT(late, HasSubstr("(s32)(tgm_chan_completed(chan) - acquired[i].seqno) < 0"));
+	EXPECT_THAT(late, HasSubstr("*late_seqno = seqno; return live_by_uid(uid);"));
+	EXPECT_THAT(flat(definition(gpu(), "static void writer_wait(")),
+		    HasSubstr("chan = late_writer(uid, seqno, acquired, nacquired, &late); if "
+			      "(chan) verdict = hang_recover(chan, \"IOSurface lock\", late, "));
 	EXPECT_THAT(
 		flat(definition(relayout, "bool openSpace()")),
 		HasSubstr("tgm_fence_kernel(TGM_FENCE_KERNEL_RELAYOUT, &r.fenceCpu, &fencePage, "

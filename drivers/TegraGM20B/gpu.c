@@ -817,6 +817,7 @@ struct tgm_vm {
 	int imports_lost;         /* one could not be recorded: taken as importing every page */
 	struct tgm_tlb_space tlb; /* GPU-ordered maps (TegraGM20BTlb.h) */
 	const void *owner;        /* tgm_vm_claim: the connection whose channels alone address it */
+	const void *connection; /* tgm_vm_claim_connection: the client whose pushes a hang reads */
 };
 
 struct tgm_import {
@@ -948,6 +949,12 @@ void tgm_vm_del(struct tgm_vm **pvm)
 void tgm_vm_claim(struct tgm_vm *vm, const void *owner)
 {
 	vm->owner = owner;
+}
+
+void tgm_vm_claim_connection(struct tgm_vm *vm, const void *connection)
+{
+	vm->owner = connection;
+	vm->connection = connection;
 }
 
 static int stats_on(void);
@@ -1351,7 +1358,7 @@ static void chan_describe(struct tgm_chan *chan, char *buf, unsigned int len)
 	tgm_hang_engine(eng, engine, sizeof(engine));
 	tgm_hang_note(&chan->hang, tgm_chan_completed(chan) + 1, chan->submitted,
 		      chan->chan.gpfifo.map.ptr, chan->chan.gpfifo.max, chan->ring_va,
-		      CHAN_PUSH_BYTES, chan->vm->owner, note, sizeof(note));
+		      CHAN_PUSH_BYTES, chan->vm->connection, note, sizeof(note));
 	tegra_gm20b_mc_errors(&mc_int, &mc_err, &mc_adr);
 	scnprintf(
 		buf, len,
@@ -1416,8 +1423,9 @@ void tgm_chan_check_progress(struct tgm_chan *chan, const char *who, uint32_t se
  * interrupt pass in which nvkm reported errors (xnu_glue.cpp gpuInterrupt), errors_contained() takes the channels the
  * reports name ("on channel N [" for MMU faults, "ch N" for PBDMA errors and GR exceptions) and those nvkm put into
  * recovery in that pass without naming them. A context-switch timeout (a shader that never ends, a switch that never
- * drains) is a tick recover.c waits out until the engine's channel is stuck (tgm_ctxsw_stuck), then recovers as nvkm does
- * (gf100_fifo_intr_ctxsw_timeout: the engine faulted off it). If each is a client channel
+ * drains) is a tick recover.c waits out until the engine's channel is stuck (tgm_ctxsw_decide), then recovers as nvkm does
+ * (gf100_fifo_intr_ctxsw_timeout: the engine faulted off it); an engine stuck on a killed channel's context is reset, and
+ * every other scheduler error is recover.c's as well. If each is a client channel
  * (the compositor's too: Core Animation makes its resources again after an error, as on iOS), the errors are that
  * client's: nvkm's recovery (nvkm_runl_rc_cgrp: runlist blocked and preempted, the channel disabled and removed, an
  * engine still on it reset; nvkm starts it itself for MMU faults, errors_contained() for the rest, which nvkm only
@@ -1559,17 +1567,24 @@ static int chan_marked(u32 chid)
 	return marked;
 }
 
-/* 1 if every report of the pass is a context-switch timeout tick: recover.c decides on those (tgm_ctxsw_stuck). */
-static int only_ctxsw_ticks(const char *errors)
+static int fifo_error(const char *report, const char *end)
+{
+	const char *sched = strstr(report, "SCHED_ERROR");
+	const char *bind = strstr(report, "BIND_ERROR");
+
+	return (sched && (!end || sched < end)) || (bind && (!end || bind < end));
+}
+
+/* 1 if every report of the pass is a scheduler or bind error: recover.c takes those from nvkm's handler and decides on
+ * them (tgm_ctxsw_decide), so one here came between its handler and nvkm's. */
+static int only_fifo_errors(const char *errors)
 {
 	const char *p = errors;
 	const char *bar = NULL;
-	const char *tick = NULL;
 
 	for (;;) {
 		bar = strstr(p, " | ");
-		tick = strstr(p, "CTXSW_TIMEOUT");
-		if (!tick || (bar && tick > bar))
+		if (!fifo_error(p, bar))
 			return 0;
 		if (!bar)
 			return 1;
@@ -1657,7 +1672,7 @@ static int errors_contained(const char *errors)
 			named[n++] = chan;
 		}
 	}
-	if (!n && (!iso.until || now >= iso.until) && !only_ctxsw_ticks(errors))
+	if (!n && (!iso.until || now >= iso.until) && !only_fifo_errors(errors))
 		contained = 0;
 	for (i = 0; contained && i < n; i++)
 		chan_isolate(named[i], errors, now);
@@ -1774,31 +1789,35 @@ static enum tgm_hang hang_recover(struct tgm_chan *late, const char *who, u32 se
 	return verdict;
 }
 
-int tgm_ctxsw_stuck(int chid)
+enum tgm_ctxsw tgm_ctxsw_decide(int chid)
 {
 	struct tgm_chan *chan = NULL;
 	char report[sizeof(chan->fault)];
 	char state[TGM_HANG_LINE];
 	u64 now = nvxnu_nanotime();
-	int stuck = 1;
+	enum tgm_ctxsw verdict = TGM_CTXSW_RESET;
 
 	mutex_lock(&live_lock);
 	chan = live_by(0, chid);
-	if (chan && !chan_stuck(chan, now)) {
-		stuck = 0;
-	} else if (chan && !chan->isolating) {
-		chan_describe(chan, state, sizeof(state));
-		if (chan->kernel) {
+	if (chan) {
+		verdict = tgm_ctxsw_verdict(1, READ_ONCE(chan->error) != 0, chan->kernel,
+					    chan_stuck(chan, now));
+		if (verdict == TGM_CTXSW_FATAL) {
+			chan_describe(chan, state, sizeof(state));
 			nvxnu_panic("tegra-gm20b: context switch timed out on %s's channel: %s",
 				    chan->owner, state);
 		}
-		scnprintf(report, sizeof(report), "CTXSW_TIMEOUT: %s", state);
-		nvxnu_log("tegra-gm20b: context switch timed out, recovering %s (channel %u): %s\n",
-			  chan->owner, chan->chid, state);
-		chan_isolate(chan, report, now);
+		if (verdict == TGM_CTXSW_KILL && !chan->isolating) {
+			chan_describe(chan, state, sizeof(state));
+			scnprintf(report, sizeof(report), "CTXSW_TIMEOUT: %s", state);
+			nvxnu_log("tegra-gm20b: context switch timed out, recovering %s (channel "
+				  "%u): %s\n",
+				  chan->owner, chan->chid, state);
+			chan_isolate(chan, report, now);
+		}
 	}
 	mutex_unlock(&live_lock);
-	return stuck;
+	return verdict;
 }
 
 void tgm_chan_stalled(struct tgm_chan *chan, const char *who, uint32_t seqno, uint64_t waited_ns)
@@ -4097,12 +4116,35 @@ int tgm_writer_done(uint32_t uid, uint32_t seqno)
 	return done;
 }
 
+/* live_lock held: what a wait for `uid` reaching `seqno` is late on. A kernel copy that sits on an acquire completes
+ * nothing of its own, so its lateness is the first writer it acquires on that has not completed; only once they all
+ * have is it the copy's. */
+static struct tgm_chan *late_writer(u32 uid, u32 seqno, const struct tgm_relayout_writer *acquired,
+				    u32 nacquired, u32 *late_seqno)
+{
+	struct tgm_chan *chan = NULL;
+	u32 i = 0;
+
+	for (i = 0; i < nacquired; i++) {
+		chan = live_by_uid(acquired[i].uid);
+		if (chan && !chan->error &&
+		    (s32)(tgm_chan_completed(chan) - acquired[i].seqno) < 0) {
+			*late_seqno = acquired[i].seqno;
+			return chan;
+		}
+	}
+	*late_seqno = seqno;
+	return live_by_uid(uid);
+}
+
 /* No bound of its own: a writer that stops progressing is recovered (killed, its fence released) as
  * tegra_gm20b_sync_for_cpu's is, which ends the wait; a lost interrupt is nvxnu_wake_due's panic. */
-void tgm_writer_wait(uint32_t uid, uint32_t seqno)
+static void writer_wait(u32 uid, u32 seqno, const struct tgm_relayout_writer *acquired,
+			u32 nacquired)
 {
 	struct tgm_chan *chan = NULL;
 	enum tgm_hang verdict = TGM_HANG_STUCK;
+	u32 late = 0;
 
 	for (;;) {
 		const u64 end = nvxnu_nanotime() + TGM_WRITER_HANG_NS;
@@ -4121,13 +4163,24 @@ void tgm_writer_wait(uint32_t uid, uint32_t seqno)
 			continue;
 		verdict = TGM_HANG_PROGRESSING;
 		mutex_lock(&live_lock);
-		chan = live_by_uid(uid);
+		chan = late_writer(uid, seqno, acquired, nacquired, &late);
 		if (chan)
-			verdict = hang_recover(chan, "IOSurface lock", seqno, TGM_WRITER_HANG_NS);
+			verdict = hang_recover(chan, "IOSurface lock", late, TGM_WRITER_HANG_NS);
 		if (verdict == TGM_HANG_STUCK)
-			tgm_chan_hung(chan, "IOSurface lock", seqno, TGM_WRITER_HANG_NS);
+			tgm_chan_hung(chan, "IOSurface lock", late, TGM_WRITER_HANG_NS);
 		mutex_unlock(&live_lock);
 	}
+}
+
+void tgm_writer_wait(uint32_t uid, uint32_t seqno)
+{
+	writer_wait(uid, seqno, NULL, 0);
+}
+
+void tgm_copy_wait(uint32_t uid, uint32_t seqno, const struct tgm_relayout_writer *acquired,
+		   uint32_t nacquired)
+{
+	writer_wait(uid, seqno, acquired, nacquired);
 }
 
 int tgm_writer_fence_va(struct tgm_vm *vm, uint32_t uid, uint64_t *va)

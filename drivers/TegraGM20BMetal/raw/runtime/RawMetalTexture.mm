@@ -313,6 +313,11 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
         cpuLevel(self, r, level, (uint8_t *)bytes, row, true);
         return;
     }
+    if (_rawOk && _raw.type == raw::fx::kTexThreeD && !level && !slice && r.origin.x + r.size.width <= _raw.width &&
+        r.origin.y + r.size.height <= _raw.height && r.origin.z + r.size.depth <= _raw.depth) {
+        cpuVolume(self, r, (uint8_t *)bytes, row, image, true);
+        return;
+    }
     if (!_rawOk || level || slice || r.size.depth > 1 || !_raw.cpu) {
         [(id<MTLTexture>)[self rmTwin] replaceRegion:r
                                          mipmapLevel:level
@@ -361,6 +366,11 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
 {
     if (_rawOk && _raw.chain && !slice && r.size.depth <= 1) {
         cpuLevel(self, r, level, (uint8_t *)bytes, row, false);
+        return;
+    }
+    if (_rawOk && _raw.type == raw::fx::kTexThreeD && !level && !slice && r.origin.x + r.size.width <= _raw.width &&
+        r.origin.y + r.size.height <= _raw.height && r.origin.z + r.size.depth <= _raw.depth) {
+        cpuVolume(self, r, (uint8_t *)bytes, row, image, false);
         return;
     }
     if (!_rawOk || level || slice || r.size.depth > 1 || !_raw.cpu) {

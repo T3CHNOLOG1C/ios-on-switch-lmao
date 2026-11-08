@@ -4,7 +4,7 @@ import UIKit
 
 /// A one-shot value a test waits for: delivered by an observer (a route change, a button press), by the prompt's
 /// Skip button (nil) or by the timeout (nil), whichever comes first. A value delivered before `wait` is kept.
-final class Waiter<T>: @unchecked Sendable {
+public final class Waiter<T>: @unchecked Sendable {
     private enum State {
         case idle
         case waiting(CheckedContinuation<T?, Never>)
@@ -14,7 +14,9 @@ final class Waiter<T>: @unchecked Sendable {
     private let lock = NSLock()
     private var state = State.idle
 
-    func resume(_ value: T?) {
+    public init() {}
+
+    public func resume(_ value: T?) {
         lock.lock()
         switch state {
         case .idle:
@@ -29,7 +31,7 @@ final class Waiter<T>: @unchecked Sendable {
         }
     }
 
-    func wait(timeout: TimeInterval) async -> T? {
+    public func wait(timeout: TimeInterval) async -> T? {
         let timer = Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(timeout * 1e9))
             self?.resume(nil)
@@ -95,22 +97,25 @@ final class Stage: ObservableObject {
     }
 }
 
-final class TestContext: @unchecked Sendable {
-    let media: URL
-    let documents: URL
+public final class TestContext: @unchecked Sendable {
+    public let media: URL
+    public let documents: URL
+    /// The iOS major version the app is built for.
+    public let ios: Int
     let prompter: Prompter
     let stage: Stage
 
-    init(media: URL, documents: URL, prompter: Prompter, stage: Stage) {
+    init(media: URL, documents: URL, ios: Int, prompter: Prompter, stage: Stage) {
         self.media = media
         self.documents = documents
+        self.ios = ios
         self.prompter = prompter
         self.stage = stage
     }
 
     /// Shows `message` with a Skip button and waits for what `setup`'s observers deliver; nil when skipped or timed
     /// out.
-    func interact<T>(
+    public func interact<T>(
         _ message: String, timeout: TimeInterval = 45, _ setup: @escaping @MainActor (Waiter<T>) -> Void
     ) async -> T? {
         let waiter = Waiter<T>()
@@ -123,7 +128,7 @@ final class TestContext: @unchecked Sendable {
         return value
     }
 
-    func onStage<R>(fullScreen: Bool = false, _ build: @escaping @MainActor (UIView) -> R) async -> R {
+    public func onStage<R>(fullScreen: Bool = false, _ build: @escaping @MainActor (UIView) -> R) async -> R {
         await MainActor.run {
             var result: R?
             stage.present(fullScreen: fullScreen) { result = build($0) }
@@ -131,7 +136,7 @@ final class TestContext: @unchecked Sendable {
         }
     }
 
-    func clearStage() async {
+    public func clearStage() async {
         await MainActor.run { stage.dismiss() }
     }
 }

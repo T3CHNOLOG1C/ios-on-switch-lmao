@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "../../TegraDisplayFlip/TegraScanoutCopy.h"
+#include "../raw/fx/fx_image.h"
 #include "../raw/fx/fx_mip.h"
 #include "TegraGM20BLayout.h"
 
@@ -287,6 +288,173 @@ TEST(Layout, IsRawFxLevelZero)
             for (uint32_t xB : {0u, n.width * n.bpp / 2, n.width * n.bpp - 1})
                 EXPECT_EQ(tgm_layout_offset(&l, xB, y), raw::fx::texelOffset(c, 0, xB, y));
     }
+}
+
+// NIL's own answers (raw/fx/test/nilimage.c over the NVK host twin's exported NIL): a one-level image's size, alignment, level
+// 0's row stride and block depth, the header of a view of all of it at 0x100000, and the FNV-1a hash of the image after
+// nil_copy_linear_to_tiled of the pattern (k * 131 + k / 251 + 7)
+struct NilView {
+    uint32_t dim, width, height, depth, bpp;
+    bool view2d;
+    uint64_t bytes, align;
+    uint32_t rowBytes, zLog2;
+    uint32_t header[8];
+    uint64_t hash;
+};
+
+const NilView kNilViews[] = {
+    {1,
+     1024,
+     1,
+     1,
+     4,
+     false,
+     32768,
+     4096,
+     4096,
+     0,
+     {0x58d24908, 0x00100000, 0x00600000, 0x00070000, 0xe00003ff, 0x80000000, 0x03000000, 0},
+     0x12598af5ff51af25},
+    {3,
+     17,
+     17,
+     17,
+     4,
+     false,
+     98304,
+     8192,
+     128,
+     4,
+     {0x58d24908, 0x00100000, 0x00600000, 0x00070100, 0xe1000010, 0x80100010, 0x03000000, 0},
+     0xb7b73f69140b8432},
+    {3,
+     17,
+     17,
+     17,
+     4,
+     true,
+     53248,
+     4096,
+     128,
+     0,
+     {0x58d24908, 0x00100000, 0x00600000, 0x00070000, 0xe1000010, 0x80100010, 0x03000000, 0},
+     0xbf352aae0dc31cb6},
+    {3,
+     33,
+     33,
+     33,
+     8,
+     false,
+     614400,
+     8192,
+     320,
+     4,
+     {0x58d7ff83, 0x00100000, 0x00600000, 0x00070100, 0xe1000020, 0x80200020, 0x03000000, 0},
+     0xa3ae3ecb66f064aa},
+    {3,
+     5,
+     300,
+     2,
+     4,
+     false,
+     40960,
+     4096,
+     64,
+     1,
+     {0x58d24908, 0x00100000, 0x00600000, 0x00070040, 0xe1000004, 0x8001012b, 0x03000000, 0},
+     0xe8066eb5bd6c7d71},
+    {3,
+     64,
+     64,
+     64,
+     4,
+     false,
+     1048576,
+     8192,
+     256,
+     4,
+     {0x58d24908, 0x00100000, 0x00600000, 0x00070100, 0xe100003f, 0x803f003f, 0x03000000, 0},
+     0x4a69c3a125f58076},
+    {3,
+     1,
+     1,
+     11,
+     16,
+     false,
+     8192,
+     8192,
+     64,
+     4,
+     {0x58d7ff81, 0x00100000, 0x00600000, 0x00070100, 0xe1000000, 0x800a0000, 0x03000000, 0},
+     0xfad2be41f8779e65},
+    {3,
+     129,
+     70,
+     6,
+     2,
+     false,
+     184320,
+     4096,
+     320,
+     3,
+     {0x7012491b, 0x00100000, 0x00600000, 0x000700c0, 0xe1000080, 0x80050045, 0x03000000, 0},
+     0xe0c2d6f8c35d1a2d},
+};
+
+TEST(Layout, OneAndThreeDimensionalImagesAreNils)
+{
+    for (const NilView &n : kNilViews) {
+        raw::fx::MipChain c;
+        const uint32_t type = n.dim == 1 ? raw::fx::kTexOneD : raw::fx::kTexThreeD;
+        ASSERT_TRUE(n.dim == 1 ? raw::fx::mipChainLayout(n.width, n.height, 1, n.bpp, c)
+                               : raw::fx::volumeLayout(n.width, n.height, n.depth, 1, n.bpp, n.view2d, c))
+            << n.width << "x" << n.height << "x" << n.depth;
+        EXPECT_EQ(c.bytes, n.bytes) << n.width << "x" << n.height << "x" << n.depth;
+        EXPECT_EQ(c.align, n.align) << n.width << "x" << n.height << "x" << n.depth;
+        EXPECT_EQ(c.level[0].rowBytes, n.rowBytes);
+        EXPECT_EQ(c.zLog2, n.zLog2);
+        uint32_t header[8];
+        raw::fx::mipChainTic(c, 0x100000, n.header[0], false, 0, 1, header, type);
+        for (int w = 0; w < 8; w++)
+            EXPECT_EQ(header[w], n.header[w]) << n.width << "x" << n.height << "x" << n.depth << " word " << w;
+        const size_t row = size_t(n.width) * n.bpp, plane = row * n.height;
+        std::vector<uint8_t> linear(plane * n.depth), tiled(c.bytes, 0);
+        for (size_t k = 0; k < linear.size(); k++)
+            linear[k] = uint8_t(k * 131 + k / 251 + 7);
+        const uint32_t origin[3] = {0, 0, 0}, size[3] = {n.width, n.height, n.depth};
+        if (n.dim == 1)
+            raw::fx::writeLevel(c, tiled.data(), 0, 0, 0, n.width, 1, linear.data(), row);
+        else
+            raw::fx::writeVolume(c, tiled.data(), 0, origin, size, linear.data(), row, plane);
+        uint64_t hash = 0xcbf29ce484222325ull;
+        for (uint8_t b : tiled)
+            hash = (hash ^ b) * 0x100000001b3ull;
+        EXPECT_EQ(hash, n.hash) << n.width << "x" << n.height << "x" << n.depth;
+        std::vector<uint8_t> back(linear.size(), 0);
+        if (n.dim == 3) {
+            raw::fx::readVolume(c, tiled.data(), 0, origin, size, back.data(), row, plane);
+            EXPECT_EQ(back, linear);
+        }
+    }
+}
+
+// A 1D image is NIL's 2D layout of one row (Tiling::choose leaves a 1D image one GOB tall, where a 2D image of height 1 clamps
+// to), under a header of TEXTURE_TYPE ONE_D (nvb097_fill_image_view_desc for ViewType::_1D); nothing else in the header moves
+TEST(Layout, OneDHeaderDiffersFromTwoDInItsTypeAlone)
+{
+    raw::fx::MipChain c;
+    ASSERT_TRUE(raw::fx::mipChainLayout(1024, 1, 1, 4, c));
+    EXPECT_EQ(c.yLog2, 0);
+    uint32_t one[8], two[8];
+    raw::fx::mipChainTic(c, 0x100000, 0x7017ff8f, false, 0, 1, one, raw::fx::kTexOneD);
+    raw::fx::mipChainTic(c, 0x100000, 0x7017ff8f, false, 0, 1, two);
+    EXPECT_EQ(one[4] >> 23 & 0xf, 0u);  // TEXTURE_TYPE, bits 154:151
+    EXPECT_EQ(two[4] >> 23 & 0xf, 1u);
+    EXPECT_EQ(one[4] & 0xffff, 1023u);  // WIDTH_MINUS_ONE
+    EXPECT_EQ(one[5] & 0xffff, 0u);     // HEIGHT_MINUS_ONE
+    for (int w : {0, 1, 2, 3, 5, 6, 7})
+        EXPECT_EQ(one[w], two[w]) << w;
+    EXPECT_EQ(one[4] & ~(0xfu << 23), two[4] & ~(0xfu << 23));
 }
 
 TEST(Layout, RefusesWhatNilDoesNotTile)

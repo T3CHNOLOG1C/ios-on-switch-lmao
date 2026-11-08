@@ -49,6 +49,9 @@ namespace raw {
 
 class Device;
 class CommandBuffer;
+class ComputeEncoder;
+struct ComputeState;
+struct ComputeRecord;
 
 constexpr uint32_t kPteKindPitch = 0;
 
@@ -193,6 +196,11 @@ struct Texture {
     bool blockLinear = false;
     uint8_t blockHeight = 0;
     uint64_t layerBytes = 0;
+    // A block-linear texture's header type (fx::kTexOneD, kTexTwoD, kTexThreeD); a pitch header is always TWO_D_NO_MIPMAP
+    uint8_t type = fx::kTexTwoD;
+    // A 3D texture's (fx_image.h): its depth and its blocks' depth in planes, log2 (0 for one made 2D-view compatible)
+    uint32_t depth = 1;
+    uint8_t blockDepth = 0;
 
     // Depth32Float_Stencil8 (raw_zeta.h): block-linear zeta memory, bound with its own PTE kind; never sampled, copied or a
     // colour target
@@ -478,14 +486,15 @@ public:
     // buffer<->image copies of linear images)
     void copyRect(uint64_t src, uint32_t srcPitch, uint64_t dst, uint32_t dstPitch, uint32_t width, uint32_t lines,
                   uint32_t bpp);
-    // `w` x `h` texels from (sx, sy) of `src` to (dx, dy) of `dst`, each pitch or block-linear (vkCmdCopyImage)
-    void copyTexels(const Texture &src, uint32_t sx, uint32_t sy, const Texture &dst, uint32_t dx, uint32_t dy,
-                    uint32_t w, uint32_t h);
+    // `w` x `h` texels from (sx, sy) of plane sz of `src` to (dx, dy) of plane dz of `dst`, each pitch or block-linear (a 2D
+    // texture's plane is 0) (vkCmdCopyImage)
+    void copyTexels(const Texture &src, uint32_t sx, uint32_t sy, uint32_t sz, const Texture &dst, uint32_t dx,
+                    uint32_t dy, uint32_t dz, uint32_t w, uint32_t h);
     // `w` x `h` texels between rows `pitch` bytes apart at `va` (both multiples of the texel's component, at most 4 bytes) and
-    // (x, y) of `t`, pitch or block-linear: into `t` where `toTexture`, else out of it (vkCmdCopyBufferToImage,
+    // (x, y) of plane z of `t`, pitch or block-linear: into `t` where `toTexture`, else out of it (vkCmdCopyBufferToImage,
     // vkCmdCopyImageToBuffer)
-    void copyBufferTexels(uint64_t va, uint32_t pitch, const Texture &t, uint32_t x, uint32_t y, uint32_t w, uint32_t h,
-                          bool toTexture);
+    void copyBufferTexels(uint64_t va, uint32_t pitch, const Texture &t, uint32_t x, uint32_t y, uint32_t z, uint32_t w,
+                          uint32_t h, bool toTexture);
     // A planar texture's image from its surface's planes (Texture::planar): two remapped copies, the luma codes into green
     // (alpha 255), then the chroma pairs into red (Cr) and blue (Cb), each leaving the other components as they are
     void convertPlanar(const Texture &t);
@@ -547,6 +556,7 @@ private:
     friend class Device;
     friend class RenderEncoder;
     friend class BlitEncoder;
+    friend class ComputeEncoder;
     Device *dev_ = nullptr;
     std::vector<TegraGM20BAbiPush> segments_;
     std::vector<std::pair<uintptr_t, uint64_t>> clean_, flush_;  // CPU ranges to clean / clean+invalidate before Exec
@@ -622,6 +632,16 @@ public:
         return id && k_.surfaceGpuWrites(uint32_t(id));
     }
 
+    bool gpuPriority(uint32_t priority, uint32_t background)
+    {
+        return k_.priority(priority, background);
+    }
+
+    bool hasGpuPriority() const
+    {
+        return (k_.info().flags & TegraGM20BInfoPriority) != 0;
+    }
+
     // `writes`: the texture is rendered into or stored to. A surface the kernel decides block-linear (the first texture over
     // it writes it: TegraGM20BLayout.h) has block-linear textures only, at the decided shape (false: another one)
     bool createSurfaceTexture(uint64_t surfaceId, void *base, uint64_t allocBytes, const void *surface, uint64_t offset,
@@ -655,6 +675,12 @@ public:
     bool createView(const Texture &of, uint32_t format, Texture &t);  // the same memory as another format
     // Memoryless (a pass gives it a backing); Depth32Float_Stencil8 among them, as zeta (Texture::zeta)
     bool createMemoryless(uint32_t width, uint32_t height, uint32_t format, Texture &t);
+    // A 1D texture: NIL's 1D image, one block-linear row (y_log2 0) under a ONE_D header, in block-linear memory the CPU
+    // writes through its tiled view (a 1D header takes no pitch layout)
+    bool createLine(uint32_t width, uint32_t format, Texture &t);
+    // A 3D texture of one level: NIL's 3D image (fx_image.h) under a THREE_D header. `view2d`: one plane a block, as m2v makes
+    // a 3D render target (2D-array compatible), so its twin over the same memory reads the same texels
+    bool createVolume(uint32_t width, uint32_t height, uint32_t depth, uint32_t format, bool view2d, Texture &t);
     // A mipmapped 2D texture of `levels` levels: level 0 of its block-linear chain (Texture::chain), its header the chain's.
     // False: not one the raw path keeps (not a render target format, extended range, no memory).
     bool createMipTexture(uint32_t width, uint32_t height, uint32_t format, uint32_t levels, Texture &t);
@@ -836,6 +862,8 @@ public:
         // backings on compressed memory made, their bytes, and compressed memory the kernel could not make; full-target clears
         // of compressed targets to a value the boot ZBC table holds (no texels written) and to one it does not
         std::atomic<uint64_t> compBackings{0}, compBytes{0}, compFailed{0}, zbcHits{0}, zbcMisses{0};
+        // compute launches encoded (raw_compute.h)
+        std::atomic<uint64_t> dispatches{0};
     } stats;
 
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
@@ -860,6 +888,9 @@ private:
     friend class CommandBuffer;
     friend class RenderEncoder;
     friend class BlitEncoder;
+    friend class ComputeEncoder;
+    friend const ComputeState *placeCompute(Device &dev, const ComputeRecord &r);
+    friend const ComputeState *computeState(Device &dev, uint64_t keyHash);
 
     struct Ring {
         Bo bo;
@@ -940,7 +971,15 @@ private:
     // heapPlaced_ as of the last submission whose prologue invalidated the SMs' instruction caches, ~0: none on this channel.
     // The instruction cache prefetches past a program's end, where heapPlace puts the next program.
     uint64_t heapInvalidated_ = ~0ull;
+    // Shader local memory (raw_slm.h), under lock_: the area and the most a placed program or kernel asks of a warp. An area
+    // it outgrew is kept: a submission already made may still use it.
+    Bo slm_;
+    uint64_t slmPerWarp_ = 0;
+    std::vector<Bo> slmOutgrown_;
+    // the per-warp size the channel was last given (commit; 0 on a new channel): the submitting thread's
+    uint64_t slmChannel_ = 0;
     uint32_t ctWrite_[8] = {};  // SET_CT_WRITE(i) as the baseline leaves it
+    bool slmNeed(uint64_t perWarp);
     bool place(uint32_t prog, uint32_t &program, uint64_t &data);
     bool heapGrow(uint64_t end);
     const HeapPart *heapPartAt(uint64_t at) const;

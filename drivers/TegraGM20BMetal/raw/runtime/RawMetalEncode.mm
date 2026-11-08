@@ -1,18 +1,38 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalInternal.h"
+#include <optional>
+#include "raw_compute.h"
 
-// The copy engine's copies of those rows: one copy of every row where they lie a pitch apart, else one per row
+// The copy engine's copies of those rows into or out of plane z: one copy of every row where they lie a pitch apart, else one
+// per row
 static void copyRows(raw::BlitEncoder *be, uint64_t bufferVa, const BufferRows &r, uint64_t offset,
-                     uint64_t bytesPerRow, const raw::Texture &t, uint32_t x, uint32_t y, uint32_t w, uint32_t h,
-                     bool intoTexture)
+                     uint64_t bytesPerRow, const raw::Texture &t, uint32_t x, uint32_t y, uint32_t z, uint32_t w,
+                     uint32_t h, bool intoTexture)
 {
     if (r.uniform) {
-        be->copyBufferTexels(bufferVa + r.first, uint32_t(r.pitch), t, x, y, w, h, intoTexture);
+        be->copyBufferTexels(bufferVa + r.first, uint32_t(r.pitch), t, x, y, z, w, h, intoTexture);
         return;
     }
     for (uint32_t k = 0; k < h; k++)
-        be->copyBufferTexels(bufferVa + bufferRow(r, offset, bytesPerRow, k), w * t.bpp, t, x, y + k, w, 1,
+        be->copyBufferTexels(bufferVa + bufferRow(r, offset, bytesPerRow, k), w * t.bpp, t, x, y + k, z, w, 1,
                              intoTexture);
+}
+
+// A buffer<->texture copy of `planes` planes from plane z, `image` bytes apart in the buffer (each plane's rows decided at
+// record: bufferPlanes); the buffer's lines cleaned before, or invalidated for the CPU after where the copy writes it
+static void copyPlanes(raw::BlitEncoder *be, raw::CommandBuffer *rc, const raw::Buffer &b, uint64_t offset,
+                       uint64_t row, uint64_t image, const raw::Texture &t, uint32_t x, uint32_t y, uint32_t z,
+                       uint32_t w, uint32_t h, uint32_t planes, bool intoTexture)
+{
+    for (uint32_t k = 0; k < std::max(planes, 1u); k++) {
+        const uint64_t at = offset + k * image;
+        BufferRows rows;
+        bufferRows(at, row, h, w * t.bpp, t.bpp, intoTexture, rows);
+        const uint64_t first = bufferRow(rows, at, row, 0);
+        if (!b.wc)
+            rc->clean(b.cpu + first, bufferRow(rows, at, row, h - 1) - first + w * t.bpp, !intoTexture);
+        copyRows(be, b.va, rows, at, row, t, x, y, z + k, w, h, intoTexture);
+    }
 }
 
 // ---- the tape onto the raw path ----
@@ -51,6 +71,7 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
     }
     raw::RenderEncoder *re = nullptr;
     raw::BlitEncoder *be = nullptr;
+    std::optional<raw::ComputeEncoder> ce;
 
     auto fail = [&](RMPred p, const char *w, uint64_t a = 0, uint64_t b = 0) {
         *why = w;
@@ -205,7 +226,7 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
                         if (x && x->sampled) {
                             if (!fill)
                                 fill = rc->blit();
-                            fill->copyTexels(*x, 0, 0, *x->sampled, 0, 0, x->width, x->height);
+                            fill->copyTexels(*x, 0, 0, 0, *x->sampled, 0, 0, 0, x->width, x->height);
                         }
             if (fill)
                 fill->end();
@@ -251,7 +272,7 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
                 continue;
             const raw::Texture &x = t->_raw;
             raw::BlitEncoder *b = rc->blit();
-            b->copyTexels(x, 0, 0, *x.sampled, 0, 0, x.width, x.height);
+            b->copyTexels(x, 0, 0, 0, *x.sampled, 0, 0, 0, x.width, x.height);
             b->end();
         }
     };
@@ -308,7 +329,16 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
     };
     for (size_t at = from; at < to; at++) {
         const Cmd &c = cb->_tape[at];
+        if (isKernelCommand(c.op)) {
+            if (const char *w = nullptr; !encodeKernel(*ce, *rc, cb, c, &w))
+                return fail(PredCompute, w, c.op);
+            continue;
+        }
         switch (c.op) {
+        case OpCompute:
+            ce.emplace(*rc, d);
+            ce->setSerial(c.a == MTLDispatchTypeSerial);
+            break;
         case OpRender: {
             const RMPass &pass = cb->_passes[c.x];
             if (cb->_sampledShadows)
@@ -385,6 +415,10 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
                 re->end();
             if (be)
                 be->end();
+            if (ce) {
+                ce->end();
+                ce.reset();
+            }
             for (RMTexture *t : standInStores)
                 if (standInPass(t, true))
                     return false;
@@ -473,14 +507,16 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
             standInFresh.erase(t);
             const uint64_t x = c.x, o = extra(cb, x + 10), sl = extra(cb, x + 1), dl = extra(cb, x + 9);
             const uint32_t sx = uint32_t(extra(cb, x + 2)), sy = uint32_t(extra(cb, x + 3)),
-                           w = uint32_t(extra(cb, x + 5)), h = uint32_t(extra(cb, x + 6)), dx = uint32_t(o),
-                           dy = uint32_t(o >> 32);
+                           sz = uint32_t(extra(cb, x + 4)), w = uint32_t(extra(cb, x + 5)),
+                           h = uint32_t(extra(cb, x + 6)), d = uint32_t(extra(cb, x + 7)), dx = uint32_t(o),
+                           dy = uint32_t(o >> 32), dz = uint32_t(extra(cb, x + 11));
             raw::Texture fromLevel, toLevel;
             if (sl)
                 raw::chainLevelImage(s->_raw, uint32_t(sl), fromLevel);
             if (dl)
                 raw::chainLevelImage(t->_raw, uint32_t(dl), toLevel);
-            be->copyTexels(sl ? fromLevel : s->_raw, sx, sy, dl ? toLevel : t->_raw, dx, dy, w, h);
+            for (uint32_t k = 0; k < std::max(d, 1u); k++)
+                be->copyTexels(sl ? fromLevel : s->_raw, sx, sy, sz + k, dl ? toLevel : t->_raw, dx, dy, dz + k, w, h);
             break;
         }
         case OpMipmaps: {  // a chain's levels from level 0 (decided at record)
@@ -515,22 +551,18 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
             RMTexture *t = (__bridge RMTexture *)c.obj2;
             useBuffer(rc, s, false);
             useTexture(rc, t, true);
-            const uint64_t x = c.x, o = extra(cb, x + 8), so = extra(cb, x), row = extra(cb, x + 1);
-            const uint64_t w = extra(cb, x + 3), h = extra(cb, x + 4), dl = extra(cb, x + 7);
+            const uint64_t x = c.x, o = extra(cb, x + 8), so = extra(cb, x), row = extra(cb, x + 1),
+                           image = extra(cb, x + 2);
+            const uint64_t w = extra(cb, x + 3), h = extra(cb, x + 4), d = extra(cb, x + 5), dl = extra(cb, x + 7),
+                           dz = extra(cb, x + 9);
             if (!fresh.empty())
                 fresh.erase(t);
             standInFresh.erase(t);
             raw::Texture level;
             if (dl)
                 raw::chainLevelImage(t->_raw, uint32_t(dl), level);
-            BufferRows rows;
-            bufferRows(so, row, uint32_t(h), uint32_t(w * t->_raw.bpp), t->_raw.bpp, true,
-                       rows);  // (decided at record)
-            const uint64_t first = bufferRow(rows, so, row, 0);
-            if (!s->_raw.wc)
-                rc->clean(s->_raw.cpu + first, bufferRow(rows, so, row, uint32_t(h - 1)) - first + w * t->_raw.bpp);
-            copyRows(be, s->_raw.va, rows, so, row, dl ? level : t->_raw, uint32_t(o), uint32_t(o >> 32), uint32_t(w),
-                     uint32_t(h), true);
+            copyPlanes(be, rc, s->_raw, so, row, image, dl ? level : t->_raw, uint32_t(o), uint32_t(o >> 32),
+                       uint32_t(dz), uint32_t(w), uint32_t(h), uint32_t(d), true);
             break;
         }
         case OpCopyTextureToBuffer: {
@@ -538,20 +570,14 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
             RMBuffer *t = (__bridge RMBuffer *)c.obj2;
             useTexture(rc, s, false);
             useBuffer(rc, t, true);
-            const uint64_t x = c.x, o = extra(cb, x + 2), w = extra(cb, x + 4), h = extra(cb, x + 5),
-                           dof = extra(cb, x + 7), row = extra(cb, x + 8), sl = extra(cb, x + 1);
+            const uint64_t x = c.x, o = extra(cb, x + 2), sz = extra(cb, x + 3), w = extra(cb, x + 4),
+                           h = extra(cb, x + 5), d = extra(cb, x + 6), dof = extra(cb, x + 7), row = extra(cb, x + 8),
+                           image = extra(cb, x + 9), sl = extra(cb, x + 1);
             raw::Texture level;
             if (sl)
                 raw::chainLevelImage(s->_raw, uint32_t(sl), level);
-            BufferRows rows;
-            bufferRows(dof, row, uint32_t(h), uint32_t(w * s->_raw.bpp), s->_raw.bpp, false,
-                       rows);  // (decided at record)
-            const uint64_t first = bufferRow(rows, dof, row, 0);
-            if (!t->_raw.wc)
-                rc->clean(t->_raw.cpu + first, bufferRow(rows, dof, row, uint32_t(h - 1)) - first + w * s->_raw.bpp,
-                          true);
-            copyRows(be, t->_raw.va, rows, dof, row, sl ? level : s->_raw, uint32_t(o), uint32_t(o >> 32), uint32_t(w),
-                     uint32_t(h), false);
+            copyPlanes(be, rc, t->_raw, dof, row, image, sl ? level : s->_raw, uint32_t(o), uint32_t(o >> 32),
+                       uint32_t(sz), uint32_t(w), uint32_t(h), uint32_t(d), false);
             break;
         }
         default:  // states, fences, events, resources the raw path needs nothing for
@@ -562,6 +588,8 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
         re->end();
     if (be)
         be->end();
+    if (ce)
+        ce->end();
     for (RMTexture *t : standInStores)
         if (standInPass(t, true))
             return false;

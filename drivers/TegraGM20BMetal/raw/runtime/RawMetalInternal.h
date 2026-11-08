@@ -20,6 +20,7 @@
 #include <set>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 #include "GpuMemoryRelease.h"
 #include "LimitsTable.h"
@@ -64,8 +65,9 @@ struct Stats {
     // diagnostics (r10-rawsweep): the raw encode thrown away by aborted command buffers, the m2v replay's time on the committing
     // thread (replay + commit), and the bytes replay cleans
     std::atomic<uint64_t> abortUs{0}, replayUs{0}, replayClean{0};
-    // command buffers submitted in segments (planSegments), and their segments on m2v
-    std::atomic<uint64_t> splits{0}, splitM2v{0};
+    // command buffers submitted in segments (planSegments), and their segments on m2v; of those with both drivers' encoders, the
+    // ones split around their shared events, and the ones kept whole for an event wait or signal between encoders
+    std::atomic<uint64_t> splits{0}, splitM2v{0}, eventSplits{0}, eventWhole{0};
     // command buffers completed (finish): with the commits, what the stall line (rawStall) watches
     std::atomic<uint64_t> finished{0};
     // waitUntilScheduled / waitUntilCompleted calls that blocked, and the time they blocked: CPU waits on the caller's thread
@@ -78,7 +80,9 @@ struct Stats {
     std::atomic<uint64_t> replayDraws{0}, twinTextures{0}, twinBuffers{0}, twinOthers{0}, twinTextureUs{0};
     // command buffers completed before their submitting thread scheduled them (finish() ran their scheduled handlers)
     std::atomic<uint64_t> scheduledByFinish{0};
-    std::atomic<uint64_t> twinForwards{0};  // selectors a facade object forwarded to its m2v twin (RMObject)
+    std::atomic<uint64_t> twinForwards{
+        0};  // selectors m2v's object answers that a facade object has no method for (answerMissing)
+    std::atomic<uint64_t> zeroAnswers{0};  // selectors answered zero, as m2v's objects answer them (answerZero)
 #endif
 };
 
@@ -150,8 +154,17 @@ extern RawState *gRM;
 
 // RawMetalPredicates.mm
 const char *metalTypes(SEL selector);
+// m2v's object of `twinClass` has a method for `selector`: else it answers zero (the frontend's forwardZero), and so does the
+// facade's object, with no twin made and nothing sent to m2v (answerZero)
+bool twinAnswers(Class twinClass, SEL selector);
+void answerZero(id object, NSInvocation *invocation);
+// A selector m2v's object answers that raw has no method for: answered zero, a fault in debug builds and the rates line's tw=../f
+void answerMissing(id object, NSInvocation *invocation);
 bool rawShape(MTLTextureDescriptor *d);
 bool chainShape(MTLTextureDescriptor *d);
+bool lineShape(MTLTextureDescriptor *d);
+bool volumeShape(MTLTextureDescriptor *d);
+bool volumeRendered(MTLTextureDescriptor *d);
 bool zetaDescriptor(MTLTextureDescriptor *d);
 uint32_t rawShapeTerm(MTLTextureDescriptor *d);
 // A texture the raw path does not keep: its predicate, and the predicate's first line with the texture's details
@@ -188,6 +201,7 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed);
 // RawMetalTextureCpu.mm
 void cpuTiled(RMTexture *t, MTLRegion r, uint8_t *bytes, NSUInteger row, bool write);
 void cpuLevel(RMTexture *t, MTLRegion r, NSUInteger level, uint8_t *bytes, NSUInteger row, bool write);
+void cpuVolume(RMTexture *t, MTLRegion r, uint8_t *bytes, NSUInteger row, NSUInteger image, bool write);
 
 // RawMetalDevice.mm
 const char *ycbcrPlan(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteger plane, raw::YcbcrPlan &out);
@@ -221,6 +235,10 @@ void surfaceConverted(IOSurfaceRef s, bool made);  // a planar or YCbCr texture 
 uint64_t surfaceWrites(IOSurfaceRef s);
 void noteSurfaceWrite(IOSurfaceRef s);
 void noteSurfaceWrites(RMCommandBuffer *cb, size_t from, size_t to);  // after [from, to) of `cb` was submitted
+
+// RawMetalQueuePriority.mm
+void queuePriorityAdd(RMQueue *queue);
+void queuePriorityRemove(RMQueue *queue);
 
 // RawMetalSubmit.mm
 void orderRefused(const char *what, int kr);

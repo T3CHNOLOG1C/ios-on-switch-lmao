@@ -5,8 +5,10 @@ from dataclasses import dataclass
 
 MAGIC = b'GM20BPK1'
 # 2: the header's stack key (rawpack.py --stack) after the section table; 3: barrier-form records; 4: programs' shader
-# data and constant buffer types
-VERSION = 5
+# data and constant buffer types; 6: compute kernels (runtime/raw_pack.h PackKernel)
+VERSION = 6
+SECTIONS = 9  # runtime/raw_pack.h PackSectionCount
+KERNEL_ENTRIES = 16  # PackKernel.entry's length
 PROGRAM_CBUFS = 11  # PackProgram.cbufType's length (runtime/raw_pack.h)
 
 
@@ -87,6 +89,23 @@ def pipeline_bytes(rec: dict, key_offset: int, blob_off: int) -> bytes:
     return head + entry_bytes(rec['entries']) + push_bytes(rec['push'])
 
 
+def kernel_bytes(k: dict, key_offset: int) -> bytes:
+    """Give a compute kernel's PackKernel: its key, program, QMD template, set size, push words and set-0 entries."""
+    mask, words = 0, [0] * 32
+    for w, v in k['push'].items():
+        mask |= 1 << w
+        words[w] = v
+    entries = b''.join(struct.pack('<HBBI', e['off'], e['kind'], e['slot'], e['window']) for e in k['entries'])
+    entries += bytes(8 * (KERNEL_ENTRIES - len(k['entries'])))
+    return (
+        struct.pack('<QIHBb', fnv(k['key'].encode()), key_offset, k['program'], len(k['entries']), k['region'])
+        + struct.pack('<64I', *k['qmd'])
+        + struct.pack('<HHI', k['set_bytes'], 0, mask)
+        + struct.pack('<32I', *words)
+        + entries
+    )
+
+
 @dataclass
 class Pack:
     pipes: list[dict]
@@ -95,6 +114,7 @@ class Pack:
     baseline: dict[int, int]
     init: list[tuple[int, int, int, int]]
     heap: bytearray
+    kernels: list[dict]
 
 
 def pipeline_sections(pipes: list[dict]) -> tuple[bytearray, list[int], bytearray]:
@@ -119,6 +139,10 @@ def pipeline_sections(pipes: list[dict]) -> tuple[bytearray, list[int], bytearra
 
 def pack_bytes(pack: Pack) -> tuple[bytes, list[int]]:
     pipe_bin, blob, strings = pipeline_sections(pack.pipes)
+    kernel_bin = bytearray()
+    for k in sorted(pack.kernels, key=lambda k: fnv(k['key'].encode())):
+        kernel_bin += kernel_bytes(k, len(strings))
+        strings.extend(k['key'].encode() + b'\0')
     prog_bin = bytearray()
     for pr in pack.programs:
         types = bytes(pr['cbufs']) + bytes(PROGRAM_CBUFS - len(pr['cbufs']))
@@ -147,7 +171,9 @@ def pack_bytes(pack: Pack) -> tuple[bytes, list[int]]:
         blob_bin,
         bytes(strings),
         bytes(pack.heap),
+        bytes(kernel_bin),
     ]
+    assert len(sections) == SECTIONS
     header_size = 8 + 4 * 4 + 8 * 2 * len(sections)
     offs, at = [], (header_size + 255) // 256 * 256
     body = bytearray()
@@ -172,6 +198,7 @@ def write_json(path: str, pack: Pack, varying: list[int]) -> None:
         'baseline': {f'{m:x}': v for m, v in sorted(pack.baseline.items())},
         'varying': [f'{m:x}' for m in varying],
         'init_methods': len(pack.init),
+        'kernels': pack.kernels,
     }
     with open(path, 'w') as pack_json:
         json.dump(

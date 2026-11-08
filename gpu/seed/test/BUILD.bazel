@@ -17,6 +17,7 @@ RAW = [
     "probelog.py",
     "layouts.py",
     "packfile.py",
+    "kernels.py",
     "eqcheck.py",
     "probe.mm",
     "ca/caset.py",

@@ -433,11 +433,24 @@ struct switch_pt_trust_facts {
     bool cdhash_matches;
 };
 
-/* A file of the tree counts as authenticated, as a sealed volume's file does, only if it is listed, a root:wheel
- * regular file nobody else can write, its CDHash both in the boot package's list for this tree and equal to the one
- * its own index entry carries, so no trusted binary stands in at another listed path. */
+#define SWITCH_PT_GID_WHEEL 0u
+#define SWITCH_PT_GID_ADMIN 80u
+
+/* Only root can write the file: root:wheel and owner-only, or root:admin and writable by the group as well, which is how
+ * the IPSW ships /Applications (0775). iOS's admin group has no member but root. */
+static inline bool switch_pt_root_only(uint32_t uid, uint32_t gid, uint32_t mode)
+{
+    if (uid != 0 || (mode & 002u) != 0) {
+        return false;
+    }
+    return gid == SWITCH_PT_GID_ADMIN || (gid == SWITCH_PT_GID_WHEEL && (mode & 020u) == 0);
+}
+
+/* A file of the tree counts as authenticated, as a sealed volume's file does, only if it is listed, a regular file
+ * only root can write, its CDHash both in the boot package's list for this tree and equal to the one its own index
+ * entry carries, so no trusted binary stands in at another listed path. */
 static inline bool switch_pt_trusted(const struct switch_pt_trust_facts *facts)
 {
-    return facts->listed && facts->regular && facts->uid == 0 && facts->gid == 0 && (facts->mode & 022u) == 0 &&
+    return facts->listed && facts->regular && switch_pt_root_only(facts->uid, facts->gid, facts->mode) &&
            facts->cdhash_pinned && facts->cdhash_matches;
 }

@@ -193,6 +193,12 @@
     return _descriptor.size;
 }
 
+// MTLAllocation's: the heap's whole size, what a residency set holding it sums
+- (NSUInteger)allocatedSize
+{
+    return _descriptor.size;
+}
+
 - (NSUInteger)usedSize
 {
     return NSUInteger(_used.load());

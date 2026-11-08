@@ -135,6 +135,38 @@ TEST(DisplayPlanesSource, DriverFollowsTheRules)
         HasSubstr(": OSMetaClass(\"AppleCLCD\", NativeLegacyDisplay::superClass, sizeof(NativeLegacyDisplay))"));
 }
 
+// The first-boot data migration keeps XNU's console on screen (switch_console_hold). A released console stops drawing, so
+// a swap kicked under the hold releases nothing and draws nothing: it retires at once, or with what is still out when
+// retiring at the latch, before the kick reaches anything that takes the screen (native_legacy_prepare_scanout, a copy,
+// a flip or window B).
+TEST(DisplayPlanesSource, TheConsoleHoldKeepsTheScreen)
+{
+    const std::string source = SourceText("../NativeLegacyDisplay.cpp");
+    const std::string planes = SourceText("../NativePlanesDisplay.h");
+    EXPECT_EQ(Count(source, "switch_console_hold"), 4u);  // the declaration, consoleHolds and its comment
+    const std::string holds = Method(source, "    bool consoleHolds() const\n");
+    ExpectBefore(holds, "if (rotated || &switch_console_hold == nullptr)\n            return false;",
+                 "return switch_console_hold != 0;");
+    const std::string kick = Method(source, "    void kickOnce()\n");
+    ExpectBefore(kick, "planeDecide(request, pd);", "if (consoleHolds()) {\n            kickHeld(request,");
+    for (const char *taker : {"kickPlaneOnly(request, pd", "native_legacy_prepare_scanout()", "offerDirect(",
+                              "offerGpuCopy(", "startCopy(", "presentBlock();"})
+        ExpectBefore(kick, "kickHeld(request,", taker);
+    const std::string held =
+        Method(source, "    void kickHeld(const OriginalLegacySwapRequest *request, uint64_t kickAt)\n");
+    ExpectBefore(held, "noteTaken(request, kickAt);", "retireUnshown(seqOf(request));");
+    EXPECT_THAT(held, HasSubstr("finishTransfer(request, true);"));
+    for (const char *taker : {"native_legacy_prepare_scanout", "presentBlock", "flip", "ring.", "plane"})
+        EXPECT_THAT(held, Not(HasSubstr(taker))) << taker;
+    EXPECT_THAT(Method(source, "    void presentBlock()\n"), Not(HasSubstr("hold")));
+    const std::string unshown = Function(planes, "void retireUnshown(uint64_t seq)\n");
+    ExpectBefore(unshown, "if (!latchRetire)", "retireThrough(seq, mach_absolute_time());");
+    for (const char *outstanding : {"planeSetOf(planeLatch.armed).seq = seq;", "planeHeld.seq = seq;",
+                                    "entrySeq[ring.held] = seq;", "entrySeq[ring.pending] = seq;"})
+        ExpectBefore(unshown, outstanding, "retireThrough(seq, mach_absolute_time());");
+    EXPECT_THAT(Function(planes, "void kickPlaneOnly("), HasSubstr("retireUnshown(seq);"));
+}
+
 TEST(DisplayPlanesSource, BackboarddDetachesOnlyWhenTheDisplaySaysSo)
 {
     const std::string xnu = XnuKernExec();

@@ -388,8 +388,7 @@ bool planeStage(const PlaneSet &p, uint32_t &update, uint32_t &request)
     planeLatch.write(set);
     planeSetOf(set) = p;
     planeRequestedAt = frameEnds;
-    if (flipTimer)
-        flipTimer->setTimeoutMS(kFlipDeadlineMS);
+    armFlipDeadline();
     if (stats)
         ++stPlaneFlips;
     return true;
@@ -429,18 +428,8 @@ void kickPlaneOnly(const OriginalLegacySwapRequest *request, const PlaneDecision
         } else {
             planeFlipOnly(p);
         }
-    } else if (latchRetire) {
-        if (planeLatch.requested()) {
-            planeSetOf(planeLatch.armed).seq = seq;
-        } else if (planeHeldSet) {
-            planeHeld.seq = seq;
-        } else if (ring.held != kNoBuffer) {
-            entrySeq[ring.held] = seq;
-        } else if (ring.pending != kNoBuffer) {
-            entrySeq[ring.pending] = seq;
-        } else {
-            retireThrough(seq, mach_absolute_time());
-        }
+    } else {
+        retireUnshown(seq);
     }
     if (!latchRetire) {
         transferred = true;
@@ -448,6 +437,26 @@ void kickPlaneOnly(const OriginalLegacySwapRequest *request, const PlaneDecision
         return;
     }
     rekick = true;  // the next swap may already be queued behind this one: take it in the same kick
+}
+
+// Retiring at the latch, a taken swap (take sequence seq) whose frame no window A flip carries: it retires with whatever is
+// still out (the window B set written or held, the window A frame held or asked for), or now.
+// NOLINTNEXTLINE(misc-no-recursion): kickSwapQueue's kicking flag stops re-entry; a nested kick only loops
+void retireUnshown(uint64_t seq)
+{
+    if (!latchRetire)
+        return;
+    if (planeLatch.requested()) {
+        planeSetOf(planeLatch.armed).seq = seq;
+    } else if (planeHeldSet) {
+        planeHeld.seq = seq;
+    } else if (ring.held != kNoBuffer) {
+        entrySeq[ring.held] = seq;
+    } else if (ring.pending != kNoBuffer) {
+        entrySeq[ring.pending] = seq;
+    } else {
+        retireThrough(seq, mach_absolute_time());
+    }
 }
 
 // Window B's active START_ADDR as a set (its slot), kOff when it is not enabled, kUnknown when it names no slot.

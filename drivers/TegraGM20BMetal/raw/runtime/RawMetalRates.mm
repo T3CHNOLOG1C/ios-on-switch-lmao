@@ -8,7 +8,7 @@ static struct {
     uint64_t raw, m2v, encodeUs, draws, passes, copies, deferred, aborted, reasons[WhyCount], ringWaits, lastUs,
         switches, cpuOrdered, acquires, poolStalls, eventsReleased, heldReturns, scheduledWaits, scheduledWaitUs,
         completedWaits, completedWaitUs, abortUs, replayUs, replayClean, rtUnaligned, rtMixed, predOnly[PredCount],
-        splits, splitM2v, levelPasses;
+        splits, splitM2v, eventSplits, eventWhole, levelPasses;
 } gRates;
 
 bool raw_metal_texture_kept(id<MTLTexture> texture)
@@ -80,16 +80,18 @@ size_t raw_metal_rates(char *out, size_t size)
         }
     }
     // replay= and rclean= per m2v submission: whole command buffers and split ones' m2v segments
+    const uint64_t evSplits = s.eventSplits.load() - gRates.eventSplits,
+                   evWhole = s.eventWhole.load() - gRates.eventWhole;
     const uint64_t aborts = s.aborted.load() - gRates.aborted, segs = s.splitM2v.load() - gRates.splitM2v,
                    m2vs = f + segs ? f + segs : 1;
     const raw::Compiler::Stats made = gRM->completion ? gRM->completion->stats() : raw::Compiler::Stats();
     char diag[1024];
     snprintf(diag, sizeof diag,
-             " sp=%llu/%llu abortenc=%.0fus/a replay=%.0fus/m rclean=%.0fKB/m rt128=%llu(pitch %u va&255 %u) "
-             "rtmix=%llu lvl=%llu states=%llu/%llu/%llu/%llu/%.0fms atcreate=%llu/%.0fus comp=%llu/%lluKB/f%llu "
-             "zbc=%llu/%llu why=%s",
-             (unsigned long long)sp, (unsigned long long)segs,
-             (s.abortUs.load() - gRates.abortUs) / double(aborts ? aborts : 1),
+             " sp=%llu/%llu evsp=%llu/%llu abortenc=%.0fus/a replay=%.0fus/m rclean=%.0fKB/m "
+             "rt128=%llu(pitch %u va&255 %u) rtmix=%llu lvl=%llu states=%llu/%llu/%llu/%llu/%.0fms "
+             "atcreate=%llu/%.0fus comp=%llu/%lluKB/f%llu zbc=%llu/%llu why=%s",
+             (unsigned long long)sp, (unsigned long long)segs, (unsigned long long)evSplits,
+             (unsigned long long)evWhole, (s.abortUs.load() - gRates.abortUs) / double(aborts ? aborts : 1),
              (s.replayUs.load() - gRates.replayUs) / double(m2vs),
              (s.replayClean.load() - gRates.replayClean) / 1024.0 / double(m2vs),
              (unsigned long long)(k.rtUnaligned.load() - gRates.rtUnaligned), k.rtUnalignedPitch.load(),
@@ -106,7 +108,7 @@ size_t raw_metal_rates(char *out, size_t size)
         const size_t used = strlen(diag);
         snprintf(diag + used, sizeof diag - used,
                  " rsplit=%.0f/%.0f/%.0fus/m rmax=%lluus rdraw=%.1f/m tw=t%llu/%lluus/b%llu/o%llu/f%llu sbf=%llu"
-                 " fb=%llu/%llu/%llu/%llu(%s) clr=%llu/%llu so=%llu/%llu/%llu/%lluus",
+                 " fb=%llu/%llu/%llu/%llu(%s) clr=%llu/%llu so=%llu/%llu/%llu/%lluus zero=%llu",
                  (s.replaySlotUs.exchange(0) / double(m2vs)), (s.replayTwinUs.exchange(0) / double(m2vs)),
                  (s.replayCommitUs.exchange(0) / double(m2vs)), (unsigned long long)s.replayMaxUs.exchange(0),
                  s.replayDraws.exchange(0) / double(m2vs), (unsigned long long)s.twinTextures.exchange(0),
@@ -120,12 +122,15 @@ size_t raw_metal_rates(char *out, size_t size)
                  (unsigned long long)k.clears.exchange(0), (unsigned long long)k.clearsElided.exchange(0),
                  (unsigned long long)k.selfOverlapSplit.exchange(0), (unsigned long long)k.selfOverlapRuns.exchange(0),
                  (unsigned long long)k.selfOverlapUnbounded.exchange(0),
-                 (unsigned long long)(k.selfOverlapNs.exchange(0) / 1000));
+                 (unsigned long long)(k.selfOverlapNs.exchange(0) / 1000),
+                 (unsigned long long)s.zeroAnswers.exchange(0));
     }
 #endif
     gRates.abortUs = s.abortUs.load();
     gRates.splits = s.splits.load();
     gRates.splitM2v = s.splitM2v.load();
+    gRates.eventSplits = s.eventSplits.load();
+    gRates.eventWhole = s.eventWhole.load();
     gRates.replayUs = s.replayUs.load();
     gRates.replayClean = s.replayClean.load();
     gRates.rtUnaligned = k.rtUnaligned.load();

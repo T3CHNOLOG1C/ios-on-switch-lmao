@@ -5,6 +5,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <mutex>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -36,6 +37,7 @@ static inline id twinPublish(id object, __strong id &slot, id made)
 }
 @property (nonatomic, copy) NSString *label;
 - (id)rmTwin;  // made now if needed; nil if it cannot be
+- (Class)rmTwinClass;
 @end
 
 @interface RMDevice : NSObject  // the methods the device class gets (raw_metal_device_open); no state of its own
@@ -182,6 +184,17 @@ enum Op : uint8_t {
     OpDrawIndexed,
     OpVisibility,
     OpFillBuffer,
+    // a compute encoder's (RawMetalCompute.mm)
+    OpKernelState,
+    OpKernelBytes,
+    OpKernelBuffer,
+    OpKernelBufferOffset,
+    OpKernelTexture,
+    OpKernelSampler,
+    OpKernelMemory,
+    OpKernelUse,
+    OpKernelBarrier,
+    OpDispatch,
 };
 
 // one record: `stage` 1 vertex, 2 fragment; `obj` unretained (the command buffer keeps it); `x` into the extras
@@ -206,6 +219,7 @@ inline Cmd cmd(Op op, uint8_t stage = 0, uint16_t index = 0)
 @interface RMQueue : RMObject {
 @public
     dispatch_queue_t _completionQueue;
+    uint32_t _gpuPriority, _backgroundGpuPriority;  // what it asked for (RawMetalQueuePriority.mm)
     raw::ResidencySets _residency;
 }
 @end
@@ -276,6 +290,8 @@ struct RMSegment {
     NSError *_error;
     RMQueue *_queue;
     bool _committed, _scheduledDone, _completedDone, _m2v;
+    // its event signals are in m2v work (replayed whole, or in its last segment): finish() makes none
+    bool _signalsOnM2v;
     bool
         _partial;  // the kernel refused its raw submission after part of it ran (raw::CommandBuffer::partial): never replayed
     // scheduled() and finish() ran (their handlers taken): a handler added after goes at once, and scheduled() runs once (a
@@ -342,8 +358,21 @@ static inline void hit(RMCommandBuffer *cb, RMPred p, uint64_t a = 0, uint64_t b
 @end
 @interface RMBlitEncoder : RMEncoder
 @end
-@interface RMComputeEncoder : RMEncoder
+@interface RMComputeEncoder : RMEncoder {
+@public
+    MTLDispatchType _type;
+}
 @end
+
+// RawMetalCompute.mm: a compute state over m2v's (`twin`), with what the raw pack keys its kernels by
+id rmComputeState(id device, id twin, id<MTLFunction> function, MTLComputePipelineDescriptor *descriptor);
+// m2v's replay and the raw encode of a compute encoder's commands (the Op*Kernel* ones and OpDispatch): false from the raw
+// encode where it refuses one (*why)
+bool isKernelCommand(Op op);
+// OpBytes and OpKernelBytes (`m`): the bytes into the command buffer's RMBytes, m.a/b/c set (RawMetalBindings.mm)
+void recordBytes(RMCommandBuffer *cb, Cmd m, const void *bytes, NSUInteger length);
+void replayKernel(id encoder, RMCommandBuffer *cb, const Cmd &c, std::set<RMBuffer *> &buffers);
+bool encodeKernel(raw::ComputeEncoder &e, raw::CommandBuffer &rc, RMCommandBuffer *cb, const Cmd &c, const char **why);
 
 static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger index, id object, uint64_t c)
 {
@@ -360,6 +389,9 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
 - (void)updateFence:(id<MTLFence>)fence;
 - (void)waitForFence:(id<MTLFence>)fence;
 @end
+
+// `s` with a bind's LOD clamps (RawMetalBindings.mm)
+id<MTLSamplerState> clampedSampler(id<MTLSamplerState> s, float lodMin, float lodMax);
 
 @interface RMRenderEncoder (Bindings)
 - (void)texture:(int)stage object:(id<MTLTexture>)t index:(NSUInteger)index;

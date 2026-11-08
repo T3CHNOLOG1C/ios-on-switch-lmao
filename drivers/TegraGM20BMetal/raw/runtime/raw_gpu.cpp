@@ -4,9 +4,11 @@
 // copies NVK's nouveau_copy_rect and nvk_cmd_copy_memory_ce (all MIT), restricted to what Core Animation uses. r7-raw wrote the
 // first version (render encoder, pack replay) and checked it against NVK's stream; r8-rawca added the lifetimes, the pool, the
 // imports, the copies and the abortable command buffer.
+#include "../fx/fx_image.h"
 #include "raw_clear.h"
 #include "raw_follow.h"
 #include "raw_gpu.h"
+#include "raw_slm.h"
 #include "raw_target.h"
 #include "raw_tiled_cache.h"
 #include "TegraGM20BLayout.h"
@@ -153,6 +155,7 @@ const FormatInfo kFormats[] = {
     {10, 0xf3, 0x7012491d, 1, false},    // R8Unorm
     {11, 0, 0x7012491d, 1, true},        // R8Unorm_sRGB
     {20, 0xee, 0x7012491b, 2, false},    // R16Unorm
+    {23, 0, 0x6014921b, 2, false},       // R16Uint (NIL's R16_UINT: UINT components, alpha ONE_INT; sampled only)
     {25, 0xf2, 0x7017ff9b, 2, false},    // R16Float
     {30, 0xea, 0x70d24918, 2, false},    // RG8Unorm
     {40, 0xe8, 0x74e24915, 2, false},    // B5G6R5Unorm
@@ -536,6 +539,26 @@ bool Device::place(uint32_t prog, uint32_t &program, uint64_t &data)
     return true;
 }
 
+// lock_ held: an area whose warps get `perWarp` bytes of local memory or more; the next submission gives it to the channel
+// (CommandBuffer::commit). False: no memory for it.
+bool Device::slmNeed(uint64_t perWarp)
+{
+    if (perWarp <= slmPerWarp_)
+        return true;
+    const SlmArea a = slmArea(perWarp, k_.info().tpc_count);
+    Bo area;
+    if (!k_.alloc(a.bytes, false, area))
+        return false;
+    if (slm_.bytes)
+        slmOutgrown_.push_back(slm_);
+    slm_ = area;
+    slmPerWarp_ = perWarp;
+    os_log(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "raw"),
+           "raw: shader local memory: %llu bytes a warp, %llu KiB", (unsigned long long)perWarp,
+           (unsigned long long)(a.bytes >> 10));
+    return true;
+}
+
 // lock_ held: the heap bound from its start through `end`, the range past what is bound as one more part of host memory imported
 // and bound at the window's VAs. False: past the window, or no memory or the kernel refused the part.
 bool Device::heapGrow(uint64_t end)
@@ -632,6 +655,10 @@ Pipeline *Device::pipeline(uint64_t keyHash, PackForm form, bool caTransform)
     fs.record = &progs[pp.fs];
     vs.header = pack_.section<uint8_t>(PackHeap) + progs[pp.vs].program;
     fs.header = pack_.section<uint8_t>(PackHeap) + progs[pp.fs].program;
+    if (!slmNeed(std::max(slmPerWarpOfHeader(vs.header), slmPerWarpOfHeader(fs.header)))) {
+        stats.heapFull++;
+        return nullptr;
+    }
     build(pl, pp, vs, fs, pack_.section<uint32_t>(PackBlob) + pp.blob, pack_.string(pp.keyString), caTransform);
     return &pl;
 }
@@ -1023,8 +1050,13 @@ void Device::writeTic(const Texture &t)
     const FormatInfo *f = formatInfo(t.format);
     uint32_t w[8] = {f->tic0};
     fx::MipChain one;
+    if (t.type == fx::kTexThreeD && fx::volumeLayout(t.width, t.height, t.depth, 1, t.bpp, !t.blockDepth, one)) {
+        fx::mipChainTic(one, t.va, f->tic0, f->srgb, 0, 1, w, t.type);
+        memcpy(tic_.cpu + 32 * t.tic, w, 32);
+        return;
+    }
     if (t.blockLinear && fx::mipChainLayout(t.width, t.height, 1, t.bpp, one)) {  // NIL's header of a one-level image
-        fx::mipChainTic(one, t.va, f->tic0, f->srgb, 0, 1, w);
+        fx::mipChainTic(one, t.va, f->tic0, f->srgb, 0, 1, w, t.type);
         memcpy(tic_.cpu + 32 * t.tic, w, 32);
         return;
     }
@@ -1097,6 +1129,57 @@ bool Device::createTexture(uint32_t width, uint32_t height, uint32_t format, Tex
     if (!(t.tic = allocTic())) {
         Lease *none = nullptr;
         freeSpan(t.span, memoryOf(t), none);
+        return false;
+    }
+    writeTic(t);
+    return true;
+}
+
+bool Device::createLine(uint32_t width, uint32_t format, Texture &t)
+{
+    tgm_layout bl;
+    if (!shape(width, 1, format, t) || xrForm(format) != XrForm::None || !tgm_layout_tiled(width, 1, t.bpp, &bl))
+        return false;
+    std::lock_guard<std::mutex> l(lock_);
+    if (!blAlloc(bl.bytes, bl.align, t.span))
+        return false;
+    t.va = t.span.va;
+    t.cpu = t.span.cpu;
+    t.pitch = bl.row_bytes;
+    t.blockLinear = true;
+    t.blockHeight = bl.y_log2;
+    t.layerBytes = bl.bytes;
+    t.type = fx::kTexOneD;
+    if (!(t.tic = allocTic())) {
+        Lease *none = nullptr;
+        freeSpan(t.span, Memory::Bl, none);
+        return false;
+    }
+    writeTic(t);
+    return true;
+}
+
+bool Device::createVolume(uint32_t width, uint32_t height, uint32_t depth, uint32_t format, bool view2d, Texture &t)
+{
+    fx::MipChain c;
+    if (!shape(width, height, format, t) || xrForm(format) != XrForm::None ||
+        !fx::volumeLayout(width, height, depth, 1, t.bpp, view2d, c))
+        return false;
+    std::lock_guard<std::mutex> l(lock_);
+    if (!blAlloc(c.bytes, c.align, t.span))
+        return false;
+    t.va = t.span.va;
+    t.cpu = t.span.cpu;
+    t.pitch = c.level[0].rowBytes;
+    t.blockLinear = true;
+    t.blockHeight = c.level[0].yLog2;
+    t.layerBytes = c.bytes;
+    t.type = fx::kTexThreeD;
+    t.depth = depth;
+    t.blockDepth = c.zLog2;
+    if (!(t.tic = allocTic())) {
+        Lease *none = nullptr;
+        freeSpan(t.span, Memory::Bl, none);
         return false;
     }
     writeTic(t);
@@ -1287,7 +1370,7 @@ bool Device::createView(const Texture &of, uint32_t format, Texture &t)
         return false;
     if (of.chain) {
         uint32_t w[8];
-        fx::mipChainTic(of.chain->layout, of.va, f->tic0, f->srgb, 0, of.chain->layout.levels, w);
+        fx::mipChainTic(of.chain->layout, of.va, f->tic0, f->srgb, 0, of.chain->layout.levels, w, of.type);
         memcpy(tic_.cpu + 32 * t.tic, w, 32);
         return true;
     }
@@ -2146,6 +2229,7 @@ bool Device::reopen()
             b->lastUse = 0;
         heapInvalidated_ = ~0ull;
     }
+    slmChannel_ = 0;
     memset(rootPush_, 0, sizeof rootPush_);
     restart_ = 0;
     const uint32_t words = contextWords() + uint32_t(fx::twodInitWords());
@@ -2389,6 +2473,7 @@ bool CommandBuffer::commit(uint32_t &seqno)
     }
     bool invalidates = false;
     uint64_t invalidatedBefore = 0;
+    uint64_t slmGiven = 0, slmVa = 0;
     {
         std::lock_guard<std::mutex> l(d.lock_);
         if (shaderInvalidate_ && d.heapPlaced_ != d.heapInvalidated_) {
@@ -2397,6 +2482,18 @@ bool CommandBuffer::commit(uint32_t &seqno)
             invalidatedBefore = d.heapInvalidated_;
             d.heapInvalidated_ = d.heapPlaced_;
         }
+        if (d.slmPerWarp_ != d.slmChannel_) {
+            slmGiven = d.slmPerWarp_;
+            slmVa = d.slm_.va;
+        }
+    }
+    // ahead of everything in it: a program placed after begin() may ask for more than the channel has
+    if (slmGiven && !segments_.empty()) {
+        uint64_t va;
+        auto *head = reinterpret_cast<uint32_t *>(d.alloc(d.push_, kSlmWords * 4, 4, va));
+        Push p{head, head + kSlmWords};
+        emitSlm(p, slmVa, slmArea(slmGiven, d.k_.info().tpc_count));
+        segments_.insert(segments_.begin(), {va, uint32_t(p.at - head), 0});
     }
     if (tiledCache(d.k_.info()) && !segments_.empty()) {
         uint64_t va;
@@ -2441,6 +2538,8 @@ bool CommandBuffer::commit(uint32_t &seqno)
         d.lastSeqno_ = seq;
     }
     seqno = seq;
+    if (slmGiven)
+        d.slmChannel_ = slmGiven;
     d.retire(d.push_, seq);
     d.retire(d.upload_, seq);
     memcpy(d.rootPush_, rootPush_, sizeof rootPush_);
@@ -2890,9 +2989,20 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
             const Bound &b = bufs_[e.stage][e.slot];
             const bool storage = bufferStorage(e);
             const uint32_t window = (uint32_t(e.sampler) | uint32_t(e.pad) << 8) * 16;
-            uint32_t range = std::min<uint32_t>((b.size + 15) & ~15u, 0x10000u);  // a uniform range is at most 64 KiB
+            // a uniform range is at most 64 KiB (NVK_MAX_CBUF_SIZE); a storage buffer's is the bound bytes, read through its
+            // global address
+            uint32_t range = (b.size + 15) & ~15u;
+            if (!storage)
+                range = std::min(range, 0x10000u);
             if (window && window < range)
                 range = window;
+            // m2v's storage descriptor starts at the bind offset rounded down to 16 (its residual a push word no record names)
+            if (storage && (b.va & 15)) {
+                *why = "a storage buffer bound at an offset that is not a multiple of 16";
+                cb_->refusal = {RefUboOffset, uint32_t(e.stage) << 8 | e.slot, uint32_t(b.va & 15),
+                                uint32_t(std::min<uint64_t>(b.offset, ~0u))};
+                return false;
+            }
             // A uniform buffer at an offset that is not a multiple of NVK's 256-byte alignment: its descriptor starts at the
             // offset rounded down, from there to the window's end in the padded allocation, and the function reads the rest
             // of the offset, m2v's SlotBindOffset residual, from its push word
@@ -3238,24 +3348,26 @@ static void clearWords(uint32_t format, const float in[4], uint32_t out[4], bool
 
 namespace {
 // One side of a copy-engine copy: pitch (va the first texel's, rows `pitch` apart) or a block-linear image (va its first byte,
-// `pitch` its row stride, the copy from texel (x, y) of its width x height)
+// `pitch` its row stride, the copy from texel (x, y) of plane `layer` of its width x height x depth)
 struct CopySide {
     uint64_t va = 0;
     uint32_t pitch = 0, x = 0, y = 0, width = 0, height = 0;
     bool blockLinear = false;
     uint8_t blockHeight = 0;
+    uint32_t depth = 1, layer = 0;
+    uint8_t blockDepth = 0;
 };
 
-CopySide sideOf(const Texture &t, uint32_t x, uint32_t y)
+CopySide sideOf(const Texture &t, uint32_t x, uint32_t y, uint32_t z)
 {
     if (!t.blockLinear)
         return {t.va + uint64_t(y) * t.pitch + uint64_t(x) * t.bpp, t.pitch};
-    return {t.va, t.pitch, x, y, t.pitch / t.bpp, t.height, true, t.blockHeight};
+    return {t.va, t.pitch, x, y, t.pitch / t.bpp, t.height, true, t.blockHeight, t.depth, z, t.blockDepth};
 }
 
 // `w` x `h` texels of `bpp` bytes as nouveau_copy_rect moves them: a remap of min(bpp, 4)-byte components, so lengths, widths
 // and origins count texels; a block-linear side by its block size (one GOB wide, Fermi's 8-row GOBs), its width the row
-// stride in texels, one layer
+// stride in texels, a 3D image's plane by its depth and layer
 void copySides(Push &p, const CopySide &s, const CopySide &d, uint32_t w, uint32_t h, uint32_t bpp,
                Device::Stats &stats)
 {
@@ -3274,12 +3386,16 @@ void copySides(Push &p, const CopySide &s, const CopySide &d, uint32_t w, uint32
     uint32_t launch = (kLaunchPitch & ~(kSrcPitch | kDstPitch)) | 1u << 10;  // REMAP_ENABLE
     if (s.blockLinear)
         p.inc(CE_SET_SRC_BLOCK_SIZE,
-              {uint32_t(s.blockHeight) << 4 | kGobHeightFermi8, s.width, s.height, 1, 0, s.y << 16 | s.x}, SUBC_COPY);
+              {uint32_t(s.blockHeight) << 4 | uint32_t(s.blockDepth) << 8 | kGobHeightFermi8, s.width, s.height,
+               s.depth, s.layer, s.y << 16 | s.x},
+              SUBC_COPY);
     else
         launch |= kSrcPitch;
     if (d.blockLinear)
         p.inc(CE_SET_DST_BLOCK_SIZE,
-              {uint32_t(d.blockHeight) << 4 | kGobHeightFermi8, d.width, d.height, 1, 0, d.y << 16 | d.x}, SUBC_COPY);
+              {uint32_t(d.blockHeight) << 4 | uint32_t(d.blockDepth) << 8 | kGobHeightFermi8, d.width, d.height,
+               d.depth, d.layer, d.y << 16 | d.x},
+              SUBC_COPY);
     else
         launch |= kDstPitch;
     p.m(CE_LAUNCH_DMA, launch, SUBC_COPY);
@@ -3456,7 +3572,8 @@ void RenderEncoder::end()
         if (const Texture *o = shadowOf_[j]) {
             if (pass_.color[j].load == ColorAttachment::Clear)
                 continue;
-            copySides(p, sideOf(*o, 0, 0), sideOf(*pass_.color[j].texture, 0, 0), areaW_, areaH_, o->bpp, d.stats);
+            copySides(p, sideOf(*o, 0, 0, 0), sideOf(*pass_.color[j].texture, 0, 0, 0), areaW_, areaH_, o->bpp,
+                      d.stats);
             copied = true;
         }
     if (copied) {
@@ -3574,7 +3691,7 @@ void RenderEncoder::end()
                     w = std::max(w, c.x1);
                     h = std::max(h, c.y1);
                 }
-            copySides(q, sideOf(*pass_.color[j].texture, 0, 0), sideOf(*o, 0, 0), w, h, o->bpp, d.stats);
+            copySides(q, sideOf(*pass_.color[j].texture, 0, 0, 0), sideOf(*o, 0, 0, 0), w, h, o->bpp, d.stats);
         }
         checkRoom(q, "a pass's shadow stores");
         cb_->segment(at, q.at);
@@ -3770,18 +3887,18 @@ void BlitEncoder::copyRect(uint64_t src, uint32_t srcPitch, uint64_t dst, uint32
     copyRows(p_, src, srcPitch, dst, dstPitch, width, lines, bpp, dev_->stats);
 }
 
-void BlitEncoder::copyTexels(const Texture &src, uint32_t sx, uint32_t sy, const Texture &dst, uint32_t dx, uint32_t dy,
-                             uint32_t w, uint32_t h)
+void BlitEncoder::copyTexels(const Texture &src, uint32_t sx, uint32_t sy, uint32_t sz, const Texture &dst, uint32_t dx,
+                             uint32_t dy, uint32_t dz, uint32_t w, uint32_t h)
 {
     room(32);
-    copySides(p_, sideOf(src, sx, sy), sideOf(dst, dx, dy), w, h, src.bpp, dev_->stats);
+    copySides(p_, sideOf(src, sx, sy, sz), sideOf(dst, dx, dy, dz), w, h, src.bpp, dev_->stats);
 }
 
-void BlitEncoder::copyBufferTexels(uint64_t va, uint32_t pitch, const Texture &t, uint32_t x, uint32_t y, uint32_t w,
-                                   uint32_t h, bool toTexture)
+void BlitEncoder::copyBufferTexels(uint64_t va, uint32_t pitch, const Texture &t, uint32_t x, uint32_t y, uint32_t z,
+                                   uint32_t w, uint32_t h, bool toTexture)
 {
     room(32);
-    const CopySide rows{va, pitch}, texels = sideOf(t, x, y);
+    const CopySide rows{va, pitch}, texels = sideOf(t, x, y, z);
     copySides(p_, toTexture ? rows : texels, toTexture ? texels : rows, w, h, t.bpp, dev_->stats);
 }
 

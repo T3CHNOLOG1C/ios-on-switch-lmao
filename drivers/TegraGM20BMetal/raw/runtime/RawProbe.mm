@@ -4,6 +4,7 @@
 
 #include "../pack/nvdec.h"
 #include "raw_pack.h"
+#include "raw_slm.h"
 
 #include "NativeBridgeMetalFrontend.h"
 
@@ -15,6 +16,7 @@ extern "C" const void *native_bridge_metal_capture_map(id commandBuffer, uint64_
     __attribute__((weak_import));
 extern "C" bool native_bridge_metal_capture_program(id commandBuffer, uint32_t program, NBCapturedProgram *out)
     __attribute__((weak_import));
+extern "C" const char *native_bridge_metal_encode_refusal(id commandBuffer) __attribute__((weak_import));
 
 namespace raw {
 namespace {
@@ -212,6 +214,12 @@ Compiler::Outcome Probe::run(id<MTLRenderPipelineState> twin, MTLRenderPipelineD
             [enc setFragmentSamplerState:samplers_[s] atIndex:s];
         [enc drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
         [enc endEncoding];
+        // m2v refused a call of the probe's (say, a descriptor pool the kernel had no memory for): this process's state, not
+        // the render state's, so never kept on disk as its refusal
+        if (const char *refusal = native_bridge_metal_encode_refusal(cb)) {
+            why = std::string("m2v refused the probe's commands: ") + refusal;
+            return Compiler::Outcome::Failed;
+        }
 
         __block std::vector<std::pair<const uint32_t *, uint64_t>> segments;
         __block bool unmapped = false;
@@ -246,7 +254,8 @@ Compiler::Outcome Probe::run(id<MTLRenderPipelineState> twin, MTLRenderPipelineD
 Compiler::Outcome Probe::make(id<MTLRenderPipelineState> twin, MTLRenderPipelineDescriptor *descriptor,
                               const std::string &key, RuntimeRecord &out, std::string &why)
 {
-    if (!native_bridge_metal_capture || !native_bridge_metal_capture_map || !native_bridge_metal_capture_program) {
+    if (!native_bridge_metal_capture || !native_bridge_metal_capture_map || !native_bridge_metal_capture_program ||
+        !native_bridge_metal_encode_refusal) {
         why = "the frontend has no capture";
         return Compiler::Outcome::Failed;
     }
@@ -268,8 +277,12 @@ Compiler::Outcome Probe::make(id<MTLRenderPipelineState> twin, MTLRenderPipeline
             [this](const std::string &id) {
                 return capture_->program(id);
             },
-            out, why))
-        return Compiler::Outcome::Made;
+            out, why)) {
+        if (headerIsStage(out.programs[0].image, false) && headerIsStage(out.programs[1].image, true))
+            return Compiler::Outcome::Made;
+        why = "a program whose header is not its stage's";
+        return Compiler::Outcome::Failed;
+    }
     // NVK's export names every program a draw of the command buffer binds: one it does not is the export's failure. A set-0
     // word the probe's tags don't name is this process's (m2v's descriptor tables moved under the capture), not the state's:
     // tried again, never kept on disk as the state's refusal

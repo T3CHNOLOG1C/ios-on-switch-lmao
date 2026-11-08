@@ -48,6 +48,8 @@ KEPT = (
     'probe4096.log',
     'probeoff.out',
     'probeoff.log',
+    'compute.out',
+    'compute.log',
 )
 # The frameworks other than QuartzCore whose states the pack holds: their lines keep lib=, which the probe loads
 # them from
@@ -65,11 +67,12 @@ def framework_line(line: str) -> bool:
 
 
 def probe_lines(corpus: str) -> list[str]:
-    """Return the corpus lines probe.mm makes, as it reads them."""
+    """Return the corpus lines probe.mm and probecompute.mm make, as they read them (a D line keeps its libraries)."""
     return [
-        line if framework_line(line) else LIBRARY.sub('', line)
+        line if framework_line(line) or line.startswith('D ') else LIBRARY.sub('', line)
         for line in corpus.split('\n')
-        if line.startswith('R ') and ' ok=1 ' in line and (PROBE_LABEL in line or framework_line(line))
+        if (line.startswith('R ') and ' ok=1 ' in line and (PROBE_LABEL in line or framework_line(line)))
+        or line.startswith('D ok=1 ')
     ]
 
 

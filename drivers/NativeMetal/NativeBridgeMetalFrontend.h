@@ -51,7 +51,8 @@ id native_bridge_metal_texture_tiled_in_place(id buffer, id descriptor, NSUInteg
 // The raw GM20B path's capture of a render state (raw/runtime/raw_capture.h): `commandBuffer`'s recorded NVK push segments handed
 // to `segment` in submission order instead of a commit, never run, and what NVK's context init set as this process's addresses
 // (*context: the pack's init relocations, raw_pack.h PackReloc). The command buffer cannot be committed after. False: refused
-// (another device's, committed, commands left to record at commit, or an NVK without the capture exports).
+// (another device's, committed, encoded with a call the frontend refused, commands left to record at commit, or an NVK without
+// the capture exports).
 typedef struct {
     uint64_t shaderHeap, zeroPage, cb0, images, samplers;
     uint32_t imageMax, samplerMax;
@@ -59,6 +60,8 @@ typedef struct {
 
 bool native_bridge_metal_capture(id commandBuffer, void (^segment)(uint64_t addr, const uint32_t *cpu, uint32_t dwords),
                                  NBCaptureContext *context);
+// Why the frontend refused a call encoded into `commandBuffer` (it fails at commit), or null
+const char *native_bridge_metal_encode_refusal(id commandBuffer);
 // The CPU's view of [va, va + bytes) of the captured command buffer's device memory, while the command buffer lives; null: none
 const void *native_bridge_metal_capture_map(id commandBuffer, uint64_t va, uint64_t bytes);
 

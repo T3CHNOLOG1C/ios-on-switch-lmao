@@ -55,7 +55,14 @@ filegroup(
             "**/*.pyc",
             "**/.DS_Store",
         ],
-    ) + ["raw/runtime/raw_owned.h"],  # the methods the raw path owns (pack/mkpack.py reads them)
+    ) + [
+        "raw/runtime/raw_owned.h",  # the methods the raw path owns (pack/mkpack.py reads them)
+        # the compute probe's key of a kernel (pack/probecompute.mm)
+        "raw/runtime/raw_compute_key.h",
+        "raw/runtime/raw_metallib.cpp",
+        "raw/runtime/raw_metallib.h",
+        "raw/runtime/raw_pack.h",
+    ],
 )
 
 filegroup(
@@ -70,6 +77,7 @@ filegroup(
 ios_binary(
     name = "fetchform",
     srcs = [
+        "raw/fx/fx_image.cpp",
         "raw/fx/fx_mip.cpp",
         "raw/runtime/raw_alias.cpp",
         "raw/runtime/raw_comp.cpp",

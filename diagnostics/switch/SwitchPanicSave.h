@@ -34,7 +34,7 @@ int switch_panic_save_early_pending(volatile uint8_t *ramoops);
 void switch_panic_save_early(const char *line, unsigned long caller, volatile uint8_t *ramoops, volatile uint32_t *fb,
                              volatile uint32_t *pmc_page) __attribute__((noreturn));
 
-#if defined(SWITCH_XNU_DIAGNOSTICS) && SWITCH_XNU_DIAGNOSTICS
+#if defined(SWITCH_XNU_BOARD) && SWITCH_XNU_BOARD
 void switch_panic_save_init(void);
 int switch_panic_save_xnu_buffer(uintptr_t *base, unsigned int *bytes);
 int switch_panic_begin(const char *format, va_list *args, unsigned long caller, int take_screen);

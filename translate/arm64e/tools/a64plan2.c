@@ -747,12 +747,13 @@ static void reach_pass(void)
  * Data islands in __text (assembler tables such as corecrypto's K256, libm's sincos coefficients, AudioCodecs' Hann
  * windows). Recursive descent from the validated function starts, the landing pads and the resolved jump tables marks code.
  * What it does not reach is cut into runs at UDF/zero padding; a run dense in unallocated encodings (at least one word in
- * 32), or starting at a function start that failed its probe, is data and leaves the code map: nothing in it is rewritten, here or by the
- * kernel, which takes its code ranges from the plan. Other unreached runs (dead __auth_stubs left by the cache builder's
- * stub elimination, code behind unresolved indirect branches) stay code.
+ * 32), starting at a function start that failed its probe, or running into padding without ending its code (lzfse's
+ * 64-bit mask table, single words between zero halves) is data and leaves the code map: nothing in it is rewritten, here
+ * or by the kernel, which takes its code ranges from the plan. Other unreached runs (dead __auth_stubs left by the cache
+ * builder's stub elimination, code behind unresolved indirect branches) stay code.
  */
 static uint64_t isl_runs, isl_words, isl_mod, isl_sites, code_runs, code_runs_mod, code_mod_words, code_sites,
-    reached_impossible;
+    reached_impossible, tail_runs, tail_words;
 static FILE *isl_out;
 static uint64_t ri_hist[4];
 static uint64_t cls_unreached_code[64];
@@ -828,6 +829,28 @@ static void drop_data_islands(void)
 			 */
             if (nun && (uint64_t)nun * 32 >= y - x)
                 bad = true;
+            /*
+			 * Into padding (not into reached code) without ending its code: the words after the last one that ends code
+			 * are data (a64x_ends_code), the code before them stays (dav1d's assembly keeps each jump table right behind
+			 * the blocks it dispatches to).
+			 */
+            const bool padded = y == xn || !BITV(codebits[f], y) || !(u32(fb[f], 4 * y) >> 16);
+            if (!bad && padded && !a64x_ends_code(u32(fb[f], 4 * (y - 1)))) {
+                uint64_t t = y - 1;
+                while (t > x && !a64x_ends_code(u32(fb[f], 4 * (t - 1))))
+                    t--;
+                if (t == x) {
+                    bad = true;
+                } else {
+                    tail_runs++;
+                    tail_words += y - t;
+                    if (isl_out)
+                        fprintf(isl_out, "TAIL %llx +%llu %s\n", (unsigned long long)(fm[q].addr + 4 * (t - x0)),
+                                (unsigned long long)(y - t), sec_of(va));
+                    for (uint64_t z = t; z < y; z++)
+                        codebits[f][z >> 3] &= (uint8_t)~(1 << (z & 7));
+                }
+            }
             if (bad) {
                 isl_runs++;
                 isl_words += y - x;
@@ -872,9 +895,11 @@ static void drop_data_islands(void)
     printf("impossible words in reached code: sve %llu sme %llu amx %llu unallocated %llu\n",
            (unsigned long long)ri_hist[0], (unsigned long long)ri_hist[1], (unsigned long long)ri_hist[2],
            (unsigned long long)ri_hist[3]);
-    printf("data islands: %llu runs, %llu words, %llu would-be-rewritten words (%llu LSE sites) left alone\n",
-           (unsigned long long)isl_runs, (unsigned long long)isl_words, (unsigned long long)isl_mod,
-           (unsigned long long)isl_sites);
+    printf(
+        "data islands: %llu runs, %llu words, %llu would-be-rewritten words (%llu LSE sites) left alone; data behind "
+        "code: %llu runs, %llu words\n",
+        (unsigned long long)isl_runs, (unsigned long long)isl_words, (unsigned long long)isl_mod,
+        (unsigned long long)isl_sites, (unsigned long long)tail_runs, (unsigned long long)tail_words);
     printf("unreached code-like runs: %llu (%llu with %llu rewrites, %llu LSE sites); by section:",
            (unsigned long long)code_runs, (unsigned long long)code_runs_mod, (unsigned long long)code_mod_words,
            (unsigned long long)code_sites);
@@ -1725,7 +1750,7 @@ int a64x_cmd_plan2(int argc, char **argv)
             for (uint64_t k = 0; k < n; k++)
                 if (BITV(fsbits[f], x0 + k))
                     fsl[k >> 3] |= 1 << (k & 7);
-            struct a64x_islands is = {data, fsl, 0, 0, false, false, 0, 0};
+            struct a64x_islands is = {data, fsl, 0, 0, false, false, 0, 0, 0, 0};
 
             struct ctx_t {
                 uint8_t *bits;
@@ -1873,6 +1898,8 @@ int a64x_cmd_plan2(int argc, char **argv)
     /* holes and sites, page by page (the kernel's rule for holes) */
     struct site *sites = NULL;
     size_t nsites = 0, capsites = 0;
+    void *walk_buf = malloc(A64X_WALK_BYTES(65536));
+    struct a64x_walk walk = a64x_walk_in(walk_buf, 65536);
     for (int q = 0; q < nfm; q++) {
         if (!(fm[q].prot & 4))
             continue;
@@ -1915,10 +1942,10 @@ int a64x_cmd_plan2(int argc, char **argv)
                     /* the whole function: loops back to before the site and tail calls are understood */
                     const uint32_t *fp = (const uint32_t *)vmptr(fstart, fend - fstart);
                     lr = a64x_dead_regs_flow_fn(fp, (int)((fend - fstart) / 4), (int)((base + 4 * k0 - fstart) / 4),
-                                                cand, wide_budget);
+                                                cand, wide_budget, &walk);
                     if (cmp_out) {
                         static uint64_t nx30;
-                        uint32_t lw = a64x_dead_regs_flow(wp, wn, 0, cand, wide_budget);
+                        uint32_t lw = a64x_dead_regs_flow(wp, wn, 0, cand, wide_budget, &walk);
                         if (lw & ~lr)
                             fprintf(cmp_out, "LOST %llx %08x win %08x fn %08x\n", (unsigned long long)(base + 4 * k0),
                                     w, lw, lr);
@@ -1929,16 +1956,16 @@ int a64x_cmd_plan2(int argc, char **argv)
                         }
                     }
                 } else {
-                    lr = a64x_dead_regs_flow(wp, wn, 0, cand, wide_budget);
+                    lr = a64x_dead_regs_flow(wp, wn, 0, cand, wide_budget, &walk);
                 }
                 uint32_t vd = 0;
                 if (a64x_class_uses_vtemps(c)) {
                     if (q2 >= 0 && fend > fstart && fend <= fm[q2].addr + fm[q2].size && fend - fstart <= 4u * 65536) {
                         const uint32_t *fp = (const uint32_t *)vmptr(fstart, fend - fstart);
                         vd = a64x_dead_vregs_flow(fp, (int)((fend - fstart) / 4), (int)((base + 4 * k0 - fstart) / 4),
-                                                  0xFFFFFFFFu, wide_budget, true);
+                                                  0xFFFFFFFFu, wide_budget, true, &walk);
                     } else {
-                        vd = a64x_dead_vregs_flow(wp, wn, 0, 0xFFFFFFFFu, wide_budget, false);
+                        vd = a64x_dead_vregs_flow(wp, wn, 0, 0xFFFFFFFFu, wide_budget, false, &walk);
                     }
                     if (getenv("A64X_NO_VLIVE"))
                         vd = 0;
@@ -1959,6 +1986,7 @@ int a64x_cmd_plan2(int argc, char **argv)
             }
         }
     }
+    free(walk_buf);
     qsort(holes, nholes, sizeof(*holes), cmp_hole);
     {
         size_t dup = 0, o = 0;

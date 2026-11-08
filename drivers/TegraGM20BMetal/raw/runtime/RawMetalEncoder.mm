@@ -18,7 +18,8 @@
 }
 
 // A selector this encoder does not record itself (one the m2v encoder implements, or some MTL protocol declares): recorded as an
-// invocation (objects mapped to twins at replay) and the command buffer goes to m2v.
+// invocation (objects mapped to twins at replay) and the command buffer goes to m2v; answered zero here when the m2v encoder
+// has no method for it either (its answer is zero too).
 - (NSMethodSignature *)methodSignatureForSelector:(SEL)selector
 {
     if (NSMethodSignature *s = [super methodSignatureForSelector:selector])
@@ -38,6 +39,10 @@
 
 - (void)forwardInvocation:(NSInvocation *)inv
 {
+    if (!twinAnswers([[self class] twinClass], inv.selector)) {
+        answerZero(self, inv);
+        return;
+    }
     [inv retainArguments];
     if (!raw::keepPointedArguments(inv))
         SWITCH_REFUSE_DETAIL("raw", "call.pointer", uintptr_t(inv.selector),
@@ -199,11 +204,11 @@ static bool rawDepthStencil(MTLRenderPassDescriptor *pass)
             [self takeReason:WhyPass why:@"a planar texture as a render target"];
             hit(self, PredEncPlanarRT, t.pixelFormat, c);
         } else if (pass.colorAttachments[c].slice || pass.colorAttachments[c].depthPlane ||
-                   pass.colorAttachments[c].resolveTexture ||
+                   pass.colorAttachments[c].resolveTexture || x->_raw.type == raw::fx::kTexThreeD ||
                    (pass.colorAttachments[c].level &&
                     (!x->_raw.chain || pass.colorAttachments[c].level >= x->_raw.chain->layout.levels))) {
-            // A slice or depth plane needs an array or 3D texture and a resolve a multisampled one, none of which the raw
-            // path keeps (rawShape)
+            // A slice or depth plane needs an array or 3D texture and a resolve a multisampled one; the raw path keeps no
+            // array or multisampled texture and renders into no plane of a 3D one
             [self takeReason:WhyPass why:@"a color attachment slice, depth plane or resolve"];
             hit(self, PredPassAttLevel, pass.colorAttachments[c].level | pass.colorAttachments[c].slice << 8,
                 pass.colorAttachments[c].resolveTexture != nil);
@@ -262,12 +267,11 @@ static bool rawDepthStencil(MTLRenderPassDescriptor *pass)
 - (id<MTLComputeCommandEncoder>)computeCommandEncoderWithDispatchType:(MTLDispatchType)type
 {
     RMComputeEncoder *e = [RMComputeEncoder new];
+    e->_type = type;
     [self begin:e];
     Cmd m = cmd(OpCompute);
     m.a = uint32_t(type);
     [self record:m];
-    [self takeReason:WhyCompute why:@"a compute encoder"];
-    hit(self, PredCompute, type);
     return (id<MTLComputeCommandEncoder>)e;
 }
 
