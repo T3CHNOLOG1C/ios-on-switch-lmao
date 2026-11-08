@@ -15,6 +15,11 @@
     return NSClassFromString(@"NBSampler");
 }
 
+- (NSUInteger)pixelFormat
+{
+    return MTLPixelFormatInvalid;  // (SPI) a sampler of a plain descriptor names no format, as m2v answers
+}
+
 - (void)dealloc
 {
     if (gRM)
@@ -37,6 +42,12 @@
 + (Class)twinClass
 {
     return NSClassFromString(@"NBRenderPipeline");
+}
+
+- (NSUInteger)maxTotalThreadsPerThreadgroup
+{
+    return [(id<MTLDevice>)_device maxThreadsPerThreadgroup]
+        .width;  // a tile dispatch's: the device's limit, as m2v answers
 }
 
 @end

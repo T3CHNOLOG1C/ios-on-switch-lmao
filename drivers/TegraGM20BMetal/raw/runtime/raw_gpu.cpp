@@ -8,6 +8,7 @@
 #include "raw_follow.h"
 #include "raw_gpu.h"
 #include "raw_target.h"
+#include "raw_tiled_cache.h"
 #include "TegraGM20BLayout.h"
 
 #include <CoreFoundation/CoreFoundation.h>
@@ -88,6 +89,7 @@ enum : uint32_t {
     // MAXWELL_DMA_COPY_A (NV90B5 layout)
     CE_LAUNCH_DMA = 0x0300,
     CE_OFFSET_IN_UPPER = 0x0400,
+    CE_PITCH_IN = 0x0410,
     CE_LINE_LENGTH_IN = 0x0418,
     CE_SET_REMAP_CONST_A = 0x0700,
     CE_SET_REMAP_COMPONENTS = 0x0708,
@@ -109,8 +111,14 @@ constexpr size_t kDedicatedSpares = 2;
 // one for the GPU's instruction prefetch past a program's end. The render server binds kHeapAtOpen at its start: what Core
 // Animation's states place in their first frames (17's journal: 1.13 MiB).
 constexpr uint64_t kProgramWindow = 1ull << 32, kHeapStep = 256 << 10, kHeapSlack = 0x1000, kHeapAtOpen = 2 << 20;
-// INVALIDATE_SHADER_CACHES_NO_WFI (cla097.h): INSTRUCTION bit 0, CONSTANT bit 12
-constexpr uint32_t kInvalidateInstruction = 1u << 0, kInvalidateConstant = 1u << 12;
+// INVALIDATE_SHADER_CACHES and its _NO_WFI form (cl9097.h, cla097.h): INSTRUCTION bit 0, FLUSH_DATA 2, DATA 4, CONSTANT 12
+constexpr uint32_t kInvalidateInstruction = 1u << 0, kFlushData = 1u << 2, kInvalidateData = 1u << 4,
+                   kInvalidateConstant = 1u << 12;
+// Between passes: the shaders' data writes flushed, their data caches invalidated, and the constant caches too: bytes the copy
+// engine, the 2D engine or a shader wrote since the submission's prologue may be bound as a constant buffer after, and the SMs'
+// constant caches do not see such writes (NVK opens each of m2v's encoders, a command buffer of its own, with a constant
+// invalidate, and its transfer-write to uniform-read barrier has one)
+constexpr uint32_t kBetweenPasses = kFlushData | kInvalidateData | kInvalidateConstant;
 constexpr uint32_t kMaxSegments = TegraGM20BMaxPushes;
 // An instance of a draw: BEGIN with INSTANCE_ID SUBSEQUENT (two words), the first vertex or index and the count (three), END
 constexpr uint32_t kInstanceWords = 6;
@@ -230,32 +238,41 @@ uint8_t *Device::alloc(Ring &r, uint32_t bytes, uint32_t align, uint64_t &va)
     uint64_t at = (r.head + align - 1) & ~uint64_t(align - 1);
     if (at + bytes > r.bo.bytes)
         at = 0;  // wrap: the tail [head, end) counts as used by the open command buffer
-    if (overflowing_ || (ownWords(r, at, bytes) && !outgrow(r, bytes, at))) {
+    // Below Ring::clear no span is in flight, the open command buffer's own included: no look at them there
+    if (overflowing_ || ((at < r.head || at + bytes > r.clear) && ownWords(r, at, bytes) && !outgrow(r, bytes, at))) {
         overflowing_ = true;  // no larger ring: the command buffer is written to nowhere, and its commit refused
-        if (overflow_.size() < bytes)
-            overflow_.resize(bytes);
+        overflow_.emplace_back(bytes);  // a block of its own: the encoder may still be writing an earlier one
         va = 0;
-        return overflow_.data();
+        return overflow_.back().data();
     }
-    // [at, at + bytes) may still be read by an earlier submission: retire what the GPU finished (the fence page, no call) and
-    // block in the kernel (WaitFence: the fence interrupt) for what overlaps. Sized so a Core Animation frame never waits.
-    for (auto it = r.inflight.begin(); it != r.inflight.end();) {
-        if (it->seqno && done(it->seqno)) {
-            it = r.inflight.erase(it);
-            continue;
+    if (at < r.head || at + bytes > r.clear) {
+        // [at, at + bytes) may still be read by an earlier submission: retire what the GPU finished (the fence page, no call)
+        // and block in the kernel (WaitFence: the fence interrupt) for what overlaps. Sized so a Core Animation frame never
+        // waits.
+        for (auto it = r.inflight.begin(); it != r.inflight.end();) {
+            if (it->seqno && done(it->seqno)) {
+                it = r.inflight.erase(it);
+                continue;
+            }
+            if (it->begin < at + bytes && at < it->end && it->seqno) {
+                stats.ringWaits++;
+                r.waited = true;
+                wait(it->seqno);
+                it = r.inflight.erase(it);
+                continue;
+            }
+            ++it;
         }
-        if (it->begin < at + bytes && at < it->end && it->seqno) {
-            stats.ringWaits++;
-            r.waited = true;
-            wait(it->seqno);
-            it = r.inflight.erase(it);
-            continue;
+        if (at < r.head && r.since < r.head) {  // wrapped inside one command buffer: keep the part before the wrap
+            r.inflight.push_back({r.since, r.bo.bytes, 0});
+            r.since = 0;
         }
-        ++it;
-    }
-    if (at < r.head && r.since < r.head) {  // wrapped inside one command buffer: keep the part before the wrap
-        r.inflight.push_back({r.since, r.bo.bytes, 0});
-        r.since = 0;
+        // spans are added behind head only (retire, the wrap above), so the nearest one ahead bounds every allocation until
+        // the next wrap
+        r.clear = r.bo.bytes;
+        for (const Ring::Span &s : r.inflight)
+            if (s.begin >= at + bytes)
+                r.clear = std::min(r.clear, s.begin);
     }
     r.head = at + bytes;
     va = r.bo.va + at;
@@ -283,7 +300,7 @@ bool Device::outgrow(Ring &r, uint32_t bytes, uint64_t &at)
     stats.ringsOutgrown++;
     r.outgrown.push_back(r.bo);
     r.bo = larger;
-    r.head = r.since = 0;
+    r.head = r.since = r.clear = 0;
     r.inflight.clear();
     at = 0;
     return true;
@@ -294,6 +311,8 @@ void Device::retire(Ring &r, uint32_t seqno)
     for (const Bo &b : r.outgrown)
         grownOut_.push_back({b, seqno});
     r.outgrown.clear();
+    while (!r.inflight.empty() && r.inflight.front().seqno && done(r.inflight.front().seqno))
+        r.inflight.pop_front();
     for (auto &s : r.inflight)
         if (!s.seqno)
             s.seqno = seqno;
@@ -314,6 +333,7 @@ Device::~Device()
     grow_.notify_all();
     if (grower_.joinable())
         grower_.join();
+    compStop();
 }
 
 uint32_t Device::contextWords() const
@@ -335,6 +355,7 @@ void Device::emitContext(Push &p)
     const uint32_t *base = pack_.section<uint32_t>(PackBaseline);
     for (uint64_t i = 0; i < pack_.bytes(PackBaseline) / 8; i++)
         p.m(base[2 * i], base[2 * i + 1]);
+    tiledCacheInit(p, k_.info());
     // the depth/stencil registers (the runtime's, as NVK leaves them for Metal's default state in a pass without the attachment)
     {
         DepthStencilRegs unknown;
@@ -1857,12 +1878,28 @@ bool Device::createYcbcrTexture(uint64_t surfaceId, void *base, uint64_t allocBy
 Texture *Device::backing(const Texture &m, uint32_t tag, bool blockLinear)
 {
     blockLinear |= m.zeta;
+    const uint32_t kind = compKind(m, tag, blockLinear);
+    Backing *plain = nullptr;
     for (Backing *b : backings_)
-        if (b->texture.width == m.width && b->texture.height == m.height && b->texture.format == m.format &&
-            b->tag == tag && b->texture.blockLinear == blockLinear) {
-            b->lastCommit = commitCount_;
-            return &b->texture;
+        if (!b->retired && b->texture.width == m.width && b->texture.height == m.height &&
+            b->texture.format == m.format && b->tag == tag && b->texture.blockLinear == blockLinear) {
+            if (b->texture.comptags || !kind) {
+                b->lastCommit = commitCount_;
+                return &b->texture;
+            }
+            plain = b;
         }
+    if (Backing *c = kind ? compBacking(m, tag, kind) : nullptr) {
+        if (plain)
+            plain->retired = true;
+        c->lastCommit = commitCount_;
+        backings_.push_back(c);
+        return &c->texture;
+    }
+    if (plain) {
+        plain->lastCommit = commitCount_;
+        return &plain->texture;
+    }
     Backing *b = new Backing;
     Texture &t = b->texture;
     if (m.zeta) {
@@ -1933,6 +1970,7 @@ void Device::freeBacking(Texture &t)
 // Backings no pass used for 600 command buffers (~10 s of frames) and whose last use completed go back to the pool.
 void Device::trimBackings()
 {
+    compTrim();
     for (auto it = spares_.begin(); it != spares_.end();) {
         if (commitCount_ - it->freedAt > 600) {
             freeChunk(chunks_[it->chunk]);
@@ -1944,7 +1982,10 @@ void Device::trimBackings()
     for (auto it = backings_.begin(); it != backings_.end();) {
         Backing *b = *it;
         if (commitCount_ - b->lastCommit > 600 && (!b->lastUse || done(b->lastUse))) {
-            freeBacking(b->texture);
+            if (b->comp.handle)
+                compFree(*b);
+            else
+                freeBacking(b->texture);
             delete b;
             it = backings_.erase(it);
             continue;
@@ -2143,7 +2184,7 @@ void Device::growRing(Ring &r, uint64_t most)
         return;
     grownOut_.push_back({r.bo, lastSeqno_});
     r.bo = larger;
-    r.head = r.since = 0;
+    r.head = r.since = r.clear = 0;
     r.inflight.clear();
 }
 
@@ -2174,6 +2215,7 @@ CommandBuffer *Device::begin()
     cb.refusal = {};
     cb.partial = false;
     overflowing_ = false;
+    overflow_.clear();
     cb.pushStart_ = push_.head;
     cb.uploadStart_ = upload_.head;
     memcpy(cb.rootPush_, rootPush_, sizeof rootPush_);
@@ -2195,9 +2237,9 @@ CommandBuffer *Device::begin()
     p.m(INVALIDATE_TEXTURE_HEADER_CACHE_NO_WFI, 0);
     p.inc(INVALIDATE_SHADER_CACHES_NO_WFI, {kInvalidateConstant});
     cb.shaderInvalidate_ = p.at - 1;
-    p.m(INVALIDATE_SHADER_CACHES, 0x14);
+    p.m(INVALIDATE_SHADER_CACHES, kFlushData | kInvalidateData);
     p.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
-    p.m(INVALIDATE_SHADER_CACHES_NO_WFI, 0x10);
+    p.m(INVALIDATE_SHADER_CACHES_NO_WFI, kInvalidateData);
     checkRoom(p, "a submission prologue");
     cb.segment(start, p.at);
     return &cb;
@@ -2356,6 +2398,11 @@ bool CommandBuffer::commit(uint32_t &seqno)
             d.heapInvalidated_ = d.heapPlaced_;
         }
     }
+    if (tiledCache(d.k_.info()) && !segments_.empty()) {
+        uint64_t va;
+        auto *tail = reinterpret_cast<uint32_t *>(d.alloc(d.push_, kTiledCacheFlushWords * 4, 4, va));
+        segment(tail, tiledCacheFlush(tail));
+    }
     // CPU writes the GPU reads: to memory, by address (no set/way operation, nothing global)
     uint64_t cleaned = 0;
 #if defined(__aarch64__)
@@ -2416,6 +2463,7 @@ void CommandBuffer::abandon()
 {
     Device &d = *dev_;
     d.overflowing_ = false;
+    d.overflow_.clear();
     for (Device::Ring *r : {&d.push_, &d.upload_}) {
         // drop the open command buffer's spans and give back what it took (nothing else was allocated since: one encodes)
         for (auto it = r->inflight.begin(); it != r->inflight.end();)
@@ -2463,6 +2511,13 @@ void RenderEncoder::setBytes(int stage, uint32_t slot, const void *bytes, uint32
     bufs_[stage][slot] = {va, length, nullptr, 0,
                           m};  // m2v binds the Metal length (its upload chunks are 256-byte aligned)
     dev_->stats.uploadBytes += chunk;
+}
+
+void RenderEncoder::setBytesAt(int stage, uint32_t slot, uint64_t va, uint32_t length, const uint8_t *cpu)
+{
+    if (slot >= 31 || stage < 1 || stage > 2)
+        return;
+    bufs_[stage][slot] = {va, length, nullptr, 0, cpu};
 }
 
 void RenderEncoder::setBuffer(int stage, uint32_t slot, const Buffer *b, uint64_t offset)
@@ -2554,7 +2609,7 @@ void RenderEncoder::barrier()
     if (p_.room() < 64)
         reserve();
     p_.m(WAIT_FOR_IDLE, 0);
-    p_.m(INVALIDATE_SHADER_CACHES, 0x14);
+    p_.m(INVALIDATE_SHADER_CACHES, kBetweenPasses);
     p_.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
     writtenBits_ = storageWrittenBits_ = 0;
     written_.clear();
@@ -3403,7 +3458,7 @@ void RenderEncoder::end()
     Push p{start, start + room};
     p.raw(restore.data(), uint32_t(restore.size()));
     p.m(WAIT_FOR_IDLE, 0);
-    p.m(INVALIDATE_SHADER_CACHES, 0x14);
+    p.m(INVALIDATE_SHADER_CACHES, kBetweenPasses);
     p.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
     // shadow targets' pool images: their texels over the render area first, as NVK's tiled shadow loads them (a load that
     // keeps them: Load, and a DontCare the clears leave; a Clear clears it all), then the barrier to the pass
@@ -3427,7 +3482,7 @@ void RenderEncoder::end()
             continue;
         const Texture *t = pass_.color[c.target].texture;
         targetWords(p, COLOR_TARGET, *t);
-        p.m(COLOR_COMPRESSION, 0);
+        p.m(COLOR_COMPRESSION, t->comptags);
         uint32_t map = 0;
         for (uint32_t k = 0; k < 8; k++)
             map |= k << (4 + 3 * k);
@@ -3437,6 +3492,7 @@ void RenderEncoder::end()
         uint32_t v[4] = {};
         clearWords(pass_.color[c.target].texture->format, c.value, v,
                    !called_ && pass_.color[c.target].texture->compressed);
+        d.countZbc(*t, !c.x0 && !c.y0 && c.x1 >= t->width && c.y1 >= t->height, zbcBootColor(t->format, v));
         p.inc(COLOR_CLEAR_VALUE, {v[0], v[1], v[2], v[3]});
         p.inc(CLEAR_RECT_H, {c.x1 << 16 | c.x0, c.y1 << 16 | c.y0});
         p.m(CLEAR_SURFACE_CONTROL, 0x10);  // USE_CLEAR_RECT
@@ -3447,7 +3503,7 @@ void RenderEncoder::end()
     }
     if (own) {
         p.m(WAIT_FOR_IDLE, 0);
-        p.m(INVALIDATE_SHADER_CACHES, 0x14);
+        p.m(INVALIDATE_SHADER_CACHES, kBetweenPasses);
         p.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
     }
     uint32_t ct = 0, count = 0;
@@ -3457,7 +3513,7 @@ void RenderEncoder::end()
     for (uint32_t j = 0; j < count; j++) {
         if (const Texture *t = pass_.color[j].texture) {
             targetWords(p, COLOR_TARGET + 0x40 * j, *t);
-            p.m(COLOR_COMPRESSION + 4 * j, 0);
+            p.m(COLOR_COMPRESSION + 4 * j, t->comptags);
         } else {
             uint32_t w[kColorTargetWords];
             disabledTargetWords(w);
@@ -3475,12 +3531,15 @@ void RenderEncoder::end()
     // NVK clears depth and stencil with the first color the pass clears over its render area, else on their own
     uint32_t zsBits = zs.texture ? zetaClearBits(zs.clearDepth, zs.clearStencil) : 0;
     zetaClearValues(p, zsBits & 1, zs.depth, zsBits & 2, zs.stencil);
+    if (zsBits & 1)
+        d.countZbc(*zs.texture, areaW_ >= zs.texture->width && areaH_ >= zs.texture->height, zbcBootDepth(zs.depth));
     for (const Clear &c : cl) {
         if (c.own)
             continue;
         uint32_t v[4] = {};
-        clearWords(pass_.color[c.target].texture->format, c.value, v,
-                   !called_ && pass_.color[c.target].texture->compressed);
+        const Texture *t = pass_.color[c.target].texture;
+        clearWords(t->format, c.value, v, !called_ && t->compressed);
+        d.countZbc(*t, !c.x0 && !c.y0 && c.x1 >= t->width && c.y1 >= t->height, zbcBootColor(t->format, v));
         const bool area = !c.x0 && !c.y0 && c.x1 == areaW_ && c.y1 == areaH_;
         p.inc(COLOR_CLEAR_VALUE, {v[0], v[1], v[2], v[3]});
         p.inc(CLEAR_RECT_H, {c.x1 << 16 | c.x0, c.y1 << 16 | c.y0});
@@ -3669,6 +3728,48 @@ void BlitEncoder::copyBytes(uint64_t src, uint64_t dst, uint64_t bytes)
         dev_->stats.ceBytes += n;
         done += n;
     }
+}
+
+void BlitEncoder::fillBytes(uint64_t dst, uint64_t bytes, uint8_t value)
+{
+    // SET_REMAP_COMPONENTS: DST_X..W CONST_A (4), COMPONENT_SIZE ONE (0) or FOUR (3) bytes, one source and destination
+    // component; LAUNCH_DMA: PIPELINED, FLUSH, pitch both sides, REMAP
+    constexpr uint32_t kConstA = 0x4444, kRemap = 1u << 10, kMaxDim = 1u << 15;
+    constexpr uint32_t kLaunch = 1u | 1u << 2 | 1u << 7 | 1u << 8 | kRemap;
+    auto run = [&](uint64_t at, uint32_t width, uint32_t height, uint32_t unit) {
+        room();
+        p_.inc(CE_OFFSET_IN_UPPER + 8, {uint32_t(at >> 32), uint32_t(at)}, SUBC_COPY);
+        p_.inc(CE_LINE_LENGTH_IN, {width, height}, SUBC_COPY);
+        p_.m(CE_LAUNCH_DMA, kLaunch | (height > 1 ? 1u << 9 : 0), SUBC_COPY);
+        dev_->stats.ceOps++;
+        dev_->stats.ceBytes += uint64_t(width) * height * unit;
+    };
+    auto bytesOf = [&](uint64_t at, uint64_t n) {
+        if (!n)
+            return;
+        room();
+        p_.m(CE_SET_REMAP_CONST_A, value, SUBC_COPY);
+        p_.m(CE_SET_REMAP_COMPONENTS, kConstA, SUBC_COPY);
+        run(at, uint32_t(n), 1, 1);
+    };
+    const uint64_t end = dst + bytes, first = std::min((dst + 3) & ~uint64_t(3), end),
+                   last = std::max(end & ~uint64_t(3), first);
+    bytesOf(dst, first - dst);
+    if (last > first) {
+        room();
+        p_.m(CE_SET_REMAP_CONST_A, uint32_t(value) * 0x01010101u, SUBC_COPY);
+        p_.m(CE_SET_REMAP_COMPONENTS, kConstA | 3u << 16, SUBC_COPY);
+        p_.inc(CE_PITCH_IN, {kMaxDim * 4, kMaxDim * 4}, SUBC_COPY);
+        for (uint64_t at = first, left = last - first; left >= 4;) {
+            const uint64_t words = left / 4;
+            const uint32_t width = uint32_t(std::min<uint64_t>(words, kMaxDim)),
+                           height = words >= kMaxDim ? uint32_t(std::min<uint64_t>(words / kMaxDim, kMaxDim)) : 1;
+            run(at, width, height, 4);
+            at += uint64_t(width) * height * 4;
+            left -= uint64_t(width) * height * 4;
+        }
+    }
+    bytesOf(last, end - last);
 }
 
 void BlitEncoder::copyRect(uint64_t src, uint32_t srcPitch, uint64_t dst, uint32_t dstPitch, uint32_t width,

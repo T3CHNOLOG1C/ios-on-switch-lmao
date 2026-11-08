@@ -33,6 +33,7 @@
 #include <vector>
 #include <IOKit/IOReturn.h>
 #include <mach/kern_return.h>
+#include "raw_comp.h"
 #include "raw_kernel.h"
 #include "raw_pack.h"
 #include "raw_push.h"
@@ -175,6 +176,8 @@ struct Texture {
     // Metal keeps it losslessly compressed (m2v nan_clear.rs keeps_nan_sign): an extended-range Clear in a pass that records
     // no draw call stores Metal's straight route's codes
     bool compressed = false;
+    // Its memory is bound with a compressible kind (raw_comp.h): its passes enable colour, or Z and stencil, compression
+    bool comptags = false;
 
     // A mipmapped texture's levels (r12, raw/fx): `chain` is the block-linear image of every level, NIL's layout, and this texture
     // is its level 0 (va, span, pitch and block height level 0's; its header, tic, the chain's). The 2D engine fills the later
@@ -319,6 +322,8 @@ public:
     }
 
     void setBytes(int stage, uint32_t slot, const void *bytes, uint32_t length);  // stage 1 vertex, 2 fragment
+    // the same for bytes already written at `va` (256-byte aligned, zero to the next 256 bytes; `cpu` the CPU's view)
+    void setBytesAt(int stage, uint32_t slot, uint64_t va, uint32_t length, const uint8_t *cpu);
     void setBuffer(int stage, uint32_t slot, const Buffer *buffer, uint64_t offset);
     void setBufferOffset(int stage, uint32_t slot, uint64_t offset);
 
@@ -469,6 +474,9 @@ class BlitEncoder {
 public:
     // `bytes` bytes from `src` to `dst` (vkCmdCopyBuffer)
     void copyBytes(uint64_t src, uint64_t dst, uint64_t bytes);
+    // `bytes` bytes at `dst` set to `value` (fillBuffer:range:value:): the copy engine writing a constant, its whole words as
+    // NVK's vkCmdFillBuffer (nvk_cmd_fill_memory_ce), the bytes before and after them one at a time
+    void fillBytes(uint64_t dst, uint64_t bytes, uint8_t value);
     // `lines` rows of `width` pixels of `bpp` bytes, from `src` (row stride srcPitch) to `dst` (dstPitch) (vkCmdCopyImage and the
     // buffer<->image copies of linear images)
     void copyRect(uint64_t src, uint32_t srcPitch, uint64_t dst, uint32_t dstPitch, uint32_t width, uint32_t lines,
@@ -829,6 +837,9 @@ public:
         std::atomic<uint64_t> selfOverlapSplit{0}, selfOverlapRuns{0}, selfOverlapUnbounded{0}, selfOverlapNs{0};
         // channels made again after the kernel killed one
         std::atomic<uint64_t> reopens{0};
+        // backings on compressed memory made, their bytes, and compressed memory the kernel could not make; full-target clears
+        // of compressed targets to a value the boot ZBC table holds (no texels written) and to one it does not
+        std::atomic<uint64_t> compBackings{0}, compBytes{0}, compFailed{0}, zbcHits{0}, zbcMisses{0};
         // compute launches encoded (raw_compute.h)
         std::atomic<uint64_t> dispatches{0};
     } stats;
@@ -862,7 +873,9 @@ private:
     struct Ring {
         Bo bo;
         uint64_t head = 0, since = 0;  // next free byte; where the open command buffer's use began
-        bool waited = false;           // an allocation waited for the GPU since the last begin(): it doubles there
+        // No span in flight lies in [head, clear): an allocation there needs no look at them (alloc's scan sets it)
+        uint64_t clear = 0;
+        bool waited = false;  // an allocation waited for the GPU since the last begin(): it doubles there
 
         struct Span {
             uint64_t begin, end;
@@ -911,8 +924,8 @@ private:
     Ring push_, upload_;
     // rings replaced by larger ones, freed once the GPU passed the seqno
     std::vector<std::pair<Bo, uint32_t>> grownOut_;
-    bool overflowing_ = false;       // the open command buffer outgrew a ring with no memory for a larger one
-    std::vector<uint8_t> overflow_;  // where it is written then (never submitted)
+    bool overflowing_ = false;  // the open command buffer outgrew a ring with no memory for a larger one
+    std::deque<std::vector<uint8_t>> overflow_;  // where it is written then (never submitted)
     uint32_t channel_ = 0, lastSeqno_ = 0;
     // the channel's fence word; before there is a channel a zero, which every seqno submitted so far (none) has passed
     const volatile uint32_t *fence_ = &kNoFence;
@@ -1018,6 +1031,9 @@ private:
         uint32_t tag = 0;
         uint32_t lastUse = 0;  // the seqno of the last submission that used it (0: never submitted)
         uint64_t lastCommit = 0;
+        Bo comp;  // its own compressed BO (raw_comp.h), else none
+        // a compressed backing of its shape replaced it: no pass takes it again, trimBackings frees it
+        bool retired = false;
     };
 
     std::vector<Backing *> backings_;  // memoryless attachments' memory, by size and format
@@ -1087,6 +1103,23 @@ private:
     Texture *backing(const Texture &memoryless, uint32_t tag = 0, bool blockLinear = false);
     void freeBacking(Texture &t);
     void trimBackings();
+
+    // Compressed backings (raw_comp.cpp), lock_ held: the compressible kind a backing of this shape takes (0: none or
+    // compression off); a backing on compressed memory made off this thread, or nullptr after asking compThread_ for some
+    CompQueue comp_;
+    // made off the render thread on a thread of its own, started at the first ask: the kernel's contiguous search can take
+    // over 100 ms, and no other thread (the pool's grower included, which a render thread may wait for) waits behind it
+    std::thread compThread_;
+    std::condition_variable compWake_;
+    uint32_t compKind(const Texture &m, uint32_t tag, bool blockLinear) const;
+    Backing *compBacking(const Texture &m, uint32_t tag, uint32_t kind);
+    // What was asked for, made, `l` dropped around each kernel allocation
+    void compMake(std::unique_lock<std::mutex> &l);
+    void compStop();
+    void compFree(Backing &b);
+    void compTrim();
+    // A clear of target t (counted only when compressed): `full` it covers t whole, `boot` its value is the boot ZBC table's
+    void countZbc(const Texture &t, bool full, bool boot);
 };
 
 // NV topology for an MTLPrimitiveType (point, line, lineStrip, triangle, triangleStrip)

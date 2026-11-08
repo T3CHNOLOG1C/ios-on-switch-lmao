@@ -2,7 +2,8 @@
 // raw GM20B path, over the mock GPU: Metal's contracts the facade (runtime/RawMetal.mm) keeps where the raw path cannot draw.
 // Build it with -fsanitize=address.
 // - Without an m2v device (no nvk dylib given): a command buffer that never reaches a GPU (the kernel refuses the raw path's
-//   channel, and there is no m2v to replay it) runs its scheduled handlers, before its completed ones.
+//   channel, and there is no m2v to replay it) runs its scheduled handlers, before its completed ones; and one dropped
+//   uncommitted with an encoder open is freed with the encoder; a buffer fill runs raw.
 // - With one: newBufferWithBytes: while the raw pool has no room (the kernel refuses its allocations) gives m2v's buffer with
 //   the bytes in it; and the buffers a compute pass names, as arguments and in arrays, are marked written by the GPU once it
 //   completes (on m2v, which the replay hands their twins), so the CPU's next read of them invalidates its cached lines; and a
@@ -103,6 +104,46 @@ static void partialNotReplayed(id<MTLDevice> dev)
     expect(cb.status == MTLCommandBufferStatusError && !m2v, "it completes with an error, not replayed on m2v");
 }
 
+// A command buffer dropped uncommitted with an encoder still open: both are freed (the command buffer holds its open encoder
+// weakly, the encoder it)
+static void openEncoderFreed(id<MTLDevice> dev)
+{
+    id<MTLCommandQueue> q = [dev newCommandQueue];
+    id<MTLBuffer> a = [dev newBufferWithLength:4096 options:MTLResourceStorageModeShared],
+                  b = [dev newBufferWithLength:4096 options:MTLResourceStorageModeShared];
+    __weak id weakCb = nil, weakEncoder = nil;
+    @autoreleasepool {
+        id<MTLCommandBuffer> cb = [q commandBuffer];
+        id<MTLBlitCommandEncoder> e = [cb blitCommandEncoder];
+        [e copyFromBuffer:a sourceOffset:0 toBuffer:b destinationOffset:0 size:64];
+        weakCb = cb;
+        weakEncoder = e;
+    }
+    printf("a command buffer dropped with an encoder open: command buffer %s, encoder %s\n", weakCb ? "kept" : "freed",
+           weakEncoder ? "kept" : "freed");
+    expect(!weakCb && !weakEncoder, "both are freed");
+}
+
+// fillBuffer:range:value: on the raw path (no m2v to replay it here): it completes, its range holds the value
+static void fillRaw(id<MTLDevice> dev)
+{
+    id<MTLCommandQueue> q = [dev newCommandQueue];
+    id<MTLBuffer> b = [dev newBufferWithLength:4096 options:MTLResourceStorageModeShared];
+    memset(b.contents, 0xee, 4096);
+    id<MTLCommandBuffer> cb = [q commandBuffer];
+    id<MTLBlitCommandEncoder> e = [cb blitCommandEncoder];
+    [e fillBuffer:b range:NSMakeRange(5, 1000) value:0x5a];
+    [e endEncoding];
+    [cb commit];
+    [cb waitUntilCompleted];
+    const uint8_t *p = (const uint8_t *)b.contents;
+    unsigned wrong = 0;
+    for (unsigned i = 0; i < 4096; i++)
+        wrong += p[i] != (i >= 5 && i < 1005 ? 0x5a : 0xee);
+    printf("a fill on the raw path: status %lu, %u bytes wrong\n", (unsigned long)cb.status, wrong);
+    expect(cb.status == MTLCommandBufferStatusCompleted && !wrong, "it completes with its range filled");
+}
+
 static void bytesWithoutRoom(id<MTLDevice> dev)
 {
     std::vector<uint8_t> bytes(64 << 20);  // past any chunk the pool has: an allocation of its own
@@ -156,6 +197,8 @@ int main(int argc, char **argv)
             fprintf(stderr, "usage: contractcheck <pack> <cache dir> [<nvk dylib>]\n");
             return 2;
         }
+        setenv("NVDEC_WRITETHROUGH", "1",
+               0);  // what the GPU writes lands in the memory behind it (fillRaw reads it back)
         id<MTLDevice> fallback = nil;
         if (argc > 3) {
             setenv("NMB_DEVICE_BASE_NSOBJECT", "1", 1);
@@ -174,8 +217,11 @@ int main(int argc, char **argv)
             bytesWithoutRoom(dev);
             computeWrites(dev);
             partialNotReplayed(dev);
-        } else
+        } else {
+            fillRaw(dev);  // first: handlersRun refuses the raw channel for a second
             handlersRun(dev);
+            openEncoderFreed(dev);
+        }
         printf("%s: contractcheck\n", failed ? "FAIL" : "PASS");
         return failed ? 1 : 0;
     }

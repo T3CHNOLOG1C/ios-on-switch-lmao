@@ -86,7 +86,8 @@ size_t raw_metal_rates(char *out, size_t size)
     char diag[1024];
     snprintf(diag, sizeof diag,
              " sp=%llu/%llu abortenc=%.0fus/a replay=%.0fus/m rclean=%.0fKB/m rt128=%llu(pitch %u va&255 %u) "
-             "rtmix=%llu lvl=%llu states=%llu/%llu/%llu/%llu/%.0fms atcreate=%llu/%.0fus why=%s",
+             "rtmix=%llu lvl=%llu states=%llu/%llu/%llu/%llu/%.0fms atcreate=%llu/%.0fus comp=%llu/%lluKB/f%llu "
+             "zbc=%llu/%llu why=%s",
              (unsigned long long)sp, (unsigned long long)segs,
              (s.abortUs.load() - gRates.abortUs) / double(aborts ? aborts : 1),
              (s.replayUs.load() - gRates.replayUs) / double(m2vs),
@@ -96,19 +97,23 @@ size_t raw_metal_rates(char *out, size_t size)
              (unsigned long long)(k.levelPasses.load() - gRates.levelPasses), (unsigned long long)made.hits,
              (unsigned long long)made.misses, (unsigned long long)made.refusals, (unsigned long long)made.failures,
              made.makeUs / 1000.0, (unsigned long long)made.lookupHits,
-             made.lookupHits ? double(made.lookupUs) / double(made.lookupHits) : 0.0, *preds ? preds : "-");
+             made.lookupHits ? double(made.lookupUs) / double(made.lookupHits) : 0.0,
+             (unsigned long long)k.compBackings.load(), (unsigned long long)(k.compBytes.load() >> 10),
+             (unsigned long long)k.compFailed.load(), (unsigned long long)k.zbcHits.load(),
+             (unsigned long long)k.zbcMisses.load(), *preds ? preds : "-");
 #if SWITCH_FRAME_TIMELINE
     {
         const size_t used = strlen(diag);
         snprintf(diag + used, sizeof diag - used,
-                 " rsplit=%.0f/%.0f/%.0fus/m rmax=%lluus rdraw=%.1f/m tw=t%llu/%lluus/b%llu/o%llu sbf=%llu"
+                 " rsplit=%.0f/%.0f/%.0fus/m rmax=%lluus rdraw=%.1f/m tw=t%llu/%lluus/b%llu/o%llu/f%llu sbf=%llu"
                  " fb=%llu/%llu/%llu/%llu(%s) clr=%llu/%llu so=%llu/%llu/%llu/%lluus",
                  (s.replaySlotUs.exchange(0) / double(m2vs)), (s.replayTwinUs.exchange(0) / double(m2vs)),
                  (s.replayCommitUs.exchange(0) / double(m2vs)), (unsigned long long)s.replayMaxUs.exchange(0),
                  s.replayDraws.exchange(0) / double(m2vs), (unsigned long long)s.twinTextures.exchange(0),
                  (unsigned long long)s.twinTextureUs.exchange(0), (unsigned long long)s.twinBuffers.exchange(0),
-                 (unsigned long long)s.twinOthers.exchange(0), (unsigned long long)s.scheduledByFinish.exchange(0),
-                 (unsigned long long)k.fetchBarriers.exchange(0), (unsigned long long)k.fetchBarriersElided.exchange(0),
+                 (unsigned long long)s.twinOthers.exchange(0), (unsigned long long)s.twinForwards.exchange(0),
+                 (unsigned long long)s.scheduledByFinish.exchange(0), (unsigned long long)k.fetchBarriers.exchange(0),
+                 (unsigned long long)k.fetchBarriersElided.exchange(0),
                  (unsigned long long)k.fetchBarriersAnyColor.exchange(0),
                  (unsigned long long)k.fetchBarriersInterlocked.exchange(0),
                  raw::Device::fetchBarrierName(gRM->raw->fetchBarrier.load(std::memory_order_relaxed)),

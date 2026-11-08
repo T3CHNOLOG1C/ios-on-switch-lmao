@@ -9,6 +9,11 @@
 // MOCK_GPU_LOG=<file>: every submission run, "ch seqno kick_us start_us end_us acquires", and the WaitFence calls by thread.
 // MOCK_IGNORE_ACQUIRES=1: the GPU runs submissions without their acquires (ordercheck.py's negative control).
 // MOCK_IMPORT_US=<n>: BoImport takes n us per 16 MiB (the kext's wiring; selcheck's pool test).
+// MOCK_COMPRESSION=1: GetInfo says compressible kinds bind (TegraGM20BInfoCompression), and they do as the kext binds them
+// (mock_comp.h: which binds, the contract's violations counted, MOCK_COMP_LINES=<n> comptag lines). Off by default.
+// MOCK_CONTIG_US=<n>: a Contiguous BoAlloc takes n us (the kext's contiguous search).
+// MOCK_TILED_CACHE=1: GetInfo says every GR context holds the tiled cache's table (TegraGM20BInfoTiledCache), as the kext
+// does unless booted with switch-no-tiled-cache. Off by default while NVK host builds without the bit stay in use.
 // Each IOServiceOpen is a connection of its own, as another task's would be (Order stays among its channels; MOCK_TASK_WINDOWS=1:
 // its own GPU VA window too), and ExecSurfaces (method 17; MOCK_NO_EXEC_SURFACES=1 hides it) orders as the kext's TegraGM20BFences.h: a
 // submission that lists an IOSurface's import waits on the GPU for every other channel's, any connection's, last submission
@@ -58,6 +63,10 @@ struct bo {
     uint64_t bytes;
     void *import;
     uint32_t surface;
+    uint32_t flags, align_log2; /* BoAlloc's */
+    uint32_t kind, cpu_maps;    /* its last bind's kind (kind_set), CPU mappings made */
+    uint8_t kind_set;
+    uint64_t lines; /* comptag lines it holds (mock_comp.h) */
 };
 static struct bo bos[kMaxBo];
 static atomic_uint nbo = 1;
@@ -76,6 +85,7 @@ static atomic_uint fail_skip[16]; /* mock_iokit_fail_after's calls that go throu
 static atomic_int fail_kr[16];
 static atomic_ulong import_maps;    /* VmBind map ops onto imported pages */
 static atomic_ulong kind_maps[256]; /* VmBind map ops by PTE kind */
+#include "mock_comp.h"
 
 /* Surfaces' layouts (method 16), by surface ID */
 enum {
@@ -450,7 +460,9 @@ static kern_return_t mock_call(mach_port_t c, uint32_t sel, const void *in, size
                                                (getenv("MOCK_NO_KERNEL_MAP") ? 0 : TegraGM20BInfoKernelMap) |
                                                (getenv("MOCK_NO_ORDER") ? 0 : TegraGM20BInfoOrder) |
                                                (getenv("MOCK_NO_SURFACE_LAYOUT") ? 0 : TegraGM20BInfoSurfaceLayout) |
-                                               (getenv("MOCK_NO_KILL_RECORD") ? 0 : TegraGM20BInfoKillRecord),
+                                               (getenv("MOCK_NO_KILL_RECORD") ? 0 : TegraGM20BInfoKillRecord) |
+                                               (getenv("MOCK_TILED_CACHE") ? TegraGM20BInfoTiledCache : 0) |
+                                               (getenv("MOCK_COMPRESSION") ? TegraGM20BInfoCompression : 0),
                                       .chipset = 0x12e,
                                       .gpc_count = 1,
                                       .tpc_count = 2,
@@ -474,6 +486,8 @@ static kern_return_t mock_call(mach_port_t c, uint32_t sel, const void *in, size
     }
     case TegraGM20BMethodBoAlloc: {
         const struct TegraGM20BAbiBoAlloc *a = in;
+        if ((a->flags & TegraGM20BBoContiguous) && getenv("MOCK_CONTIG_US"))
+            usleep((useconds_t)atoi(getenv("MOCK_CONTIG_US")));
         unsigned h = atomic_fetch_add(&nbo, 1);
         char name[64];
         snprintf(name, sizeof(name), "/nvkmock.%d.%u", getpid(), h);
@@ -481,7 +495,7 @@ static kern_return_t mock_call(mach_port_t c, uint32_t sel, const void *in, size
         shm_unlink(name);
         if (fd < 0 || ftruncate(fd, (off_t)a->bytes))
             return kIOReturnNoMemory;
-        bos[h] = (struct bo){fd, a->bytes, NULL};
+        bos[h] = (struct bo){fd, a->bytes, NULL, 0, a->flags, a->align_log2};
         struct TegraGM20BAbiBoAllocReply r = {.handle = h, .map_token = h};
         memcpy(out, &r, sizeof(r));
         return KERN_SUCCESS;
@@ -514,6 +528,7 @@ static kern_return_t mock_call(mach_port_t c, uint32_t sel, const void *in, size
         const struct TegraGM20BAbiBoFree *a = in;
         if (a->handle < kMaxBo && bos[a->handle].fd >= 0)
             close(bos[a->handle].fd);
+        comp_unbind(0, 0, (unsigned)a->handle);
         if (a->handle < kMaxBo)
             bos[a->handle] = (struct bo){0};
         return KERN_SUCCESS;
@@ -522,7 +537,14 @@ static kern_return_t mock_call(mach_port_t c, uint32_t sel, const void *in, size
         const struct TegraGM20BAbiVmBind *b = in;
         for (uint32_t i = 0; i < b->count && i < TegraGM20BMaxBindOps; i++) {
             const struct TegraGM20BAbiBindOp *op = &b->ops[i];
-            const struct bo *o = (op->op == TegraGM20BBindMap && op->handle < kMaxBo) ? &bos[op->handle] : NULL;
+            struct bo *o = (op->op == TegraGM20BBindMap && op->handle < kMaxBo) ? &bos[op->handle] : NULL;
+            if (o) {
+                const kern_return_t kr = comp_bind((unsigned)op->handle, o, op);
+                if (kr != KERN_SUCCESS)
+                    return kr;
+            } else if (op->op == TegraGM20BBindUnmap) {
+                comp_unbind(op->va, op->range, 0);
+            }
             if (o && o->import)
                 atomic_fetch_add(&import_maps, 1);
             if (op->op == TegraGM20BBindMap)
@@ -750,6 +772,8 @@ static kern_return_t mock_map(io_connect_t c, uint32_t type, task_port_t t, mach
         *size = 4096;
         return KERN_SUCCESS;
     }
+    if (type < kMaxBo)
+        comp_cpu_map(type, &bos[type]);
     void *at = (opt & kIOMapAnywhere) ? NULL : (void *)*addr;
     void *m = mmap(at, bytes, PROT_READ | PROT_WRITE, MAP_SHARED | (at ? MAP_FIXED : 0), fd, 0);
     if (m == MAP_FAILED)

@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: MIT
 // A state's per-state 3D registers computed by the raw path from its descriptor and its two programs, the registers NVK emits for
 // m2v's translation of the state (a record's blob, raw_record.h), with no NVK pipeline or capture. test/emitcheck holds them
-// to every record of a pack. The vertex attributes and streams (SET_VERTEX_ATTRIBUTE_A, SET_VERTEX_STREAM_A_FORMAT) need the
-// vertex function's attribute locations and are not here yet.
+// to every record of a pack, test/vertexcheck the vertex input's.
 #pragma once
 #include <cstdint>
 #include <string>
@@ -29,5 +28,13 @@ struct EmitRegister {
 // it can't read (`why`)
 bool emitState(const std::string &keyFields, const EmitProgram &vertex, const EmitProgram &fragment,
                std::vector<EmitRegister> &out, std::string &why);
+
+// The vertex input's registers (SET_VERTEX_ATTRIBUTE_A(0..31), SET_VERTEX_STREAM_A_FORMAT of each stream) from the key's
+// vertex descriptor fields and `attributes`, the vertex function's [[attribute(n)]] inputs it reads (its reflection's active
+// vertexAttributes). m2v numbers their locations densely in attribute order (metal2vulkan link/varyings.rs assign) and the
+// buffers they read densely in buffer-index order (link/vertex.rs vertex_input_state). False: an attribute the descriptor
+// lacks, or a format or step m2v would fetch in the shader (`why`)
+bool emitVertexInput(const std::string &keyFields, const std::vector<uint32_t> &attributes,
+                     std::vector<EmitRegister> &out, std::string &why);
 
 }  // namespace raw

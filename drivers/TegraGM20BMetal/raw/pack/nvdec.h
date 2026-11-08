@@ -15,6 +15,7 @@
 #include <set>
 #include <string>
 #include <vector>
+#include "nvdec_comp.h"
 #include "probe_record.h"
 
 namespace nvdec {
@@ -61,6 +62,9 @@ public:
     // The capture's own (pack/cap.cpp): NVDEC_SCRUB's zeroing of what a probe draw read, NVDEC_DESCRIBE's naming of an address
     std::function<void(uint64_t va, uint64_t bytes)> scrub;
     std::function<void(uint64_t va)> describe;
+    // The PTE kind a VA is bound with (the mock's model of the kext, pack/mock_comp.h): compressed targets' counts (comp)
+    std::function<uint32_t(uint64_t va)> vaKind;
+    CompCounts comp, compSubmit;
     // The draw's facts, as NVDEC_PROBE prints them (P lines)
     void probeRecord(ProbeRecord &out);
     // A program the known ones lack, by its SET_PIPELINE_PROGRAM offset: the recording driver's own (raw_capture.cpp asks NVK);
@@ -100,6 +104,9 @@ public:
     }
 
     uint64_t draws = 0, dispatches = 0, clears = 0, submits = 0, macroCalls = 0, unknownMacros = 0, badHeaders = 0;
+    // Draws that read a constant buffer over bytes the copy engine wrote after the channel's last constant-cache invalidate
+    // (their barriers name CBSTALE): the SMs' constant caches may still hold what those bytes were
+    uint64_t staleConstantReads = 0;
 
     static uint64_t fnv(const void *p, size_t n, uint64_t h = 0xcbf29ce484222325ull);
 
@@ -133,6 +140,8 @@ private:
     // mapped in two channels' address spaces, the raw path's and m2v's twins, are one resource), shared by every decoder
     static std::map<uint64_t, int> &names();
     std::set<std::string> pendingBarriers_;
+    // [from, to) the copy engine wrote since the last constant-cache invalidate (INVALIDATE_SHADER_CACHES(_NO_WFI) CONSTANT)
+    std::vector<std::pair<uint64_t, uint64_t>> constantStale_;
     bool firstDraw_ = true;
     bool indexed_ = false;  // the draw being printed is DRAW_INDEX_BUFFER's
 
@@ -148,7 +157,9 @@ private:
     std::multimap<uint64_t, const ProgramInfo *> computeByHead_;
     void probeDump(uint32_t first, uint32_t count);
     void clear(uint32_t data);
+    void countComp(uint32_t clearData);
     void barrier(const std::string &what);
+    bool readsStaleConstants();
 
     uint32_t r3(uint32_t mthd) const
     {

@@ -21,8 +21,10 @@
 // A store action the pass left Unknown, decided by the encoder: the pass's descriptor takes it before either driver encodes it
 - (void)setColorStoreAction:(MTLStoreAction)action atIndex:(NSUInteger)index
 {
-    if (index < 8)
+    if (index < 8) {
         _pass.colorAttachments[index].storeAction = action;
+        _cb->_passes[_passAt].color[index].store = action;
+    }
 }
 
 - (void)setDepthStoreAction:(MTLStoreAction)action

@@ -79,6 +79,7 @@ ios_binary(
     srcs = [
         "raw/fx/fx_mip.cpp",
         "raw/runtime/raw_alias.cpp",
+        "raw/runtime/raw_comp.cpp",
         "raw/runtime/raw_gpu.cpp",
         "raw/runtime/raw_kernel.cpp",
         "raw/runtime/raw_pack.cpp",
