@@ -53,6 +53,8 @@ constexpr MethodRange kOwnedMethods[] = {
     {0x19CC, 0x19D0},
     // SET_PATCH: no raw draw is of patches, and the generator's probe left it as its command buffers' history had it
     {0x0DCC, 0x0DD0},
+    // shader local memory (raw_slm.h): the area the runtime sizes for its programs, never the probe process's address
+    {0x0790, 0x07A4},
     // cache invalidates and flushes: actions, which the raw path issues itself (a submission's prologue, a barrier), though NVK
     // leaves the last one's data behind as if it were state
     {0x021C, 0x0220},

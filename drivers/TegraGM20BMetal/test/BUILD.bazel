@@ -17,8 +17,9 @@
 #   raw_follow_test   raw/runtime/raw_follow.h: the raw path's threads take a fixed-priority committer's policy, never a
 #                     lower one, and keep their own for a timeshare committer
 #   raw_slm_test      raw/runtime/raw_slm.h: the shader local memory a program's header or a kernel's QMD asks of a
-#                     warp, the area NVK sizes for it, and the methods that give it to the raw channel's 3D and compute
-#                     classes
+#                     warp, the area NVK sizes for it, the methods that give it to the raw channel's 3D and compute
+#                     classes (the runtime's, never a record's), ahead of every program of the pack or a record
+#   mkpack_owned_test raw/pack/mkpack.py: no blob or baseline register is one the raw path owns
 #   raw_tiled_cache_test  raw/runtime/raw_tiled_cache.h: with the kernel's tiled-cache bit, deko3d's configuration then the
 #                     enable at context init and one flush per command buffer; nothing without it
 #   raw_comp_test     raw/runtime/raw_comp.h: the compressible kinds the raw path binds are the kernel kind table's (nouveau
@@ -184,6 +185,13 @@ py_test(
 )
 
 py_test(
+    name = "mkpack_owned_test",
+    srcs = ["mkpack_owned_test.py"],
+    data = ["//drivers/TegraGM20BMetal:raw/runtime/raw_owned.h"],
+    deps = ["//drivers/TegraGM20BMetal:raw_pack"],
+)
+
+py_test(
     name = "rawpack_split_test",
     srcs = ["rawpack_split_test.py"],
     deps = ["//drivers/TegraGM20BMetal:raw_pack"],
@@ -221,10 +229,16 @@ host_test(
     name = "raw_slm_test",
     srcs = [
         "raw_slm_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_owned.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_push.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_slm.h",
     ],
     cxx_std = "c++17",
+    data = [
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_completed.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_compute.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_gpu.cpp",
+    ],
 )
 
 host_test(
