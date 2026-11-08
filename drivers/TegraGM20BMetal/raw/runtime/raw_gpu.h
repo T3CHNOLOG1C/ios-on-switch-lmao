@@ -202,6 +202,10 @@ struct Texture {
     // Depth32Float_Stencil8 (raw_zeta.h): block-linear zeta memory, bound with its own PTE kind; never sampled, copied or a
     // colour target
     bool zeta = false;
+
+    // Device::createView's: a header of its own over its parent's memory. Whatever else it was copied from the parent with
+    // (planes, stand-ins, images) stays the parent's, which outlives it: destroyTexture frees its header alone.
+    bool view = false;
 };
 
 struct Buffer {

@@ -1140,14 +1140,17 @@ bool Device::createBufferTexture(const Buffer &b, uint64_t offset, uint32_t widt
 
 bool Device::createView(const Texture &of, uint32_t format, Texture &t)
 {
-    if (of.chain)
-        return false;  // a view of a mipmapped texture: m2v's
+    // A mipmapped texture's view is m2v's. Metal views a converted image (planar, YCbCr) only in its own format or that
+    // format's sRGB twin (m2v view_plan.rs), neither of which has a header here.
+    if (of.chain || of.converted())
+        return false;
     const FormatInfo *f = formatInfo(format);
     if (!f || f->bpp != of.bpp || of.memoryless || of.sampled || xrForm(format) != XrForm::None ||
         xrForm(of.format) != XrForm::None)
         return false;
     std::lock_guard<std::mutex> l(lock_);
     t = of;
+    t.view = true;
     t.format = format;
     t.renderable = f->rt != 0 && (t.blockLinear || linearTarget(t));
     t.shadowTarget = f->rt != 0 && !t.blockLinear && !linearTarget(t);
@@ -1357,6 +1360,15 @@ void Device::selfTest()
 
 void Device::destroyTexture(Texture &t)
 {
+    if (t.view) {
+        std::lock_guard<std::mutex> l(lock_);
+        if (t.tic) {
+            memset(tic_.cpu + 32 * t.tic, 0, 32);
+            freeTic_.push_back(t.tic);
+        }
+        t = {};
+        return;
+    }
     for (Texture *plane : {t.luma, t.chroma, t.planarStandIn})
         if (plane) {
             destroyTexture(*plane);
