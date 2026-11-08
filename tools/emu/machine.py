@@ -61,5 +61,5 @@ def command(run: Path, inputs: Inputs) -> list[str]:
     ]  # fmt: skip
     args += stage(run, inputs.package, inputs.regwrite)
     if inputs.sd:
-        args += ['-drive', f'if=sd,index=0,format=raw,file={inputs.sd}']
+        args += ['-drive', f'if=sd,index=0,format=vmdk,file={inputs.sd},snapshot=on']
     return args

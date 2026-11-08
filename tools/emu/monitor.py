@@ -25,14 +25,18 @@ class Monitor:
                     raise
                 time.sleep(0.1)
         self.file = self.sock.makefile('rw')
-        json.loads(self.file.readline())
+        if not self.file.readline():
+            raise RuntimeError('QMP: QEMU closed the monitor')
         self.command('qmp_capabilities')
 
     def command(self, name: str, **arguments: object) -> object:
         self.file.write(json.dumps({'execute': name, 'arguments': arguments}) + '\n')
         self.file.flush()
         while True:
-            reply = json.loads(self.file.readline())
+            line = self.file.readline()
+            if not line:
+                raise RuntimeError(f'QMP {name}: QEMU closed the monitor')
+            reply = json.loads(line)
             if 'return' in reply:
                 return reply['return']
             if 'error' in reply:
