@@ -180,8 +180,24 @@ TEST_F(SwitchLinux, CallsMoveWhenEnteredAgainAndCancel)
     EXPECT_FALSE(switch_linux_call_cancel_wait(call));
     switch_linux_call_free(call);
     EXPECT_THAT(gSwitchLinuxCalls,
-                ElementsAre("thread_call_enter_delayed 5200", "thread_call_enter", "thread_call_enter",
-                            "thread_call_cancel", "thread_call_cancel_wait", "thread_call_free"));
+                ElementsAre("thread_call_allocate priority 0 options 1", "thread_call_enter_delayed 5200",
+                            "thread_call_enter", "thread_call_enter", "thread_call_cancel", "thread_call_cancel_wait",
+                            "thread_call_free"));
+}
+
+// flush_work: a run still queued is made by the flusher; with none queued nothing runs.
+TEST_F(SwitchLinux, FlushMakesAPendingRun)
+{
+    int weight = 5;
+    gFired = 0;
+    void *call = switch_linux_call_alloc(fire, &weight);
+    EXPECT_FALSE(switch_linux_call_flush(call, fire, &weight));
+    EXPECT_EQ(gFired, 0);
+    EXPECT_FALSE(switch_linux_call_enter(call));
+    EXPECT_TRUE(switch_linux_call_flush(call, fire, &weight));
+    EXPECT_EQ(gFired, 5);
+    EXPECT_FALSE(switch_linux_call_cancel(call));
+    switch_linux_call_free(call);
 }
 
 TEST_F(SwitchLinux, IoremapPicksTheMapping)

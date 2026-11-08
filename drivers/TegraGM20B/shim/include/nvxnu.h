@@ -68,6 +68,11 @@ static inline void nvxnu_wakeup(const void *event)
 	switch_linux_wakeup(event);
 }
 
+static inline int nvxnu_irqs_enabled(void)  // NOLINT(modernize-redundant-void-arg): a C header
+{
+	return switch_linux_irqs_disabled() ? 0 : 1;
+}
+
 static inline nvxnu_u64 nvxnu_nanotime(void)  // NOLINT(modernize-redundant-void-arg): a C header
 {
 	return switch_linux_nanotime();
@@ -90,7 +95,7 @@ static inline void nvxnu_usleep(nvxnu_u32 us)
 	switch_linux_usleep_range(us, us);
 }
 
-/* deferred work: run fn(arg) on a kernel thread call */
+/* deferred work: run fn(arg) on a kernel thread call, never two runs of one item at once (a Linux work item's rule) */
 static inline void *nvxnu_work_alloc(void (*fn)(void *), void *arg)
 {
 	return switch_linux_call_alloc(fn, arg);
@@ -102,10 +107,10 @@ static inline void nvxnu_work_schedule(void *w)
 		(void)switch_linux_call_enter(w);
 }
 
-static inline void nvxnu_work_cancel_wait(void *w)
+/* 1 if a run was pending (and is now cancelled); returns once no run is under way */
+static inline int nvxnu_work_cancel_wait(void *w)
 {
-	if (w)
-		(void)switch_linux_call_cancel_wait(w);
+	return w && switch_linux_call_cancel_wait(w) ? 1 : 0;
 }
 
 /* once, ns from now (a deadline, not a loop); cancel: no wait, any context */

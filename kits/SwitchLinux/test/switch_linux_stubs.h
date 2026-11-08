@@ -22,20 +22,24 @@ typedef int wait_interrupt_t;
 typedef void *thread_call_param_t;
 typedef void (*thread_call_func_t)(thread_call_param_t, thread_call_param_t);
 typedef struct thread_call *thread_call_t;
+typedef int thread_call_priority_t;
+typedef uint32_t thread_call_options_t;
 typedef struct lck_grp lck_grp_t;
 typedef struct lck_mtx lck_mtx_t;
 typedef struct lck_rw lck_rw_t;
 typedef int lck_sleep_action_t;
 
-#define NSEC_PER_USEC        1000u
-#define THREAD_UNINT         0
-#define THREAD_AWAKENED      0
-#define THREAD_TIMED_OUT     1
-#define THREAD_CONTINUE_NULL ((void *)0)
-#define LCK_GRP_ATTR_NULL    ((void *)0)
-#define LCK_ATTR_NULL        ((void *)0)
-#define LCK_SLEEP_DEFAULT    0
-#define OS_LOG_DEFAULT       0
+#define NSEC_PER_USEC             1000u
+#define THREAD_UNINT              0
+#define THREAD_AWAKENED           0
+#define THREAD_TIMED_OUT          1
+#define THREAD_CONTINUE_NULL      ((void *)0)
+#define LCK_GRP_ATTR_NULL         ((void *)0)
+#define LCK_ATTR_NULL             ((void *)0)
+#define LCK_SLEEP_DEFAULT         0
+#define OS_LOG_DEFAULT            0
+#define THREAD_CALL_PRIORITY_HIGH 0
+#define THREAD_CALL_OPTIONS_ONCE  1u
 
 void switch_linux_record(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 extern boolean_t switch_linux_stub_interrupts;
@@ -75,7 +79,8 @@ void lck_rw_lock_shared(lck_rw_t *rw);
 void lck_rw_unlock_shared(lck_rw_t *rw);
 void lck_rw_lock_exclusive(lck_rw_t *rw);
 void lck_rw_unlock_exclusive(lck_rw_t *rw);
-thread_call_t thread_call_allocate(thread_call_func_t func, thread_call_param_t param0);
+thread_call_t thread_call_allocate_with_options(thread_call_func_t func, thread_call_param_t param0,
+                                                thread_call_priority_t pri, thread_call_options_t options);
 boolean_t thread_call_free(thread_call_t call);
 boolean_t thread_call_enter(thread_call_t call);
 boolean_t thread_call_enter_delayed(thread_call_t call, uint64_t deadline);

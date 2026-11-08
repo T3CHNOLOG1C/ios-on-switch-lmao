@@ -278,7 +278,8 @@ extern "C" void *switch_linux_call_alloc(void (*fn)(void *arg), void *arg)
     // Through void * on purpose: a direct cast trips -Wcast-function-type-mismatch. thread_call passes a second
     // argument, which fn ignores (AAPCS64: it lands in x1).
     void *const entry = reinterpret_cast<void *>(fn);
-    return thread_call_allocate(reinterpret_cast<thread_call_func_t>(entry), arg);
+    return thread_call_allocate_with_options(reinterpret_cast<thread_call_func_t>(entry), arg,
+                                             THREAD_CALL_PRIORITY_HIGH, THREAD_CALL_OPTIONS_ONCE);
 }
 
 extern "C" void switch_linux_call_free(void *call)
@@ -304,9 +305,19 @@ extern "C" bool switch_linux_call_cancel(void *call)
     return thread_call_cancel(callOf(call)) != FALSE;
 }
 
+// On a THREAD_CALL_OPTIONS_ONCE call XNU's cancel_wait waits for the run under way even when it cancelled a pending one
+// (a plain call's does not), so nothing of the call is running when it returns.
 extern "C" bool switch_linux_call_cancel_wait(void *call)
 {
     return thread_call_cancel_wait(callOf(call)) != FALSE;
+}
+
+extern "C" bool switch_linux_call_flush(void *call, void (*fn)(void *arg), void *arg)
+{
+    if (!switch_linux_call_cancel_wait(call))
+        return false;
+    fn(arg);
+    return true;
 }
 
 extern "C" volatile void *switch_linux_ioremap(uint64_t pa, uint64_t size, int write_combined)

@@ -214,8 +214,10 @@ struct thread_call {
     bool pending;
 };
 
-thread_call_t thread_call_allocate(thread_call_func_t func, thread_call_param_t param0)
+thread_call_t thread_call_allocate_with_options(thread_call_func_t func, thread_call_param_t param0,
+                                                thread_call_priority_t pri, thread_call_options_t options)
 {
+    switch_linux_record("thread_call_allocate priority %d options %u", pri, options);
     return new thread_call{func, param0, false};
 }
 

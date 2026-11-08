@@ -1704,14 +1704,11 @@ static inline bool schedule_work(struct work_struct *w)
 
 #define queue_work(wq, w) schedule_work(w)
 
-/* Linux runs a queued work before flush_work returns; XNU cannot hurry a thread call, so a pending one is taken off
- * its queue and run here instead. */
+/* nvkm's fini paths rely on a flush running a queued item (a runlist's recovery cancelled at suspend left the runlist
+ * blocked). */
 static inline bool flush_work(struct work_struct *w)
 {
-	if (!switch_linux_call_cancel_wait(w->thread_call))
-		return false;
-	w->func(w);
-	return true;
+	return switch_linux_call_flush(w->thread_call, nvxnu_work_trampoline, w);
 }
 
 static inline bool cancel_work_sync(struct work_struct *w)
@@ -1747,7 +1744,7 @@ const void *free_irq(unsigned int irq, void *dev);
 	} while (0)
 #define in_interrupt() 0
 #define in_atomic() 0
-#define irqs_disabled() 0
+#define irqs_disabled() (!nvxnu_irqs_enabled())
 
 struct firmware {
 	size_t size;

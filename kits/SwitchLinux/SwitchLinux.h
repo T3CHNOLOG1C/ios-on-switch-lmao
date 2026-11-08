@@ -67,16 +67,20 @@ void switch_linux_up_read(void *rwsem);
 void switch_linux_down_write(void *rwsem);
 void switch_linux_up_write(void *rwsem);
 
-// One-shot calls on a kernel thread (work_struct, timer_list, hrtimer). Entering a pending call moves it (mod_timer,
-// hrtimer_start); enter and cancel are safe with interrupts off and return true if the call was pending. cancel_wait also
-// waits for a run under way (cancel_work_sync, del_timer_sync, hrtimer_cancel): thread context, never from the call.
-// alloc is thread context; free takes a call that is neither pending nor running.
+// One-shot calls on a kernel thread (work_struct, timer_list, hrtimer). A call never runs twice at once, as a Linux work
+// item or timer never does: entered while it runs, it runs again once that run returns (an XNU thread call would start
+// a second run on another worker). Entering a pending call moves it (mod_timer, hrtimer_start); enter and cancel are safe
+// with interrupts off and return true if the call was pending. cancel_wait cancels a pending run and waits for one under
+// way (cancel_work_sync, del_timer_sync, hrtimer_cancel); flush waits the same way but makes a pending run itself,
+// fn(arg) on the caller's thread (flush_work). Both are thread context, never from the call; both return true if a run
+// was pending. alloc is thread context; free takes a call that is neither pending nor running.
 void *switch_linux_call_alloc(void (*fn)(void *arg), void *arg);
 void switch_linux_call_free(void *call);
 bool switch_linux_call_enter(void *call);
 bool switch_linux_call_enter_after(void *call, uint64_t delay_ns);
 bool switch_linux_call_cancel(void *call);
 bool switch_linux_call_cancel_wait(void *call);
+bool switch_linux_call_flush(void *call, void (*fn)(void *arg), void *arg);
 
 // Device memory, uncached (or write-combined), mapped for the kernel's life (ml_io_map). NULL on failure.
 volatile void *switch_linux_ioremap(uint64_t pa, uint64_t size, int write_combined);
