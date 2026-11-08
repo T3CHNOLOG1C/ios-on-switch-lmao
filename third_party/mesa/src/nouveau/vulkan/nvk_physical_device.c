@@ -4,6 +4,10 @@
  */
 #include "nvk_physical_device.h"
 
+#if defined(__APPLE__) && SWITCH_DEBUG
+#include <os/log.h>
+#endif
+
 /* NVK_BUILD_ID_OVERRIDE: the compiler identity (third_party/mesa/bazel/compiler_identity.py) */
 #include "nvk_build_id.h"
 
@@ -1651,6 +1655,11 @@ nvk_create_physical_device(struct nvk_instance *instance,
       result = vk_error(instance, VK_ERROR_OUT_OF_HOST_MEMORY);
       goto fail_init;
    }
+#if defined(__APPLE__) && SWITCH_DEBUG
+   if (nak_debug_sm53_probe())
+      os_log(OS_LOG_DEFAULT, "nvk: NAK_DEBUG=sm53_probe: this process's shaders "
+                             "take NAK's SM53 half-op probes");
+#endif
 
    nvk_physical_device_init_pipeline_cache(pdev);
 

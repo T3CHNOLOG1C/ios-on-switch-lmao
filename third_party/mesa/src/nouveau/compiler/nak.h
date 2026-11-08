@@ -27,6 +27,11 @@ void nak_compiler_destroy(struct nak_compiler *nak);
 
 uint64_t nak_debug_flags(const struct nak_compiler *nak);
 
+/* ios-on-switch-lmao: NAK_DEBUG=sm53_probe (nak/opt_sm53_half_probe.rs), never
+ * in release builds
+ */
+bool nak_debug_sm53_probe(void);
+
 const struct nir_shader_compiler_options *
 nak_nir_options(const struct nak_compiler *nak);
 
