@@ -230,6 +230,13 @@ uint8_t *Device::alloc(Ring &r, uint32_t bytes, uint32_t align, uint64_t &va)
     uint64_t at = (r.head + align - 1) & ~uint64_t(align - 1);
     if (at + bytes > r.bo.bytes)
         at = 0;  // wrap: the tail [head, end) counts as used by the open command buffer
+    if (overflowing_ || (ownWords(r, at, bytes) && !outgrow(r, bytes, at))) {
+        overflowing_ = true;  // no larger ring: the command buffer is written to nowhere, and its commit refused
+        if (overflow_.size() < bytes)
+            overflow_.resize(bytes);
+        va = 0;
+        return overflow_.data();
+    }
     // [at, at + bytes) may still be read by an earlier submission: retire what the GPU finished (the fence page, no call) and
     // block in the kernel (WaitFence: the fence interrupt) for what overlaps. Sized so a Core Animation frame never waits.
     for (auto it = r.inflight.begin(); it != r.inflight.end();) {
@@ -255,8 +262,38 @@ uint8_t *Device::alloc(Ring &r, uint32_t bytes, uint32_t align, uint64_t &va)
     return r.bo.cpu + at;
 }
 
+// Whether [at, at + bytes) holds words the open command buffer wrote: it has gone round the whole ring
+bool Device::ownWords(const Ring &r, uint64_t at, uint64_t bytes) const
+{
+    if (at < r.head && r.since < at + bytes && r.since < r.head)
+        return true;
+    for (const Ring::Span &s : r.inflight)
+        if (!s.seqno && s.begin < at + bytes && at < s.end)
+            return true;
+    return false;
+}
+
+// The open command buffer is larger than the ring: it goes on in one twice the size (or its allocation's), from its start; the
+// old one is freed once the work that reads it, the open command buffer's included, completed. false: no memory for it
+bool Device::outgrow(Ring &r, uint32_t bytes, uint64_t &at)
+{
+    Bo larger;
+    if (!k_.alloc(std::max<uint64_t>(r.bo.bytes * 2, uint64_t(bytes) * 2), true, larger))
+        return false;
+    stats.ringsOutgrown++;
+    r.outgrown.push_back(r.bo);
+    r.bo = larger;
+    r.head = r.since = 0;
+    r.inflight.clear();
+    at = 0;
+    return true;
+}
+
 void Device::retire(Ring &r, uint32_t seqno)
 {
+    for (const Bo &b : r.outgrown)
+        grownOut_.push_back({b, seqno});
+    r.outgrown.clear();
     for (auto &s : r.inflight)
         if (!s.seqno)
             s.seqno = seqno;
@@ -1924,7 +1961,7 @@ void Device::trimBackings()
 bool Device::waitFence(uint32_t seqno)
 {
     constexpr unsigned kRefusals = 3;
-    const uint32_t ch = channel_;
+    const uint32_t ch = channel_, opened = k_.opened();
     for (unsigned refused = 0; !done(seqno);) {
         if (k_.wait(ch, seqno))
             break;
@@ -1934,7 +1971,7 @@ bool Device::waitFence(uint32_t seqno)
             break;
         }
         if (st.error) {
-            k_.markLost(ch);
+            k_.markLost(ch, opened);
             noteLost();
             break;
         }
@@ -1949,7 +1986,7 @@ bool Device::waitFence(uint32_t seqno)
                 killedKept_[killedNext_++ % killedKept_.size()] = {
                     st.completed + 1, __atomic_load_n(&lastSeqno_, __ATOMIC_RELAXED), kWaitRefused};
             }
-            k_.markLost(ch);  // begin() makes it again
+            k_.markLost(ch, opened);  // begin() makes it again
             noteLost();
             return false;
         }
@@ -2041,7 +2078,7 @@ bool Device::reopen()
         noteLost();
         Killed live = {};
         if (liveKill(live)) {
-            k_.markLost(channel_);
+            k_.markLost(channel_, k_.opened());
             std::lock_guard<std::mutex> l(killedLock_);
             killedKept_[killedNext_++ % killedKept_.size()] = live;
         }
@@ -2136,6 +2173,7 @@ CommandBuffer *Device::begin()
     cb.draws = cb.passes = cb.blits = 0;
     cb.refusal = {};
     cb.partial = false;
+    overflowing_ = false;
     cb.pushStart_ = push_.head;
     cb.uploadStart_ = upload_.head;
     memcpy(cb.rootPush_, rootPush_, sizeof rootPush_);
@@ -2302,6 +2340,11 @@ BlitEncoder *CommandBuffer::blit()
 bool CommandBuffer::commit(uint32_t &seqno)
 {
     Device &d = *dev_;
+    if (d.overflowing_) {
+        os_log_error(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "raw"),
+                     "raw: a command buffer larger than its ring, with no memory for a larger one: not submitted");
+        return false;
+    }
     bool invalidates = false;
     uint64_t invalidatedBefore = 0;
     {
@@ -2372,11 +2415,18 @@ bool CommandBuffer::commit(uint32_t &seqno)
 void CommandBuffer::abandon()
 {
     Device &d = *dev_;
+    d.overflowing_ = false;
     for (Device::Ring *r : {&d.push_, &d.upload_}) {
         // drop the open command buffer's spans and give back what it took (nothing else was allocated since: one encodes)
         for (auto it = r->inflight.begin(); it != r->inflight.end();)
             it = it->seqno ? std::next(it) : r->inflight.erase(it);
         r->head = r->since = (r == &d.push_ ? pushStart_ : uploadStart_);
+        if (!r->outgrown.empty()) {  // it began in a ring it grew out of: the new one is empty
+            for (const Bo &b : r->outgrown)
+                d.grownOut_.push_back({b, d.lastSeqno_});
+            r->outgrown.clear();
+            r->head = r->since = 0;
+        }
     }
     segments_.clear();
     clean_.clear();
@@ -2497,11 +2547,14 @@ void RenderEncoder::setStencilReference(uint32_t front, uint32_t back)
     dsDirty_ = true;
 }
 
+// The full barrier m2v puts between passes: the shaders' data writes flushed (storage buffers and textures; ROP writes are
+// behind the wait for idle) and their data and texture caches invalidated
 void RenderEncoder::barrier()
 {
     if (p_.room() < 64)
         reserve();
     p_.m(WAIT_FOR_IDLE, 0);
+    p_.m(INVALIDATE_SHADER_CACHES, 0x14);
     p_.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
     writtenBits_ = storageWrittenBits_ = 0;
     written_.clear();

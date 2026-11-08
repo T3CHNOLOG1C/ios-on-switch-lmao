@@ -64,6 +64,7 @@ static atomic_uint nbo = 1;
 static uint32_t submitted[16];
 static uint32_t *fence;      /* the fence page, a TegraGM20BAbiFence per channel at slot*16 */
 static uint32_t dead[16];    /* method 11's error of a killed channel */
+static uint32_t made[16];    /* channels made in each slot: a wait on one destroyed and made again answers NotResponding */
 static uint64_t dead_va[16]; /* and its fault VA */
 static uint32_t engines[16];
 static uint8_t live[16]; /* slots in use: a connection gets its lowest free one, its seqnos continuing (the kext's) */
@@ -555,7 +556,9 @@ static kern_return_t mock_call(mach_port_t c, uint32_t sel, const void *in, size
         chan_conn[ch & 15] = c;
         dead[ch & 15] = 0;
         dead_va[ch & 15] = 0;
+        made[ch & 15]++;
         fence[(ch & 15) * 4 + 1] = fence[(ch & 15) * 4 + 2] = fence[(ch & 15) * 4 + 3] = 0;
+        pthread_cond_broadcast(&gpu_cond);
         pthread_mutex_unlock(&gpu_lock);
         struct TegraGM20BAbiChannelCreateReply r = {.channel = ch, .fence_token = kFenceToken, .fence_offset = ch * 16};
         memcpy(out, &r, sizeof(r));
@@ -649,9 +652,10 @@ static kern_return_t mock_call(mach_port_t c, uint32_t sel, const void *in, size
         waits_total++;
         if (strstr(name, "raw.submit"))
             waits_submit++;
-        while (!dead[w->channel & 15] && !passed(w->channel & 15, w->seqno))
+        const uint32_t was = made[w->channel & 15];
+        while (!dead[w->channel & 15] && made[w->channel & 15] == was && !passed(w->channel & 15, w->seqno))
             pthread_cond_wait(&gpu_cond, &gpu_lock);
-        const int killed = dead[w->channel & 15] != 0;
+        const int killed = dead[w->channel & 15] != 0 || made[w->channel & 15] != was;
         pthread_mutex_unlock(&gpu_lock);
         return killed ? kIOReturnNotResponding : KERN_SUCCESS;
     }

@@ -9,8 +9,11 @@
 //   from VA 0 with no limit.
 // - A pass with an empty color slot below a target disables the slot, as NVK does, and counts through the target.
 // - A freed texture header is the null descriptor, never zeroes (a buffer texture at VA 0).
+// - A memory barrier inside a pass flushes the shaders' data writes, as the barrier between passes does.
 // - A commit whose later Exec the kernel refuses leaves nothing of its rings in flight, and the next command buffer a new
 //   channel.
+// - A wait that fails on a channel destroyed meanwhile marks no new channel of the same id lost.
+// - A command buffer larger than its push ring reaches the GPU whole (the ring grows under it).
 // - A channel the kernel killed is made again with its context before any command buffer is encoded for it: one whose
 //   ChannelCreate or context Exec the kernel refused gives no command buffer, and the next begin() tries again.
 // - Programs placed in the shader heap are behind an instruction-cache invalidate before any draw runs them, even when the
@@ -23,6 +26,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <functional>
+#include <thread>
 #include <string>
 #include <tuple>
 #include <unistd.h>
@@ -32,6 +36,7 @@ extern "C" uint64_t cap_draws(void);
 extern "C" uint32_t cap_reg3d(uint32_t mthd);
 extern "C" bool cap_read(uint64_t va, void *out, uint64_t bytes);
 extern "C" uint64_t cap_instruction_invalidates(void);
+extern "C" uint64_t cap_shader_invalidates(void);
 extern "C" void mock_iokit_kill_next(uint32_t error);
 extern "C" void mock_iokit_fail_next(unsigned method, unsigned count, int kr);
 extern "C" void mock_iokit_fail_after(unsigned method, unsigned skip, unsigned count, int kr);
@@ -153,6 +158,32 @@ void holeTarget(raw::Device &dev, Pass &pass, const Expect &expect)
            "slot 0 DISABLED, CT_SELECT counting through slot 1");
 }
 
+// A memory barrier between two draws of a pass flushes what the shaders wrote (INVALIDATE_SHADER_CACHES FLUSH_DATA): one
+// more than the same pass without it
+void barrierFlush(raw::Device &dev, Pass &pass, const Expect &expect)
+{
+    auto run = [&](bool barrier) -> uint64_t {
+        const uint64_t before = cap_shader_invalidates();
+        raw::CommandBuffer *cb = dev.begin();
+        raw::RenderEncoder *e = cb ? cb->render(pass.desc) : nullptr;
+        if (!e)
+            return ~0ull;
+        const char *why = nullptr;
+        e->setPipeline(pass.state);
+        e->draw(3, 0, 3, 1, 0, &why);
+        if (barrier)
+            e->barrier();
+        e->draw(3, 0, 3, 1, 0, &why);
+        e->end();
+        uint32_t seq = 0;
+        return cb->commit(seq) && dev.wait(seq) ? cap_shader_invalidates() - before : ~0ull;
+    };
+    const uint64_t plain = run(false), barrier = run(true);
+    std::printf("shader cache flushes: %llu without the barrier, %llu with\n", (unsigned long long)plain,
+                (unsigned long long)barrier);
+    expect(plain != ~0ull && barrier == plain + 1, "the barrier flushes the shaders' data");
+}
+
 uint64_t method64(uint32_t hi)
 {
     return uint64_t(cap_reg3d(hi)) << 32 | cap_reg3d(hi + 4);
@@ -261,6 +292,61 @@ void partialCommit(raw::Device &dev, const Expect &expect)
            "the next command buffer ran on a new channel");
     dev.destroyBuffer(a);
     dev.destroyBuffer(b);
+}
+
+// A wait on a channel that answers NotResponding only after the channel was destroyed and its id given to a new one (a
+// completion thread's wait across the submit thread's reopen) marks nothing lost: the new channel is not the dead one
+void lostReused(const Expect &expect)
+{
+    raw::Kernel k;
+    std::string err;
+    uint32_t first = 0, second = 0;
+    const volatile uint32_t *fence = nullptr;
+    if (!k.open(err) || !k.channel(1, first, fence)) {
+        expect(false, "a connection and a channel");
+        return;
+    }
+    std::thread waiter([&] {
+        k.wait(first, 1000);  // never reached: answers when the channel's slot is made again
+    });
+    usleep(20000);
+    k.closeChannel(first);
+    expect(k.channel(1, second, fence) && second == first, "a new channel in the first one's slot");
+    waiter.join();
+    expect(!k.lost(second), "the new channel is not lost");
+    k.closeChannel(second);
+}
+
+// A command buffer larger than its push ring (a client's: 256 KiB): 10000 copies, each a word on from the last, in one blit
+// encoder. Its words are all there when it is submitted, so the word at the end is the first one's
+void outgrownRing(const char *pack, const Expect &expect)
+{
+    constexpr uint32_t kCopies = 10000;
+    raw::Device client;
+    std::string err;
+    raw::Buffer chain;
+    if (!client.open(pack, 0, err, raw::Device::Role::Client) || !client.createBuffer((kCopies + 1) * 4, chain)) {
+        expect(false, "a client device and a buffer");
+        return;
+    }
+    memset(chain.cpu, 0, chain.length);
+    reinterpret_cast<uint32_t *>(chain.cpu)[0] = 0x5eed1234;
+    raw::CommandBuffer *cb = client.begin();
+    if (!cb) {
+        expect(false, "a command buffer");
+        return;
+    }
+    cb->clean(chain.cpu, chain.length);
+    raw::BlitEncoder *e = cb->blit();
+    for (uint32_t i = 0; i < kCopies; i++)
+        e->copyBytes(chain.va + 4 * i, chain.va + 4 * (i + 1), 4);
+    e->end();
+    uint32_t seq = 0;
+    expect(cb->commit(seq) && client.wait(seq), "submitted and completed");
+    const uint32_t last = reinterpret_cast<const uint32_t *>(chain.cpu)[kCopies];
+    std::printf("outgrown ring: the last word 0x%08x\n", last);
+    expect(last == 0x5eed1234, "every copy ran, in order");
+    client.destroyBuffer(chain);
 }
 
 void reopenRefused(raw::Device &dev, const Expect &expect)
@@ -375,6 +461,7 @@ int main(int argc, char **argv)
     }
     setenv("RAWCAP_LOG", "/dev/null", 0);  // the mock decodes every submission
     setenv("MOCK_GPU_US", "20000", 0);
+    setenv("NVDEC_WRITETHROUGH", "1", 0);  // copies land in the memory behind them (outgrownRing reads them back)
     raw::Device dev;
     std::string err;
     if (!dev.open(argv[1], 0, err)) {
@@ -395,12 +482,15 @@ int main(int argc, char **argv)
     instances(dev, pass, expect);
     unboundStream(dev, pass, expect);
     holeTarget(dev, pass, expect);
+    barrierFlush(dev, pass, expect);
     freedHeader(dev, expect);
     partialCommit(dev, expect);
+    lostReused(expect);
     reopenRefused(dev, expect);
     invalidateRefused(dev, expect);
     waitRefused(dev, expect);
     channelRefused(argv[1], expect);
+    outgrownRing(argv[1], expect);  // last: its device's channel is the mock's latest from here on
     if (failures) {
         std::printf("FAIL: faultcheck (%d)\n", failures);
         return 1;
