@@ -1,5 +1,5 @@
 diff --git a/hw/arm/tegra2/ahb/host1x/modules/dc/dc.c b/hw/arm/tegra2/ahb/host1x/modules/dc/dc.c
-index acfac4f..3db8352 100644
+index a30e52c..a39bf09 100644
 --- a/hw/arm/tegra2/ahb/host1x/modules/dc/dc.c
 +++ b/hw/arm/tegra2/ahb/host1x/modules/dc/dc.c
 @@ -68,6 +68,25 @@ static const struct {
@@ -28,7 +28,7 @@ index acfac4f..3db8352 100644
  typedef struct tegra_dc_state {
      SysBusDevice parent_obj;
  
-@@ -512,6 +531,8 @@ static void tegra_dc_priv_realize(DeviceState *dev, Error **errp)
+@@ -510,6 +529,8 @@ static void tegra_dc_priv_realize(DeviceState *dev, Error **errp)
      init_window(&s->win[WIN_D], WIN_D_T_CAPS);
      init_window(&s->win[WIN_T], WIN_D_T_CAPS);
  

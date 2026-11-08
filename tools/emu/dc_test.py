@@ -130,13 +130,13 @@ class DcTest(unittest.TestCase):
         self.dc.commit('A')
         self.assertEqual(self.dc.r(STATE_CONTROL), 0)
 
-    def test_crc_latches_the_third_frame_end_and_holds(self) -> None:
+    def test_crc_latches_at_the_second_frame_end_and_holds(self) -> None:
         self.dc.w(CRC_CONTROL, CRC_ON)
         self.dc.commit()
         reads = self.dc.frames(6)
-        self.assertEqual(reads[:2], [0, 0])
-        self.assertNotEqual(reads[2], 0)
-        self.assertEqual(len(set(reads[2:])), 1)
+        self.assertEqual(reads[0], 0)
+        self.assertNotEqual(reads[1], 0)
+        self.assertEqual(len(set(reads[1:])), 1)
 
     def test_crc_follows_one_pixel(self) -> None:
         base = self.crc_on()

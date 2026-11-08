@@ -1,5 +1,5 @@
 diff --git a/hw/arm/tegra2/ahb/host1x/modules/dc/dc.c b/hw/arm/tegra2/ahb/host1x/modules/dc/dc.c
-index 01b8d4c..acfac4f 100644
+index 01b8d4c..a30e52c 100644
 --- a/hw/arm/tegra2/ahb/host1x/modules/dc/dc.c
 +++ b/hw/arm/tegra2/ahb/host1x/modules/dc/dc.c
 @@ -26,6 +26,7 @@
@@ -22,7 +22,7 @@ index 01b8d4c..acfac4f 100644
      struct host1x_module module;
  
      uint8_t disp_refresh_rate;
-@@ -232,6 +238,53 @@ static void tegra_dc_display_command(tegra_dc *s, uint32_t old)
+@@ -232,6 +238,51 @@ static void tegra_dc_display_command(tegra_dc *s, uint32_t old)
      }
  }
  
@@ -45,21 +45,19 @@ index 01b8d4c..acfac4f 100644
 +}
 +
 +/*
-+ * COM_CRC_CONTROL takes effect at a frame boundary. CRC_CHECKSUM is the CRC of the frame that just ended and
-+ * CRC_CHECKSUM_LATCHED the one before it, so after ENABLE the latched CRC reads 0 at the first two frame ends and the
-+ * first frame's CRC from the third on, as on the Switch's DC A (SwitchDisplay's DisplaySmmuProbe.h). Without ALWAYS
-+ * one frame is taken, after CRC_WAIT's extra frame. FULL_FRAME (blanking and sync included) is taken as ACTIVE_DATA.
++ * COM_CRC_CONTROL takes effect at a frame boundary, and both CRC_CHECKSUM and CRC_CHECKSUM_LATCHED take a frame's CRC
++ * at its frame end. After ENABLE the first frame end reads 0 and the second the first frame's CRC, as on the Switch's
++ * DC A (its plane probe's first CRC latches at frame end 2). Without ALWAYS one frame is taken, after CRC_WAIT's extra
++ * frame. FULL_FRAME (blanking and sync included) is taken as ACTIVE_DATA.
 + */
 +static void tegra_dc_crc_frame(tegra_dc *s)
 +{
 +    com_crc_control_t control = s->dc.com_crc_control;
 +
-+    if (control.crc_enable) {
-+        s->dc.com_crc_checksum_latched.reg32 = s->dc.com_crc_checksum.reg32;
-+    }
 +    if (s->crc_running) {
 +        tegra_dc_render(s);
 +        s->dc.com_crc_checksum.reg32 = dc_scanout_crc(&s->scanout);
++        s->dc.com_crc_checksum_latched.reg32 = s->dc.com_crc_checksum.reg32;
 +        s->crc_done = !control.crc_always;
 +    }
 +    s->crc_running = false;
@@ -76,7 +74,7 @@ index 01b8d4c..acfac4f 100644
  static void tegra_dc_priv_write(void *opaque, hwaddr offset,
                                  uint64_t value, unsigned size)
  {
-@@ -255,6 +308,9 @@ static void tegra_dc_priv_write(void *opaque, hwaddr offset,
+@@ -255,6 +306,9 @@ static void tegra_dc_priv_write(void *opaque, hwaddr offset,
          if (offset == CMD_DISPLAY_COMMAND_OFFSET) {
              tegra_dc_display_command(s, old);
          }
@@ -86,7 +84,7 @@ index 01b8d4c..acfac4f 100644
          return;
      }
  
-@@ -284,6 +340,9 @@ static void tegra_dc_priv_reset(DeviceState *dev)
+@@ -284,6 +338,9 @@ static void tegra_dc_priv_reset(DeviceState *dev)
          reset_window(&s->win[i]);
      }
      s->act_pending = 0;
@@ -96,7 +94,7 @@ index 01b8d4c..acfac4f 100644
  }
  
  static const MemoryRegionOps tegra_dc_mem_ops = {
-@@ -351,6 +410,7 @@ static void tegra_dc_vblank(void *opaque)
+@@ -351,6 +408,7 @@ static void tegra_dc_vblank(void *opaque)
          return;
      }
  
@@ -104,7 +102,7 @@ index 01b8d4c..acfac4f 100644
      tegra_dc_latch(s, ACT_REQ_BITS);
  
      if (s->dc.cmd_cont_syncpt_vsync.vsync_en) {
-@@ -410,40 +470,26 @@ static uint32_t tegra_dc_module_read(struct host1x_module *module,
+@@ -410,40 +468,26 @@ static uint32_t tegra_dc_module_read(struct host1x_module *module,
      return ret;
  }
  
