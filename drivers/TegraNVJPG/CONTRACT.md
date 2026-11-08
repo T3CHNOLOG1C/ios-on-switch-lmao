@@ -238,13 +238,14 @@ also in the boot console).
 2. **The service**: no `JPEGH1`-registered hardware JPEG encoder (VideoToolbox lists only software 'jpeg' encoders),
    and `ioreg`-style property dumps (if available) show AppleJPEGNumCores 1 on the TegraNVJPG entry.
 3. **Use**: `TegraNVJPG: first hardware decode done: WxH to wxh (format F, 1/n) in E us engine (C cycles), P us CPU`
-   once, at the first decode; then (debug kernels) every 5 s with work an os_log line `TegraNVJPG: 5s decodes=N
-   refused=R failed=X engine=..us/decode cpu=..us/decode pixels=..K/decode scan=..KB/decode`.
+   once per output format (F: TEGRA_NVJPG_OUT_*; 6 '422f', 7 '444f' and 8 'yuvf' have no device evidence yet: their
+   first lines, and the picture next to the same file decoded on a Mac, are the check); then (debug kernels) every 5 s
+   with work an os_log line
+   `TegraNVJPG: 5s decodes=N refused=R failed=X engine=..us/decode cpu=..us/decode pixels=..K/decode scan=..KB/decode`.
    Each kind of refusal is one error line per process (kits/SwitchRefusal, subsystem com.brunostjohn.switch.refusal,
-   category TegraNVJPG): `<process>[<pid>] <why>: decode refused, the caller decodes on the CPU: <why>`.
-   From the caller's side, CMPhoto logs `JPEGDecompressSurface : Picture decode failed: %08x` for a refused or failed
-   call (then decodes that image in software): 0xe00002c7 refused (unsupported), 0xe00002c2 bad request, 0xe00002ca
-   engine error.
+   category TegraNVJPG): `<process>[<pid>] <why>: decode refused, the caller decodes on the CPU: <why>`. From the
+   caller's side, CMPhoto logs `JPEGDecompressSurface : Picture decode failed: %08x` for a refused or failed call (then
+   decodes that image in software): 0xe00002c7 refused (unsupported), 0xe00002c2 bad request, 0xe00002ca engine error.
 4. **Failures**: `failed=` should stay 0; any `TegraNVJPG: decode error 0x... after N bytes (MCU x,y)` line names a
    file the engine could not finish (a GP-timer expiry is 0x30000001).
 5. **Cost** (never slower): compare `engine=` + `cpu=` per decode with a software decode of the same size (CMPhoto's
