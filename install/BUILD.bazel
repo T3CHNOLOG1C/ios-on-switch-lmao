@@ -246,6 +246,7 @@ image_inputs(
     apfs_tool = ":image_apfs_tool",
     delta = ":delta_" + role,
     image = image,
+    pins = ":ipsw_pins",
     role = role,
     tags = ["manual"],
 ) for role, image in [

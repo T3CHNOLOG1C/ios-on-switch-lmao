@@ -6,18 +6,21 @@ translated cryptex is a fresh volume of the source's name, written once: every s
 copied with ditto (compression kept), each translated file goes straight to its path in place of the original, the
 source's owners, modes and flags are given back offline (owners.py), and macOS's own sealer seals it. Nothing is
 rewritten, so no freed blocks leave holes, and the volume is sized from what its files take: the cryptex is about the
-size of its files, and room.fit() cuts what is left when macOS still takes the result.
+size of its files, and room.fit() cuts what is left when macOS still takes the result. newfs_apfs picks a random volume
+UUID, so the volume is given the one the IPSW's pins name for the cryptex it replaces, the one the kernel finds it by
+(SWITCH_*_CRYPTEX_UUID, //kernel:ipsw_volumes_header); the seal does not cover the volume superblock.
 """
 
 import ctypes
 import os
 import shutil
 import tempfile
+import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
-from tools.install import apfs_tree, card as cards, compose, delta, disks, host, owners, progress, room
+from tools.install import apfs, apfs_tree, card as cards, compose, delta, disks, host, owners, progress, room
 
 SEALER = '/System/Library/Filesystems/apfs.fs/Contents/Resources/apfs_prepare_cryptex'
 # The sealer writes every node of the tree again, hashed, before the old ones are freed, and adds file-info records
@@ -135,27 +138,44 @@ def _tree_bytes(image: Path) -> int:
         os.close(fd)
 
 
-def _check_sealed(image: Path, by_inode: dict[int, owners.Owner], log: host.Log, what: str) -> None:
+def _give_volume_uuid(fd: int, volume_uuid: uuid.UUID, log: host.Log, what: str) -> None:
+    container = apfs.Container(fd)
+    found = container.volumes()
+    if len(found) != 1:
+        raise host.HostError(f'{what}: expected one volume, found {found}')
+    current = found[0][0]
+    if current != volume_uuid:
+        container.set_volume_uuids({current: volume_uuid})
+    log(f'{what}: volume UUID {volume_uuid}')
+
+
+def _check_sealed(
+    image: Path, by_inode: dict[int, owners.Owner], volume_uuid: uuid.UUID, log: host.Log, what: str
+) -> None:
     with disks.attached(image, log, writable=False, raw=True) as target:
         if len(target.volumes) != 1:
             raise host.HostError(f'{what}: macOS attaches no volume from {image.name}')
         volume = target.volumes[0]
         compose.fsck(volume.rpartition('s')[0], what, log)
-        if not (host.disk_info(volume) or {}).get('Sealed'):
+        info = host.disk_info(volume) or {}
+        if not info.get('Sealed'):
             raise host.HostError(f'{what}: the volume is not sealed')
+        if info.get('VolumeUUID', '').upper() != str(volume_uuid).upper():
+            raise host.HostError(f'{what}: the volume is {info.get("VolumeUUID")}, not {volume_uuid}')
         with disks.mounted(volume, log, owners=True, read_only=True) as root:
             owners.check(root, by_inode)
 
 
 @dataclass(frozen=True)
 class Job:
-    """`source`'s volume with `entries` in place, to be written to `out` (fitted with `apfs_tool`), named `what`."""
+    """`source`'s volume with `entries` in place and `volume_uuid`, written to `out` (fitted with `apfs_tool`)."""
 
     source: str
     entries: list[dict]
     out: Path
     apfs_tool: str
     what: str
+    volume_uuid: uuid.UUID
 
 
 def rebuild(job: Job, log: host.Log) -> None:
@@ -167,6 +187,7 @@ def rebuild(job: Job, log: host.Log) -> None:
     fd = os.open(image, os.O_RDWR)
     try:
         log(f'{what}: {owners.apply(fd, 0, None, by_inode)} inodes given their owners')
+        _give_volume_uuid(fd, job.volume_uuid, log, what)
     finally:
         os.close(fd)
     tree = _tree_bytes(image)
@@ -174,7 +195,9 @@ def rebuild(job: Job, log: host.Log) -> None:
     # The sealer mounts the container itself: it takes the volume's node, attached and not mounted.
     with disks.attached(image, log, raw=True) as target, progress.step(f'{what}: sealing', 100, progress.PERCENT):
         host.watch(SEALER, '-p', '/dev/' + target.volumes[0], parse=progress.sealer, log=log)
-    _check_sealed(image, by_inode, log, what)
-    fitted = room.fit(image, job.apfs_tool, lambda clone: _check_sealed(clone, by_inode, log, what), log, what)
+    _check_sealed(image, by_inode, job.volume_uuid, log, what)
+    fitted = room.fit(
+        image, job.apfs_tool, lambda clone: _check_sealed(clone, by_inode, job.volume_uuid, log, what), log, what
+    )
     os.replace(image, out)
     log(f'{what}: translated, sealed and fitted to {progress.size(fitted)} as {out}')

@@ -60,13 +60,14 @@ def _translated_cryptex_impl(ctx):
     args.add("--image", ctx.file.image)
     args.add("--delta", delta.path)
     args.add("--role", ctx.attr.role)
+    args.add("--pins", ctx.file.pins)
     args.add("--apfs-tool", ctx.file.apfs_tool)
     args.add("--out", image)
     args.add("--sha256", sha256)
     ctx.actions.run(
         executable = ctx.executable._translate,
         arguments = [args],
-        inputs = [ctx.file.image, delta],
+        inputs = [ctx.file.image, ctx.file.pins, delta],
         tools = [ctx.file.apfs_tool],
         outputs = [image, sha256],
         mnemonic = "TranslatedCryptex",
@@ -83,6 +84,7 @@ translated_cryptex = rule(
         "image": attr.label(mandatory = True, allow_single_file = True, doc = "the decrypted member"),
         "delta": attr.label(mandatory = True, providers = [DeltaInfo], doc = "its pretranslated_delta"),
         "role": attr.string(mandatory = True, values = ["app_cryptex", "system_cryptex"]),
+        "pins": attr.label(mandatory = True, allow_single_file = True, doc = "the IPSW's pins: the cryptex's UUID"),
         "apfs_tool": attr.label(mandatory = True, cfg = "exec", allow_single_file = True),
         "_translate": attr.label(default = "//tools/install:translate", executable = True, cfg = "exec"),
     },
