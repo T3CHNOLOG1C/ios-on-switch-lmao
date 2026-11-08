@@ -671,7 +671,11 @@ def layout(args: argparse.Namespace) -> None:
         )
         payload = (scratch / 'layout/kernel-window.bin').read_bytes()
         constants = window_checks(
-            m, payload, inputs['adt'].read_bytes(), KindPins(args.kind, args.virt_base, args.root_volume_uuid), manifest_hash
+            m,
+            payload,
+            inputs['adt'].read_bytes(),
+            KindPins(args.kind, args.virt_base, args.root_volume_uuid),
+            manifest_hash,
         )
     runs, _ = pack_window(payload)
     blocks = lz4_blocks(runs)
