@@ -37,7 +37,7 @@ index 9852ea9..fc71cf1 100644
    'apb/hda/hda.c',
  
 diff --git a/hw/arm/tegra2/tegrax1.c b/hw/arm/tegra2/tegrax1.c
-index 59b3c63..47f67a3 100644
+index 080dc43..be05dee 100644
 --- a/hw/arm/tegra2/tegrax1.c
 +++ b/hw/arm/tegra2/tegrax1.c
 @@ -39,6 +39,8 @@
@@ -49,10 +49,24 @@ index 59b3c63..47f67a3 100644
  #include "hw/cpu/a9mpcore.h"
  #include "sysemu/reset.h"
  #include "sysemu/sysemu.h"
-@@ -1133,11 +1135,35 @@ static void __tegrax1_init(MachineState *machine)
+@@ -61,6 +63,7 @@
+ #include "ppsb/evp/evp.h"
+ #include "apb/fuse/fuse.h"
+ #include "apb/i2c/i2c.h"
++#include "apb/spi/spi.h"
+ #include "dummyi2c/dummyi2c.h"
+ #include "dummyio/dummyio.h"
+ 
+@@ -1138,12 +1141,41 @@ static void __tegrax1_init(MachineState *machine)
+     tegra_spi_devs[1] = tegra_init_obj_simple(TEGRA_SPI2_BASE, DIRQ(INT_SPI_2), "tegra.spi", true);
      tegra_spi_devs[2] = tegra_init_obj_simple(TEGRA_SPI3_BASE, DIRQ(INT_SPI_3), "tegra.spi", true);
      tegra_spi_devs[3] = tegra_init_obj_simple(TEGRA_SPI4_BASE, DIRQ(INT_SPI_4), "tegra.spi", true);
- 
++    /* CAR CLK_SOURCE_SBC1..4: each controller's bus clock. */
++    tegra_spi_set_clock_source(tegra_spi_devs[0], 0x134);
++    tegra_spi_set_clock_source(tegra_spi_devs[1], 0x118);
++    tegra_spi_set_clock_source(tegra_spi_devs[2], 0x11c);
++    tegra_spi_set_clock_source(tegra_spi_devs[3], 0x1b4);
++
 +    /* The IMU (ICM-42607-P) on SPI4 CS0; its INT2 is GPIO PX2 (port X = 23). */
 +    {
 +        SSIBus *ssi = (SSIBus *)qdev_get_child_bus(DEVICE(tegra_spi_devs[3]), "ssi");
@@ -60,7 +74,7 @@ index 59b3c63..47f67a3 100644
 +        qdev_connect_gpio_out_named(DEVICE(tegra_spi_devs[3]), "cs", 0, qdev_get_gpio_in_named(imu, SSI_GPIO_CS, 0));
 +        qdev_connect_gpio_out_named(imu, "int2", 0, qdev_get_gpio_in(DEVICE(tegra_gpios_dev), 23 * 8 + 2));
 +    }
-+
+ 
      /* QSPI */
      tegra_qspi_dev = tegra_init_dummyio(TEGRA_QSPI_BASE, TEGRA_QSPI_SIZE, "tegra.qspi", true);
  
@@ -86,7 +100,7 @@ index 59b3c63..47f67a3 100644
  
      /* Tmp451 (Temperature Sensor) */
      tegra_i2c_tmpsensor_dev = i2c_slave_create_simple(tegra_i2c_get_bus(tegra_idc1_dev), "dummyi2c", 0x4C);
-@@ -1162,7 +1188,7 @@ static void __tegrax1_init(MachineState *machine)
+@@ -1168,7 +1200,7 @@ static void __tegrax1_init(MachineState *machine)
      dummyi2c_set_regs(tegra_i2c_tmpsensor_dev, tmpsensor_regs, sizeof(tmpsensor_regs), sizeof(uint8_t), sizeof(tmpsensor_regs));
  
      /* Alc5639 (Audio Codec) */
