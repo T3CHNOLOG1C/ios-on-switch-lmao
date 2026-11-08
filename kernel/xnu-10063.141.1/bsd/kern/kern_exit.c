@@ -1916,7 +1916,7 @@ proc_prepareexit(proc_t p, int rv, boolean_t perf_notify)
 	int create_corpse = FALSE;
 	bool corpse_source = false;
 	task_t task = proc_task(p);
-	switch_diag_user_crash(task, p->p_name, proc_getpid(p), hassigprop(WTERMSIG(rv), SA_CORE) ? WTERMSIG(rv) : 0, ut->uu_exception, ut->uu_code, ut->uu_subcode);
+	switch_diag_proc_exit(p, rv);
 
 
 

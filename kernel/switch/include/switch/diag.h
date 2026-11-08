@@ -19,14 +19,14 @@ void switch_print_thread(const void *thread, const char *who);
 void switch_print_processors(const char *who);
 void switch_sched_describe(char *buffer, size_t size, const void *thread);
 
-/* proc_prepareexit: a process exits, of `signal` when that signal dumps core, else of signal 0 (diag/crash.c). */
+/* proc_prepareexit: a process exits with status rv; one that crashed is logged (diag/exit.c, diag/crash.c). */
+struct proc;
 #if DEVELOPMENT || DEBUG
+void switch_diag_proc_exit(struct proc *p, int rv);
 void switch_diag_user_crash(struct task *task, const char *name, int pid, int signal, int exception, int64_t code,
                             int64_t subcode);
 #else
-static inline void switch_diag_user_crash(__unused struct task *task, __unused const char *name, __unused int pid,
-                                          __unused int signal, __unused int exception, __unused int64_t code,
-                                          __unused int64_t subcode)
+static inline void switch_diag_proc_exit(__unused struct proc *p, __unused int rv)
 {}
 #endif
 
