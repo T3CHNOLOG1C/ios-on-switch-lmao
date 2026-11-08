@@ -117,6 +117,7 @@
 #include <sys/ubc_internal.h>           /* ubc_map() */
 #include <sys/spawn.h>
 #include <sys/spawn_internal.h>
+#include <switch/spawn.h>
 #include <sys/process_policy.h>
 #include <sys/codesign.h>
 #include <sys/random.h>
@@ -4490,7 +4491,7 @@ posix_spawn(proc_t ap, struct posix_spawn_args *uap, int32_t *retval)
 			 * This is a bit fragile: <rdar://problem/16427422>
 			 */
 
-			if ((error = copyin(px_args.attrp, &px_sa, px_sa_offset)) != 0) {
+			if ((error = switch_spawn_copyin_attr(px_args.attrp, px_args.attr_size, &px_sa, px_sa_offset)) != 0) {
 				goto bad;
 			}
 
