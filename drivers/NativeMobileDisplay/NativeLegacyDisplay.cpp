@@ -927,9 +927,12 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
                               kPlaneSlot0 = kProbeSlot + static_cast<uint64_t>(kSlots) * kSlotSpan;
     static constexpr unsigned kPlaneUnderflowFrames = 3;
 
+    // As a DirectSlot: the surface retained, its memory prepared and its layout held while mapped.
     struct PlaneSlot {
-        IOMemoryDescriptor *memory;  // retained and prepared while mapped
-        uint64_t low, high;          // the surface bytes mapped (page-aligned) at the slot's IOVA
+        IOMemoryDescriptor *memory;
+        OSObject *surface;
+        void *layout;
+        uint64_t low, high;  // the surface bytes mapped (page-aligned) at the slot's IOVA
         uint64_t used;
     };
 
