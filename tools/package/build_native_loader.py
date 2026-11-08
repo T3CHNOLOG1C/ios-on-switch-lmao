@@ -40,6 +40,8 @@ from pathlib import Path
 
 from loader_abi import (
     BL33_BASE,
+    BOOT_MANIFEST_HASH_BYTES,
+    BOOT_MANIFEST_HASH_PROPERTY,
     EXPORTER_RUN,
     LZ4_BLOCK,
     LZ4_MAGIC,
@@ -428,7 +430,9 @@ def _check_native_profile(m: dict, payload: bytes, kind: str, virt_base: int) ->
     _require(not len(payload) % 0x1000, 'native cacheable copy requires a page-aligned payload')
 
 
-def window_checks(m: dict, payload: bytes, adt: bytes, kind: str, virt_base: int) -> dict:
+def window_checks(
+    m: dict, payload: bytes, adt: bytes, kind: str, virt_base: int, manifest_hash: bytes | None = None
+) -> dict:
     """Check what the cacheable-copy root-boot loader needs of a layout and return the loader's constants.
 
     `m` is the layout's manifest, `payload` its image and `adt` the ADT it was laid out with; `virt_base` is the IPSW
@@ -525,10 +529,17 @@ def window_checks(m: dict, payload: bytes, adt: bytes, kind: str, virt_base: int
         )
         and not any(
             key in ('RAMDisk', 'PackedRAMDisk', 'boot-uuid', 'boot-manifest-hash', 'owner-boot-manifest-domain')
-            for _, key in properties
+            for path, key in properties
+            if manifest_hash is None or (path, key) != ('/chosen', BOOT_MANIFEST_HASH_PROPERTY)
         ),
         'root_boot requires empty runtime manifest inputs and no RAM root',
     )
+    if manifest_hash is not None:
+        pos, length = properties[('/chosen', BOOT_MANIFEST_HASH_PROPERTY)]
+        _require(
+            adt[pos : pos + length] == manifest_hash and in_window(pos, length) == manifest_hash,
+            'boot-manifest-hash must be the kernel and trust caches the window carries',
+        )
     _check_sidecars(m, payload, properties, start, sidecars)
     _check_command_line(m, payload)
     _check_exporter(m['phys_base'], len(payload))
@@ -612,6 +623,16 @@ def block_name(at: int) -> str:
     return f'{at:08x}'
 
 
+def with_boot_manifest_hash(adt: bytes, digest: bytes) -> bytes:
+    """The ADT with its zeroed /chosen/boot-manifest-hash set to digest (SHA-384 of the kernel and trust caches)."""
+    offset, size = parse_adt(adt).properties.get(('/chosen', BOOT_MANIFEST_HASH_PROPERTY), (0, 0))
+    _require(
+        offset and size == BOOT_MANIFEST_HASH_BYTES == len(digest) and adt[offset : offset + size] == bytes(size),
+        'boot manifest hash placeholder must be a zeroed, exact-size /chosen property',
+    )
+    return adt[:offset] + digest + adt[offset + size :]
+
+
 def layout(args: argparse.Namespace) -> None:
     """Lay out and check the window, then write its blocks, each in its shard's directory (shard_of)."""
     command_line = args.boot_args.read_text().rstrip('\n')
@@ -622,6 +643,10 @@ def layout(args: argparse.Namespace) -> None:
         for name in ('kernel', 'adt', 'trustcache', 'data_seed'):
             inputs[name] = scratch / name
             shutil.copyfile(getattr(args, name), inputs[name])
+        manifest_hash = None
+        if args.boot_manifest_hash:
+            manifest_hash = hashlib.sha384(inputs['kernel'].read_bytes() + inputs['trustcache'].read_bytes()).digest()
+            inputs['adt'].write_bytes(with_boot_manifest_hash(inputs['adt'].read_bytes(), manifest_hash))
         m = build_layout(
             inputs['kernel'],
             inputs['adt'],
@@ -638,7 +663,7 @@ def layout(args: argparse.Namespace) -> None:
             ),
         )
         payload = (scratch / 'layout/kernel-window.bin').read_bytes()
-        constants = window_checks(m, payload, inputs['adt'].read_bytes(), args.kind, args.virt_base)
+        constants = window_checks(m, payload, inputs['adt'].read_bytes(), args.kind, args.virt_base, manifest_hash)
     runs, _ = pack_window(payload)
     blocks = lz4_blocks(runs)
     shards = sorted(p.name for p in args.blocks.iterdir())
@@ -697,6 +722,7 @@ def main() -> None:
                 type=lambda value: int(value, 0),
                 help="the kind's kernel_virt_base (ipsw/pins.bzl)",
             )
+            p.add_argument('--boot-manifest-hash', action='store_true', help="fill the ADT's zeroed slot")
     args = parser.parse_args()
     if args.step == 'layout':
         layout(args)
