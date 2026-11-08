@@ -49,6 +49,7 @@ SWITCH_OBJECTS = {
         ("osfmk/kern/sched_prim.c", "diag/stall.c", []),
         ("osfmk/kern/sched_prim.c", "diag/stall_snapshot.c", []),
         ("osfmk/kern/sched_prim.c", "diag/stall_frame.c", []),
+        ("osfmk/kern/exception.c", "diag/crash.c", []),
     ],
 }
 
