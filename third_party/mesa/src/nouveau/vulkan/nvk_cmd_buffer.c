@@ -15,6 +15,7 @@
 #include "nvk_physical_device.h"
 #include "nvk_rust.h"
 #include "nvk_shader.h"
+#include "nvk_tiled_cache.h"
 #include "nvkmd/nvkmd.h"
 
 #include "vk_pipeline_layout.h"
@@ -427,6 +428,7 @@ nvk_EndCommandBuffer(VkCommandBuffer commandBuffer)
 {
    VK_FROM_HANDLE(nvk_cmd_buffer, cmd, commandBuffer);
 
+   nvk_cmd_flush_tiled_cache(cmd);
    nvk_cmd_buffer_flush_push(cmd, false);
 
    /* We only need to flush the memory objects we own because, if there are

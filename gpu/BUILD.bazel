@@ -162,6 +162,7 @@ metal_plugin(
         GM20B_METAL + ":raw/runtime/raw_pack.cpp",
         GM20B_METAL + ":raw/runtime/raw_ycbcr.cpp",
         GM20B_METAL + ":raw/runtime/raw_zeta.cpp",
+        GM20B_METAL + ":raw/runtime/raw_comp.cpp",
         GM20B_METAL + ":raw/runtime/raw_capture.cpp",
         GM20B_METAL + ":raw/runtime/raw_record.cpp",
         GM20B_METAL + ":raw/runtime/raw_cache.cpp",

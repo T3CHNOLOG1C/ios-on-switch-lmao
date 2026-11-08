@@ -117,6 +117,32 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
     return twin;
 }
 
+// Answered here, not by the twin (forwarded, each would make one): as m2v answers them
+- (MTLTextureCompressionType)compressionType
+{
+    return _descriptor.compressionType;
+}
+
+- (BOOL)isCompressed
+{
+    return NO;
+}
+
+- (BOOL)isDrawable
+{
+    return NO;
+}
+
+- (MTLTextureSwizzleChannels)swizzle
+{
+    return _descriptor.swizzle;
+}
+
+- (NSUInteger)heapOffset
+{
+    return 0;  // a heap's textures are allocations of their own (RMHeap)
+}
+
 // Answered here, not by the twin (a residency set's allocatedSize sums its allocations'): the memory this texture owns. A view and
 // a texture over a buffer own none; a twin-only texture's is its twin's.
 - (NSUInteger)allocatedSize
@@ -371,6 +397,43 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
 }
 
 // A view: the same memory under another format's header (raw), or m2v's view of the twin
+// A view of all of it, as its own type: the format view. Of a part of it, or another type: m2v's view of the twin, which raw
+// command buffers refuse (tex.view, b 3)
+- (id<MTLTexture>)newTextureViewWithPixelFormat:(MTLPixelFormat)format
+                                    textureType:(MTLTextureType)type
+                                         levels:(NSRange)levels
+                                         slices:(NSRange)slices
+{
+    const bool cube =
+        _descriptor.textureType == MTLTextureTypeCube || _descriptor.textureType == MTLTextureTypeCubeArray;
+    const NSUInteger allSlices = std::max<NSUInteger>(_descriptor.arrayLength, 1) * (cube ? 6 : 1);
+    if (type == _descriptor.textureType && !levels.location && levels.length == _descriptor.mipmapLevelCount &&
+        !slices.location && slices.length == allSlices)
+        return [self newTextureViewWithPixelFormat:format];
+    id twin = [(id<MTLTexture>)[self rmTwin] newTextureViewWithPixelFormat:format
+                                                               textureType:type
+                                                                    levels:levels
+                                                                    slices:slices];
+    if (!twin)
+        return nil;
+    RMTexture *v = [RMTexture new];
+    v->_device = _device;
+    v->_descriptor = [_descriptor copy];
+    v->_descriptor.pixelFormat = format;
+    v->_descriptor.textureType = type;
+    v->_descriptor.mipmapLevelCount = levels.length;
+    const bool viewCube = type == MTLTextureTypeCube || type == MTLTextureTypeCubeArray;
+    v->_descriptor.arrayLength = std::max<NSUInteger>(viewCube ? slices.length / 6 : slices.length, 1);
+    v->_kind = RMTextureView;
+    v->_parent = self;
+    v->_twin = twin;
+    refuseTexture(v, PredTexView, format, 3, @"view of a part",
+                  [NSString stringWithFormat:@"type %lu levels %lu+%lu slices %lu+%lu", (unsigned long)type,
+                                             (unsigned long)levels.location, (unsigned long)levels.length,
+                                             (unsigned long)slices.location, (unsigned long)slices.length]);
+    return (id<MTLTexture>)v;
+}
+
 - (id<MTLTexture>)newTextureViewWithPixelFormat:(MTLPixelFormat)format
 {
     RMTexture *v = [RMTexture new];

@@ -111,6 +111,18 @@ int main(int argc, char **argv)
             {"RMBuffer", "newLinearTextureWithDescriptor:offset:bytesPerRow:bytesPerImage:"},
             {"RMTexture", "waitUntilComplete"},
             {"RMBuffer", "waitUntilComplete"},
+            {"RMTexture", "compressionType"},
+            {"RMTexture", "isCompressed"},
+            {"RMTexture", "isDrawable"},
+            {"RMTexture", "swizzle"},
+            {"RMTexture", "heapOffset"},
+            {"RMTexture", "newTextureViewWithPixelFormat:textureType:levels:slices:"},
+            {"RMBuffer", "heapOffset"},
+            {"RMBlitEncoder", "fillBuffer:range:value:"},
+            {"RMCommandBuffer", "userDictionary"},
+            {"RMCommandBuffer", "globalTraceObjectID"},
+            {"RMSampler", "pixelFormat"},
+            {"RMPipeline", "maxTotalThreadsPerThreadgroup"},
             // residency sets (iOS 18 on, Core Animation 27's): everything is resident on the raw path; a set's allocatedSize
             // asks each allocation's
             {"RMCommandBuffer", "useResidencySet:"},

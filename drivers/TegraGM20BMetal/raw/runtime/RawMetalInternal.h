@@ -78,6 +78,7 @@ struct Stats {
     std::atomic<uint64_t> replayDraws{0}, twinTextures{0}, twinBuffers{0}, twinOthers{0}, twinTextureUs{0};
     // command buffers completed before their submitting thread scheduled them (finish() ran their scheduled handlers)
     std::atomic<uint64_t> scheduledByFinish{0};
+    std::atomic<uint64_t> twinForwards{0};  // selectors a facade object forwarded to its m2v twin (RMObject)
 #endif
 };
 

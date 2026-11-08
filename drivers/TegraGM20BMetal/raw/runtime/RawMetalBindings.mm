@@ -3,6 +3,30 @@
 
 @implementation RMRenderEncoder (Bindings)
 
+// Room for `padded` bytes in the command buffer's setBytes chunks (RMBytes): false when only heap memory had it
+static bool bytesRoom(RMBytes &s, uint32_t padded, uint32_t &chunk, uint32_t &offset)
+{
+    constexpr uint32_t kChunk = 64 << 10;  // a Core Animation frame's setBytes (~55 KB of 256-byte copies)
+    while (s.at < s.chunks.size() && s.used + padded > s.chunks[s.at].length) {
+        s.at++;
+        s.used = 0;
+    }
+    if (s.at == s.chunks.size()) {
+        raw::Buffer b;
+        if (!gRM->raw->createBuffer(std::max(padded, kChunk), b, true)) {
+            b = {};
+            b.length = std::max(padded, kChunk);
+            b.cpu = static_cast<uint8_t *>(malloc(size_t(b.length)));
+        }
+        s.chunks.push_back(b);
+        s.used = 0;
+    }
+    chunk = uint32_t(s.at);
+    offset = s.used;
+    s.used += padded;
+    return s.chunks[s.at].va != 0;
+}
+
 - (void)bytes:(int)stage data:(const void *)bytes length:(NSUInteger)length index:(NSUInteger)index
 {
     SWITCH_API(ApiBind);
@@ -12,9 +36,18 @@
     }
     RMCommandBuffer *cb = _cb;
     Cmd m = cmd(OpBytes, uint8_t(stage), uint16_t(index));
-    m.a = uint32_t(cb->_bytes.size());
+    const uint32_t padded = std::max<uint32_t>((uint32_t(length) + 255) & ~255u, 256);
+    uint32_t chunk, offset;
+    if (!bytesRoom(cb->_bytes, padded, chunk, offset)) {
+        [cb takeReason:WhyCall why:@"setBytes with no GPU pool memory for its bytes"];
+        hit(cb, PredCallBytes, length);
+    }
+    uint8_t *to = cb->_bytes.chunks[chunk].cpu + offset;
+    memcpy(to, bytes, length);
+    memset(to + length, 0, padded - length);
+    m.a = offset;
     m.b = uint32_t(length);
-    cb->_bytes.insert(cb->_bytes.end(), (const uint8_t *)bytes, (const uint8_t *)bytes + length);
+    m.c = chunk;
     [cb record:m];
 }
 

@@ -46,6 +46,7 @@ enum RMPred : uint8_t {
     PredCallCBInvocation,  // a command buffer selector recorded as an invocation
     PredCallBlitOptions,
     PredCallBufCopyRange,
+    PredCallBytes,  // setBytes with no GPU pool memory for its bytes: a = length
     PredBlitTexCopy,
     PredBlitBufToTex,
     PredBlitTexToBuf,
@@ -102,6 +103,7 @@ static constexpr const char *kPredNames[] = {"-",
                                              "call.cbinv",
                                              "call.blitopt",
                                              "call.bufcopy",
+                                             "call.bytes",
                                              "blit.tex",
                                              "blit.b2t",
                                              "blit.t2b",
