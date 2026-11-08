@@ -408,6 +408,14 @@ static id<MTLRenderPipelineState> pipelineTwin(MTLRenderPipelineDescriptor *d, M
         self, [gRM->fallback newComputePipelineStateWithFunction:twinOf(f) options:o reflection:r error:error], f, d);
 }
 
+// _MTLDevice's own sends this to [self compiler], which answers nil on a device without Apple's compiler service: Core
+// Animation 27 makes its luma kernels this way and aborts on nil.
+- (id<MTLComputePipelineState>)newComputePipelineStateWithDescriptor:(MTLComputePipelineDescriptor *)d
+                                                               error:(NSError **)error
+{
+    return [self newComputePipelineStateWithDescriptor:d options:MTLPipelineOptionNone reflection:nil error:error];
+}
+
 - (id<MTLComputePipelineState>)newComputePipelineStateWithDescriptor:(MTLComputePipelineDescriptor *)d
                                                              options:(MTLPipelineOption)o
                                                           reflection:(MTLAutoreleasedComputePipelineReflection *)r
