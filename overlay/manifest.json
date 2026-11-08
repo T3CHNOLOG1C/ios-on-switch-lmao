@@ -16,7 +16,7 @@
     "on the panel, under each name ProgressUI looks for at a truncated main-screen-scale of 1 or 2 (iPadOS 17 and 27).",
     "portrait (optional): staged only for a portrait-native kernel (drivers/NativeMobileDisplay/SwitchPortrait.h).",
     "debug (optional): staged only in debug boot packages (switch-fetchform, which the BlueTool stand-in runs on request).",
-    "kind (optional): staged only for that IPSW kind (--//ipsw:kind), for paths only its System volume has.",
+    "kind (optional): staged only for that IPSW kind (--//ipsw:kind), for paths only that kind has or loads.",
     "J120's speaker strips give the presets and bypass flags of VirtualAudio's built-in DSP chain for the speaker port",
     "(nine AUs tuned for J120's four MAX98723 drivers). drivers/SwitchAudio/tunings has same-named ones, gated like the",
     "plug-in, that bypass every AU of those chains except the volume (see hal/SwitchAudioPlugIn.c). iOS 27 (J181) builds",
@@ -24,8 +24,9 @@
     "normalizer, virtual bass, two ToneMeisters, vrq2, MeisterStueck, ControlFreak and speaker protection V3, tuned for",
     "J181's MAX98357s), its strips matching boxes by name: tunings/AID2003 bypasses every box but the volume (vrq2;",
     "AUVolume in measurement).",
-    "The VideoDecoders union (HEVCH8, AVD) has no gate: AVD registers only in processes that may open the TegraNVDEC",
-    "service, which the kernel publishes once NVDEC proves itself at boot.",
+    "The VideoDecoders union (HEVCH8, AVD) has no gate: AVD registers nothing until the kernel publishes TegraNVDEC.",
+    "AVD sits in each kind's empty AVDRegister slot: AVD.videodecoder on 21H461, AVD.videodecoder_ps on 24B119, whose",
+    "dyld cache holds Apple's own AVD.videodecoder (drivers/SwitchVideoDecoders/AVD/AVDRegister.c).",
     "H264H7.videoencoder (AVE on NVENC) has no gate either: it registers only once the kernel published TegraNVENC (E3).",
     "The iPadOS 17 and Lake wallpapers of each IPSW's own iPad (WallpaperKit loads a bundle only at the device's logical",
     "screen class, which follows switch-ui-scale, or at 'any'; an IPSW ships @2x only): each bundle directory is its own",
@@ -80,7 +81,14 @@
     {
       "path": "/System/Library/VideoDecoders/AVD.videodecoder",
       "source": "build/switch-video/AVD.videodecoder",
-      "trust": true
+      "trust": true,
+      "kind": "21H461"
+    },
+    {
+      "path": "/System/Library/VideoDecoders/AVD.videodecoder_ps",
+      "source": "build/switch-video/AVD.videodecoder",
+      "trust": true,
+      "kind": "24B119"
     },
     {
       "path": "/System/Library/VideoEncoders/H264H7.videoencoder",
