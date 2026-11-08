@@ -396,11 +396,9 @@ bool Device::init(std::string &err)
     {
         std::lock_guard<std::mutex> l(lock_);
         heapGrow(std::min<uint64_t>(pack_.bytes(PackHeap) + kHeapSlack, kHeapAtOpen));
-        if (chainsOn_) {
-            Span first;
-            if (blAlloc(1, 0, first))
-                blFree(first);
-        }
+        Span first;
+        if (blAlloc(1, 0, first))
+            blFree(first);
     }
     uint32_t chunk;
     newChunk(sizes_.chunk, false, nullptr, chunk);
@@ -426,8 +424,8 @@ bool Device::ensureChannel()
     return true;
 }
 
-// channelLock_ held: the rings, the channel and its context, then the 2D engine's state and its mip-chain self-test (raw/fx).
-// False: what it made is given back, so a later call starts over.
+// channelLock_ held: the rings, the channel and its context with the 2D engine's state (raw/fx). False: what it made is given
+// back, so a later call starts over.
 bool Device::openChannel(std::string &err)
 {
     auto undo = [&](bool created) {
@@ -445,17 +443,18 @@ bool Device::openChannel(std::string &err)
     if (!k_.alloc(sizes_.push, true, push_.bo) || !k_.alloc(sizes_.upload, true, upload_.bo) ||
         !k_.channel(kEngines, channel_, fence_))
         return undo(false);
+    const uint32_t words = contextWords() + uint32_t(fx::twodInitWords());
     uint64_t va;
-    uint32_t *start = reinterpret_cast<uint32_t *>(alloc(push_, contextWords() * 4, 256, va));
-    Push p{start, start + contextWords()};
+    uint32_t *start = reinterpret_cast<uint32_t *>(alloc(push_, words * 4, 256, va));
+    Push p{start, start + words};
     emitContext(p);
+    fx::emitTwodInit(p);
     TegraGM20BAbiPush seg = {va, uint32_t(p.at - start), 0};
     uint32_t seq = 0;
     if (!k_.exec(channel_, &seg, 1, 0, seq))
         return undo(true);
     lastSeqno_ = seq;
     retire(push_, seq);
-    selfTest();
     return true;
 }
 
@@ -1208,9 +1207,9 @@ bool Device::createBufferTexture(const Buffer &b, uint64_t offset, uint32_t widt
 
 bool Device::createView(const Texture &of, uint32_t format, Texture &t)
 {
-    // A mipmapped texture's view is m2v's. Metal views a converted image (planar, YCbCr) only in its own format or that
-    // format's sRGB twin (m2v view_plan.rs), neither of which has a header here.
-    if (of.chain || of.converted())
+    // Metal views a converted image (planar, YCbCr) only in its own format or that format's sRGB twin (m2v view_plan.rs),
+    // neither of which has a header here.
+    if (of.converted())
         return false;
     const FormatInfo *f = formatInfo(format);
     if (!f || f->bpp != of.bpp || of.memoryless || of.sampled || xrForm(format) != XrForm::None ||
@@ -1225,8 +1224,15 @@ bool Device::createView(const Texture &of, uint32_t format, Texture &t)
     t.import = nullptr;  // the viewed texture owns the memory (RawMetal.mm keeps it alive while a view lives)
     t.span = {};
     t.lease = nullptr;
+    t.chain = nullptr;  // a mipmapped texture's view: every level sampled, level 0 rendered and copied
     if (!(t.tic = allocTic()))
         return false;
+    if (of.chain) {
+        uint32_t w[8];
+        fx::mipChainTic(of.chain->layout, of.va, f->tic0, f->srgb, 0, of.chain->layout.levels, w);
+        memcpy(tic_.cpu + 32 * t.tic, w, 32);
+        return true;
+    }
     writeTic(t);
     return true;
 }
@@ -1339,24 +1345,33 @@ bool Device::createMipTexture(uint32_t width, uint32_t height, uint32_t format, 
 {
     const FormatInfo *f = formatInfo(format);
     const uint32_t fmt2d = fx::twodFormat(format);
-    if (!chainsOn_ || !f || !fmt2d || f->srgb || levels < 2 || !f->rt)
+    if (!f || levels < 2 || !f->rt || xrForm(format) != XrForm::None)
         return false;
     Texture::Chain *c = new Texture::Chain;
-    if (!fx::mipChainLayout(width, height, levels, f->bpp, c->layout) || !createTexture(width, height, format, t)) {
+    if (!fx::mipChainLayout(width, height, levels, f->bpp, c->layout) || !shape(width, height, format, t)) {
         delete c;
         return false;
     }
-    bool placed;
     {
         std::lock_guard<std::mutex> l(lock_);
-        placed = blAlloc(c->layout.bytes, c->layout.align, c->span);
+        if (!blAlloc(c->layout.bytes, c->layout.align, t.span)) {
+            delete c;
+            return false;
+        }
+        if (!(t.tic = allocTic())) {
+            Lease *none = nullptr;
+            freeSpan(t.span, Memory::Bl, none);
+            delete c;
+            return false;
+        }
     }
-    if (!placed) {
-        delete c;
-        destroyTexture(t);
-        return false;
-    }
-    c->va = c->span.va;
+    const fx::MipLevel &l0 = c->layout.level[0];
+    t.va = c->va = t.span.va;
+    t.cpu = t.span.cpu;
+    t.pitch = l0.rowBytes;
+    t.blockLinear = true;
+    t.blockHeight = l0.yLog2;
+    t.layerBytes = c->layout.bytes;
     c->fmt2d = fmt2d;
     uint32_t w[8];
     fx::mipChainTic(c->layout, c->va, f->tic0, f->srgb, 0, levels, w);
@@ -1365,65 +1380,6 @@ bool Device::createMipTexture(uint32_t width, uint32_t height, uint32_t format, 
     stats.chains++;
     stats.chainBytes += c->layout.bytes;
     return true;
-}
-
-// Once at open, after the init submission: the 2D engine's state (Mesa nvc0's 2D init), then one 24x10 chain per sampling
-// candidate (fx::sampling) made from a pattern in one submission and read back (fx_mip.h). Chains go on with the first candidate
-// whose chain is exact within 1 in either of the CPU's two possible views of kind-0xFE memory (production never reads a chain on
-// the CPU; the view only tells the check where to look); none: chains stay off and every texture is as before. Its memory is a
-// coherent allocation: the CPU reads it without an invalidate. Nothing but this submission's own fence is waited for.
-void Device::selfTest()
-{
-    for (uint32_t i = 0; i < fx::kSamplings; i++)
-        selfTestTegra[i] = selfTestFermi[i] = ~0u;
-    fx::MipChain c;
-    if (!fx::mipChainLayout(fx::kSelfTestW, fx::kSelfTestH, fx::fullLevels(fx::kSelfTestW, fx::kSelfTestH), 4, c))
-        return;
-    const uint64_t stride = (c.bytes + 16383) & ~uint64_t(16383);
-    Bo chains, src;
-    if (!k_.alloc(stride * fx::kSamplings, true, chains, fx::kBlockLinearKind))
-        return;
-    if (!k_.alloc(4096, true, src)) {
-        k_.free(chains);
-        return;
-    }
-    memset(chains.cpu, 0, stride * fx::kSamplings);
-    fx::selfTestPattern(src.cpu, 256);
-    const uint32_t room = uint32_t(fx::twodInitWords() + fx::kSamplings * fx::generateWords(c, 0, c.levels - 1) + 16);
-    uint64_t va;
-    uint32_t *start = reinterpret_cast<uint32_t *>(alloc(push_, room * 4, 256, va));
-    Push p{start, start + room};
-    fx::emitTwodInit(p);
-    const fx::Pitch l0{src.va, 256, fx::kSelfTestW, fx::kSelfTestH};
-    for (uint32_t i = 0; i < fx::kSamplings; i++)
-        fx::emitGenerate(p, c, chains.va + i * stride, &l0, fx::twodFormat(80), 0, c.levels - 1, fx::sampling(i));
-    TegraGM20BAbiPush seg = {va, uint32_t(p.at - start), 0};
-    uint32_t seq = 0;
-    if (k_.exec(channel_, &seg, 1, lastSeqno_, seq)) {
-        lastSeqno_ = seq;
-        retire(push_, seq);
-        if (wait(seq)) {
-            for (uint32_t i = 0; i < fx::kSamplings; i++) {
-                const uint8_t *cpu = chains.cpu + i * stride;
-                selfTestTegra[i] = fx::selfTestCheck(c, cpu, nullptr, false);
-                selfTestFermi[i] = fx::selfTestCheck(c, cpu, nullptr, true);
-            }
-            fx::selfTestDetail(c, chains.cpu, false, selfTestFirst);
-            for (uint32_t view = 0; view < 2 && selfTestChosen == fx::kSamplings; view++)
-                for (uint32_t i = 0; i < fx::kSamplings; i++)
-                    if (!(view ? selfTestFermi[i] : selfTestTegra[i])) {
-                        selfTestChosen = i;
-                        selfTestFermiView = view;
-                        break;
-                    }
-            if (selfTestChosen < fx::kSamplings) {
-                sampling_ = fx::sampling(selfTestChosen);
-                chainsOn_ = true;
-            }
-        }
-    }
-    k_.free(src);
-    k_.free(chains);
 }
 
 void Device::destroyTexture(Texture &t)
@@ -1462,7 +1418,6 @@ void Device::destroyTexture(Texture &t)
             if (level) {
                 freeTic(level);
             }
-        blFree(t.chain->span);
         delete t.chain;
         t.chain = nullptr;
     }
@@ -3706,23 +3661,15 @@ void BlitEncoder::convertPlanar(const Texture &t)
     p_.m(CE_LAUNCH_DMA, kLaunchPitch | 1u << 10, SUBC_COPY);
 }
 
-void BlitEncoder::generate(Texture &t, bool all)
+void BlitEncoder::generate(Texture &t)
 {
     Texture::Chain *c = t.chain;
-    if (!c)
+    if (!c || !c->fmt2d)  // (the facade sends those to m2v: PredMipmapsFormat)
         return;
-    const uint32_t last = all ? c->layout.levels - 1 : 0;
+    const uint32_t last = c->layout.levels - 1;
     room(uint32_t(fx::generateWords(c->layout, 0, last)));
-    const fx::Pitch l0{t.va, t.pitch, t.width, t.height};
-    fx::emitGenerate(p_, c->layout, c->va, &l0, c->fmt2d, 0, last, dev_->sampling_);
-    c->l0Fresh = true;
-    if (all) {
-        c->levelsFresh = true;
-        c->rawLevels = c->mirrorLevels = 0;
-        dev_->stats.chainGenerates++;
-    } else {
-        dev_->stats.chainRefreshes++;
-    }
+    fx::emitGenerate(p_, c->layout, c->va, nullptr, c->fmt2d, 0, last);
+    dev_->stats.chainGenerates++;
 }
 
 void BlitEncoder::copyFromLevel(const Texture &t, uint32_t level, uint32_t sx, uint32_t sy, const Texture &dst,
@@ -3731,7 +3678,8 @@ void BlitEncoder::copyFromLevel(const Texture &t, uint32_t level, uint32_t sx, u
     const Texture::Chain *c = t.chain;
     if (!c)
         return;
-    if (dst.blockLinear) {  // the copy engine, block-linear to block-linear (the 2D engine's destination here is pitch)
+    if (dst.blockLinear ||
+        !c->fmt2d) {  // the copy engine (the 2D engine's destination here is pitch, of a format it takes)
         Texture from;
         if (chainLevelImage(t, level, from))
             copyTexels(from, sx, sy, dst, dx, dy, w, h);
@@ -3742,17 +3690,6 @@ void BlitEncoder::copyFromLevel(const Texture &t, uint32_t level, uint32_t sx, u
     const fx::Pitch d{dst.va, dst.pitch, dst.width, dst.height};
     fx::emitCopyFromLevel(p_, c->layout, c->va, level, d, c->fmt2d, sx, sy, dx, dy, w, h);
     dev_->stats.chainCopies++;
-}
-
-void BlitEncoder::copyToLevel(Texture &t, uint32_t level, const Texture &src)
-{
-    Texture::Chain *c = t.chain;
-    if (!c || !level || level >= c->layout.levels)
-        return;
-    const fx::MipLevel &l = c->layout.level[level];
-    room(uint32_t(fx::copyWords()));
-    const fx::Pitch s{src.va, src.pitch, src.width, src.height};
-    fx::emitCopyToLevel(p_, c->layout, c->va, level, s, c->fmt2d, 0, 0, 0, 0, l.width, l.height);
 }
 
 void BlitEncoder::end()
