@@ -83,8 +83,6 @@ volatile int native_legacy_meta_status = -1;
 volatile uint32_t native_legacy_init_result, native_legacy_start_result, native_legacy_probe_match;
 volatile uint32_t native_legacy_parent_match, native_legacy_object_size, native_legacy_released;
 volatile uint64_t native_legacy_object, native_legacy_nub, native_legacy_workloop;
-volatile uint32_t native_legacy_guard_slot;
-volatile uint64_t native_legacy_guard_object, native_legacy_guard_caller;
 volatile int native_legacy_surface_status = -1;
 volatile uint32_t native_legacy_surface_found;
 volatile uint64_t native_legacy_video_base, native_legacy_video_bytes;
@@ -836,20 +834,6 @@ __attribute__((noinline)) bool native_legacy_gop_mapping_observed(const IOServic
         return false;
     }
     return true;
-}
-
-__attribute__((noreturn, noinline)) void native_legacy_backend_guard(unsigned slot, const void *object,
-                                                                     const void *caller)
-{
-    native_legacy_guard_slot = slot;
-    native_legacy_guard_object = (uintptr_t)object;
-    native_legacy_guard_caller = (uintptr_t)caller;
-    panic("NativeLegacyDisplay: leaf=%u caller=%llx stage=%u PM=%u swap=%u/%u copy=%08x bytes=%llu retire=%u "
-          "handoff=%u/%u",
-          slot, (uint64_t)(uintptr_t)caller, native_legacy_stage, native_legacy_pm_stage,
-          native_legacy_swap_validation_result, native_legacy_swap_validation_reason,
-          (unsigned)native_legacy_transfer_status, native_legacy_transfer_bytes, native_legacy_retirement_calls,
-          native_legacy_prepare_reason, native_legacy_prepare_attempts);
 }
 
 void native_legacy_display_probe(void);

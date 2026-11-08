@@ -54,7 +54,6 @@ extern "C" void native_legacy_frame_end_release(void);
 // The last swap Core Animation offered (validateSwap, accepted or not; mach time): while swaps keep coming CA is
 // animating, and TegraGM20B's idle clock never drops the GPU (native_display_last_swap_ns below).
 static uint64_t gLastSwapAbs;
-extern "C" __attribute__((noreturn)) void native_legacy_backend_guard(unsigned, void *, void *);
 extern "C" IOService *native_legacy_display_allocate(void);
 extern "C" bool native_legacy_gop_mapping_observed(IOService *, IOMemoryMap *, uint32_t, uint32_t);
 extern "C" void native_legacy_registration_observed(IOService *);
@@ -5150,16 +5149,26 @@ public:
             frameInfo->clients.change(client, 0);
     }
 
-#define LEAF(name, n)                                                      \
-    __attribute__((noreturn, noinline)) void name() override               \
-    {                                                                      \
-        native_legacy_backend_guard(n, this, __builtin_return_address(0)); \
+    // DC A's timing generator, which display power (setScanout) and SC7 stop.
+    bool areTimingsEnabled() const override
+    {
+        return dc && !scanoutStopped && !hwSuspended;
     }
-    LEAF(platformInternalPlug, 245)
-    LEAF(platformInternalUnplug, 246)
-    LEAF(platformRefreshRates, 338)
-    LEAF(platformIdleWithoutClients, 345)
-#undef LEAF
+
+    // As J120's AppleCLCD and J181's UnifiedPipeline answer: the internal panel is never plugged or unplugged, and it has
+    // one refresh rate.
+    IOReturn platformInternalPlug() override
+    {
+        return kIOReturnUnsupported;
+    }
+
+    IOReturn platformInternalUnplug() override
+    {
+        return kIOReturnUnsupported;
+    }
+
+    void platformRefreshRates() override
+    {}
 };
 
 // OSDefineMetaClassAndStructors(NativeLegacyDisplay, IOMobileFramebufferLegacy), registered under the class name of J120's
