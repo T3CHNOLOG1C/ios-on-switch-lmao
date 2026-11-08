@@ -109,7 +109,7 @@ int a64x_cmd_kext(int argc, char **argv)
         }
         lo &= ~4095ull;
         hi = (hi + 4095) & ~4095ull;
-        struct a64x_code_map cm = {NULL, is_code, A64X_MAP_KERNEL};
+        struct a64x_code_map cm = {NULL, is_code, A64X_MAP_KERNEL, NULL};
         /* data islands, as the kernel finds them for an image without a plan, seeded with the function starts */
         island_lo = lo;
         island_words = (hi - lo) / 4;

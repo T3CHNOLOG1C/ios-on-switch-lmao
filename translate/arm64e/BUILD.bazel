@@ -41,6 +41,7 @@ filegroup(
         "a64x/a64x_classify.c",
         "a64x/a64x_fp16.h",
         "a64x/a64x_image.c",
+        "a64x/a64x_refs.c",
         "a64x/a64x_rewrite.c",
         "a64x/a64x_vlive.h",
     ],
@@ -53,6 +54,7 @@ MACHO_SRCS = [
     "macho/fips.c",
     "macho/macho.c",
     "macho/pretranslate.c",
+    "macho/pt_entries.c",
     "macho/pt_verify.c",
     "macho/sha256.c",
     "macho/stub_split.c",
@@ -78,6 +80,7 @@ cc_library(
     srcs = [
         "a64x/a64x_classify.c",
         "a64x/a64x_image.c",
+        "a64x/a64x_refs.c",
         "a64x/a64x_rewrite.c",
     ],
     hdrs = ["a64x/a64x.h"],

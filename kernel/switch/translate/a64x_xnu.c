@@ -142,7 +142,7 @@ static int a64x_text_page(const void *src, void *dst, unsigned long long off, vo
     }
     uint32_t pg = (uint32_t)((off - im->text_off) / A64X_PAGE);
     uint32_t c0 = im->cursor[pg], c1 = im->cursor[pg + 1];
-    struct a64x_code_map cm = {im, img_is_code, im->map_flags};
+    struct a64x_code_map cm = {im, img_is_code, im->map_flags, NULL};
     uint32_t *chk = NULL;
     bool ok = true;
     if (c1 > c0) {
@@ -339,7 +339,7 @@ static void a64x_find_islands(struct a64x_image *im, const struct a64x_layout *l
     struct a64x_islands is = {im->data, fs, 0, 0, false, false, 0, 0};
     uint8_t *dic_only = im->data;
     im->data = NULL; /* the pass sees instruction sections only, not the islands it is finding */
-    struct a64x_code_map cm = {im, img_is_code, im->map_flags};
+    struct a64x_code_map cm = {im, img_is_code, im->map_flags, NULL};
     for (uint32_t pg = 0; pg < im->npages; pg++) {
         uint64_t off = im->text_off + (uint64_t)pg * A64X_PAGE;
         bzero(page, A64X_PAGE);
@@ -368,7 +368,7 @@ static int a64x_scan(struct a64x_image *im)
 {
     uint32_t *page = kalloc_data(A64X_PAGE, Z_WAITOK);
     uint32_t *out = kalloc_data(A64X_PAGE, Z_WAITOK);
-    struct a64x_code_map cm = {im, img_is_code, im->map_flags};
+    struct a64x_code_map cm = {im, img_is_code, im->map_flags, NULL};
     uint32_t cursor = 0;
     int error = 0;
     for (uint32_t pg = 0; pg < im->npages && !error; pg++) {
@@ -708,7 +708,7 @@ static int a64x_cache_page(const void *src, void *dst, unsigned long long off, v
     if (!a64x_plan) {
         return 0;
     }
-    struct a64x_code_map code = {NULL, plan_is_code, 0};
+    struct a64x_code_map code = {NULL, plan_is_code, 0, NULL};
     /* one-word rewrites; stub-needing words stay unless the plan places them */
     (void)a64x_translate_page(in, out, A64X_WORDS, va, &code, NULL, 0, NULL);
     /* PAC failure checks that pass by construction -> b ok (fully inside this page, as the planner assumed) */

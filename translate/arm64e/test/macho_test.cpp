@@ -339,7 +339,7 @@ TEST(Image, PagerWindowsReproduceTheScan)
     ASSERT_EQ(0, t.rc) << t.err;
     ASSERT_GT(t.sites, 10);
     WindowCtx c{t.m.get(), t.x.data};
-    a64x_code_map cm{&c, windowIsCode, t.x.map_flags};
+    a64x_code_map cm{&c, windowIsCode, t.x.map_flags, nullptr};
     for (uint32_t pg = 0; pg < t.x.npages; pg++) {
         uint32_t c0 = t.x.cursor[pg], c1 = t.x.cursor[pg + 1];
         std::vector<uint32_t> chk(c1 - c0 + 1), src(1024, 0), dst(1024);
