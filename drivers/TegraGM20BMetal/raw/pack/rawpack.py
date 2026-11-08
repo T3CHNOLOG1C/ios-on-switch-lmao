@@ -285,9 +285,9 @@ def split_buckets(corpus: Path, work: Path, count: int) -> list[Path]:
         for line in f:
             if line.startswith('R ') and (' label=com.apple.coreanimation.' in line or FRAMEWORK.search(line)):
                 lines[packfile.fnv(line.split(' ', 3)[3].encode()) % count].append(line)
+                warm = warm or (line if 'f downsample_4_frag' in line else '')
             elif line.startswith('D ok=1 '):  # a compute dispatch shape (probecompute.mm)
                 lines[packfile.fnv(line.encode()) % count].append(line)
-                warm = warm or (line if 'f downsample_4_frag' in line else '')
     dirs = []
     for i, part in enumerate(lines):
         d = work / f'bucket{i}'
