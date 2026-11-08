@@ -20,7 +20,7 @@ exports_files(glob(
 ))
 
 # The raw GM20B path: its runtime (compiled into the plugin), its pack generator, and every source its stack key hashes
-# (every .h/.c/.cpp/.mm/.py/.inc below raw/, the old build's raw_stack()).
+# (every .h/.c/.cpp/.mm/.py/.inc/.metal below raw/, the old build's raw_stack()).
 filegroup(
     name = "raw_runtime_headers",
     srcs = glob([
@@ -67,7 +67,7 @@ filegroup(
 
 filegroup(
     name = "raw_stack_sources",
-    srcs = glob(["raw/**/*.%s" % suffix for suffix in ("h", "c", "cpp", "mm", "py")]),
+    srcs = glob(["raw/**/*.%s" % suffix for suffix in ("h", "c", "cpp", "mm", "py", "metal")]),
 )
 
 # The GPU context-switch stress and fetch readback (raw/test/fetchform.cpp): debug boot packages stage it at

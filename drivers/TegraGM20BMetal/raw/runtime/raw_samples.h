@@ -5,6 +5,7 @@
 // lowering read. Metal's default positions are Vulkan's standard ones.
 #pragma once
 #include <cstdint>
+#include "raw_gpu.h"
 
 namespace raw {
 
@@ -58,6 +59,40 @@ inline bool sampleLayout(uint32_t samples, SampleLayout &out)
         out.root[w] = uint32_t(bytes[4 * w]) | uint32_t(bytes[4 * w + 1]) << 8 | uint32_t(bytes[4 * w + 2]) << 16 |
                       uint32_t(bytes[4 * w + 3]) << 24;
     return true;
+}
+
+// The pack's resolve state into a target of MTLPixelFormat `format` (pack/resolve.metal), keyed "raw.resolve.<fragment
+// function>"; null for a format it has none for. An 8-bit sRGB target's state writes codes, into its UNORM twin
+// (resolveTargetFormat).
+inline const char *resolveState(uint32_t format)
+{
+    switch (format) {
+    case 70:
+        return "raw.resolve.resolve_rgba8_frag";
+    case 71:
+        return "raw.resolve.resolve_rgba8_srgb_frag";
+    case 80:
+        return "raw.resolve.resolve_bgra8_frag";
+    case 81:
+        return "raw.resolve.resolve_bgra8_srgb_frag";
+    case 92:
+        return "raw.resolve.resolve_rg11b10f_frag";
+    case 115:
+        return "raw.resolve.resolve_rgba16f_frag";
+    default:
+        return nullptr;
+    }
+}
+
+// The rows of a multisampled target's sample grid (NIL's px_extent_sa: two down for 4 and 8 samples), as NVK's HEIGHT counts
+inline uint32_t sampleRows(const Texture &t)
+{
+    return t.samples >= 4 ? t.height * 2 : t.height;
+}
+
+inline uint32_t resolveTargetFormat(uint32_t format)
+{
+    return format == 71 ? 70 : format == 81 ? 80 : format;
 }
 
 }  // namespace raw

@@ -232,7 +232,6 @@
 24B119 MTLDevice newTextureWithDescriptor:iosurface:plane:slice: base
 24B119 MTLDevice newVisibleFunctionTableWithDescriptor: none
 24B119 MTLDevice queryTimestampFrequency base
-24B119 MTLDevice recommendedMaxWorkingSetSize m2v
 24B119 MTLDevice registryID m2v
 24B119 MTLDevice sampleTimestamps:gpuTimestamp: base
 24B119 MTLDevice setCompilerProcessesCount: base

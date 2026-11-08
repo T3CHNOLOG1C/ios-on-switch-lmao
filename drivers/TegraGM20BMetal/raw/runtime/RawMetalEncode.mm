@@ -2,6 +2,7 @@
 #import "RawMetalInternal.h"
 #include <optional>
 #include "raw_compute.h"
+#include "raw_samples.h"
 
 // The copy engine's copies of those rows into or out of plane z: one copy of every row where they lie a pitch apart, else one
 // per row
@@ -129,6 +130,48 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
         if (store)
             planesWritten.push_back(t);
         return 0;
+    };
+
+    // Multisampled attachments' resolves (MTLStoreActionMultisampleResolve): after their pass, a pass of the pack's resolve state
+    // of the format each, into the resolve texture over the pass's render area (an 8-bit sRGB one as its UNORM twin, whose codes
+    // the state writes), sampling what the pass rendered (the resolve pass's prologue barrier orders its reads after those
+    // writes)
+    struct Resolve {
+        uint32_t attachment;
+        RMTexture *into;
+    };
+
+    std::vector<Resolve> resolves;
+    std::deque<raw::Texture> resolveTargets;  // the encoder reads them until its end()
+    auto resolvePasses = [&]() -> bool {
+        const raw::Texture *from[8] = {};
+        for (const Resolve &r : resolves)
+            from[r.attachment] = re->target(r.attachment);
+        const uint32_t width = re->areaWidth(), height = re->areaHeight();
+        for (const Resolve &r : resolves) {
+            resolveTargets.push_back(r.into->_raw);
+            resolveTargets.back().format = raw::resolveTargetFormat(r.into->_raw.format);
+            raw::PassDesc p;
+            p.color[0].texture = &resolveTargets.back();
+            p.color[0].load = raw::ColorAttachment::DontCare;
+            p.color[0].store = true;
+            p.count = 1;
+            p.width = width;
+            p.height = height;
+            useTexture(rc, r.into, true);
+            raw::RenderEncoder *e = rc->render(p);
+            if (!e)
+                return fail(PredEncPassRender, "a resolve texture the raw path cannot render", r.attachment);
+            const uint32_t samples = from[r.attachment]->samples;
+            e->setPipeline(d.resolvePipeline(r.into->_raw.format));
+            e->setTexture(0, from[r.attachment]);
+            e->setBytes(2, 0, &samples, sizeof samples);
+            if (!e->draw(4 /* MTLPrimitiveTypeTriangleStrip */, 0, 4, 1, 0, why))
+                return refused();
+            e->end();
+        }
+        resolves.clear();
+        return true;
     };
 
     // the planar textures its draws sample: their images from their planes first, once (m2v converts at each encoder that uses
@@ -389,6 +432,10 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
                                                                 : raw::ColorAttachment::DontCare;
                 p.color[j].store =
                     a.store == MTLStoreActionStore || a.store == MTLStoreActionStoreAndMultisampleResolve;
+                if (a.store == MTLStoreActionMultisampleResolve || a.store == MTLStoreActionStoreAndMultisampleResolve)
+                    if (RMTexture *r =
+                            (RMTexture *)((__bridge MTLRenderPassDescriptor *)c.obj).colorAttachments[j].resolveTexture)
+                        resolves.push_back({j, r});
                 const MTLClearColor k = a.clear;
                 p.color[j].clear[0] = float(k.red);
                 p.color[j].clear[1] = float(k.green);
@@ -419,6 +466,8 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
         case OpEnd:
             if (re)
                 re->end();
+            if (re && !resolvePasses())
+                return false;
             if (be)
                 be->end();
             if (ce) {
@@ -595,6 +644,8 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
     }
     if (re)
         re->end();
+    if (re && !resolvePasses())
+        return false;
     if (be)
         be->end();
     if (ce)

@@ -196,16 +196,20 @@ uint32_t arrayType(MTLTextureDescriptor *d)
     }
 }
 
-// A memoryless Depth32Float_Stencil8 texture, 2D, one level, one sample, no rotation: the raw path's zeta (raw_zeta.h). A stored
-// one stays m2v's: its twin could not hold the raw path's texels (NVK's image is its own memory), and a command buffer m2v
-// replays would read another depth than the one the raw path left.
+// A memoryless depth/stencil texture of a format the raw path renders (raw_zeta.h kZetaFormatInfo), 2D of one sample or 2D
+// multisampled of 2 or 4, one level, no rotation: the raw path's zeta. A stored one stays m2v's: its twin could not hold the raw
+// path's texels (NVK's image is its own memory), and a command buffer m2v replays would read another depth than the one the raw
+// path left.
 bool zetaDescriptor(MTLTextureDescriptor *d)
 {
     static const SEL rotation = NSSelectorFromString(@"rotation");
     const NSUInteger turned =
         [d respondsToSelector:rotation] ? ((NSUInteger (*)(id, SEL))objc_msgSend)(d, rotation) : 0;
-    return d.textureType == MTLTextureType2D && d.mipmapLevelCount <= 1 && d.sampleCount <= 1 && d.arrayLength <= 1 &&
-           d.depth <= 1 && !turned && d.pixelFormat == MTLPixelFormat(raw::kZetaFormat) &&
+    const bool samples = d.textureType == MTLTextureType2D ? d.sampleCount <= 1
+                                                           : d.textureType == MTLTextureType2DMultisample &&
+                                                                 (d.sampleCount == 2 || d.sampleCount == 4);
+    return samples && d.mipmapLevelCount <= 1 && d.arrayLength <= 1 && d.depth <= 1 && !turned &&
+           raw::zetaFormatIndex(uint32_t(d.pixelFormat)) < raw::kZetaFormats &&
            d.storageMode == MTLStorageModeMemoryless;
 }
 

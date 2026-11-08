@@ -184,10 +184,14 @@ int main(int argc, char **argv)
                 fprintf(stderr, "own library: %s\n", error.localizedDescription.UTF8String);
                 return 1;
             }
-            for (const char *out : {"115 | v ycbcr_vert | f ycbcr_converted_frag",
-                                    "125 | v ycbcr_vert | f ycbcr_srgb_frag", "70 | v ycbcr_vert | f ycbcr_codes_frag",
-                                    "90 | v ycbcr_vert | f ycbcr_codes10_frag", "115 | v xr_vert | f xr_bgr10_frag",
-                                    "115 | v xr_vert | f xr_bgra10_frag", "115 | v xr_vert | f xr_planes_frag"}) {
+            for (const char *out :
+                 {"115 | v ycbcr_vert | f ycbcr_converted_frag", "125 | v ycbcr_vert | f ycbcr_srgb_frag",
+                  "70 | v ycbcr_vert | f ycbcr_codes_frag", "90 | v ycbcr_vert | f ycbcr_codes10_frag",
+                  "115 | v xr_vert | f xr_bgr10_frag", "115 | v xr_vert | f xr_bgra10_frag",
+                  "115 | v xr_vert | f xr_planes_frag", "70 | v resolve_vert | f resolve_rgba8_frag",
+                  "70 | v resolve_vert | f resolve_rgba8_srgb_frag", "80 | v resolve_vert | f resolve_bgra8_frag",
+                  "80 | v resolve_vert | f resolve_bgra8_srgb_frag", "92 | v resolve_vert | f resolve_rg11b10f_frag",
+                  "115 | v resolve_vert | f resolve_rgba16f_frag"}) {
                 std::string o = out;
                 const size_t bar = o.find(' ');
                 lines.push_back("@O R ok=1 label=raw.own samples=1 topo=0 ds=0/0 c0=" + o.substr(0, bar) +
@@ -200,9 +204,10 @@ int main(int argc, char **argv)
         }
         id<MTLCommandQueue> queue = [dev newCommandQueue];
         // tagged textures and samplers: BGRA8, for the stand-ins' conversions the integer formats they read codes as
-        // (pack/xr.metal), and for the two-plane store the RGBA16Float stand-in it reads (the texture's class decides the push
-        // words of its read), tagged alike by their sizes
-        auto tagged = [&](MTLPixelFormat f) {
+        // (pack/xr.metal), for the two-plane store the RGBA16Float stand-in it reads (the texture's class decides the push
+        // words of its read), and for the raw path's own resolves 4x multisampled ones (pack/resolve.metal: m2v binds its null
+        // texture for a texture2d_ms argument given another), tagged alike by their sizes
+        auto tagged = [&](MTLPixelFormat f, NSUInteger samples = 1) {
             std::vector<id<MTLTexture>> out;
             for (unsigned t = 0; t < 16; t++) {
                 MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:f
@@ -210,6 +215,11 @@ int main(int argc, char **argv)
                                                                                              height:8 + t
                                                                                           mipmapped:NO];
                 td.usage = MTLTextureUsageShaderRead;
+                if (samples > 1) {
+                    td.textureType = MTLTextureType2DMultisample;
+                    td.sampleCount = samples;
+                    td.usage |= MTLTextureUsageRenderTarget;
+                }
                 td.storageMode = MTLStorageModePrivate;
                 out.push_back([dev newTextureWithDescriptor:td]);
             }
@@ -221,7 +231,10 @@ int main(int argc, char **argv)
             {"f xr_bgra10_frag", tagged(MTLPixelFormatRGBA16Uint)},
             {"f xr_planes_frag", tagged(MTLPixelFormatRG32Uint)},
             {"f two_plane_store", tagged(MTLPixelFormatRGBA16Float)}};
-        auto texturesOf = [&](const std::string &line) -> const std::vector<id<MTLTexture>> & {
+        const std::vector<id<MTLTexture>> multisampled = tagged(MTLPixelFormatBGRA8Unorm, 4);
+        auto texturesOf = [&](const std::string &line, bool ours) -> const std::vector<id<MTLTexture>> & {
+            if (ours && line.find("| v resolve_vert | f resolve_") != std::string::npos)
+                return multisampled;
             for (const auto &[fragment, set] : codeTextures)
                 if (line.find("| " + fragment) != std::string::npos)
                     return set;
@@ -657,7 +670,7 @@ int main(int argc, char **argv)
                     }
                 }
             for (unsigned t = 0; t < 16; t++)
-                [enc setFragmentTexture:texturesOf(line)[t] atIndex:t];
+                [enc setFragmentTexture:texturesOf(line, ours)[t] atIndex:t];
             for (unsigned t = 0; t < 16; t++)
                 [enc setFragmentSamplerState:samplers[t] atIndex:t];
             [enc drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];

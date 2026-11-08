@@ -208,7 +208,7 @@
     } else if (d.storageMode == MTLStorageModeMemoryless) {
         t->_kind = RMTextureMemoryless;
         t->_rawOk = gRM->raw->createMemoryless(uint32_t(d.width), uint32_t(d.height), uint32_t(d.pixelFormat), t->_raw,
-                                               multisampled ? uint32_t(d.sampleCount) : 1);
+                                               std::max<uint32_t>(uint32_t(d.sampleCount), 1));
     } else {
         t->_kind = RMTexturePool;
         // a shared texture (the CPU writes it: replaceRegion) in write-combined memory: its rows need no clean after

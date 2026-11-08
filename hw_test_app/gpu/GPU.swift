@@ -165,10 +165,18 @@ public final class GPU: @unchecked Sendable {
         let out = try buffer(rowBytes * height)
         try await run { commands in
             let blit = commands.makeBlitCommandEncoder()!
-            blit.copy(
-                from: texture, sourceSlice: slice, sourceLevel: level, sourceOrigin: MTLOrigin(),
-                sourceSize: MTLSize(width: width, height: height, depth: 1), to: out, destinationOffset: 0,
-                destinationBytesPerRow: rowBytes, destinationBytesPerImage: 0, options: options)
+            let size = MTLSize(width: width, height: height, depth: 1)
+            // m2v's blit encoder has only the form without options: the other is answered zero and copies nothing
+            if options.isEmpty {
+                blit.copy(
+                    from: texture, sourceSlice: slice, sourceLevel: level, sourceOrigin: MTLOrigin(), sourceSize: size,
+                    to: out, destinationOffset: 0, destinationBytesPerRow: rowBytes, destinationBytesPerImage: 0)
+            } else {
+                blit.copy(
+                    from: texture, sourceSlice: slice, sourceLevel: level, sourceOrigin: MTLOrigin(), sourceSize: size,
+                    to: out, destinationOffset: 0, destinationBytesPerRow: rowBytes, destinationBytesPerImage: 0,
+                    options: options)
+            }
             blit.endEncoding()
         }
         return [UInt8](UnsafeRawBufferPointer(start: out.contents(), count: rowBytes * height))
