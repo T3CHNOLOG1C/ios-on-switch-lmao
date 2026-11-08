@@ -873,9 +873,9 @@ extern "C" int tegra_vic_publish(void)
     }
     service->registerService();
     tegra_vic_present_start();
-    const char *present = "off (block linear in not proven: NVDEC's pictures are copied by the CPU)";
+    const char *present = "off (no 4:2:0 pass-through: NVDEC's pictures are copied by the CPU)";
     if (tegra_vic_present_ready()) {
-        present = "on (block linear in proven)";
+        present = "on";
     } else if (tegra_vic_traits()->blockLinearIn) {
         present = "off (no memory for its page lists)";
     }

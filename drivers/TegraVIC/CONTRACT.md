@@ -215,8 +215,9 @@ one of its buffers, with that buffer's page list, copied 1:1 by the 4:2:0 pass-t
 into the source window read-only; it needs no cache maintenance (NVDEC wrote DRAM, no CPU writes its buffers); the
 destination is cleaned and invalidated before and invalidated after, as for every job, so a GPU that does not snoop the
 CPU's caches reads what VIC wrote. Synchronous on the decoder's thread under the engine lock, with page lists of its own
-(32 MiB a side). Block-linear input is a V4 trait (`blockLinearIn`: a 128x64 picture written in block linear by the CPU
-must copy exactly, to a step); without it the service still publishes, `tegra_vic_present_ready` is false,
-TegraNVDECInfo has no present feature and the decoders copy on the CPU. Refusals (odd sizes, unaddressable surfaces) are
+(32 MiB a side). Block-linear input (`blockLinearIn`) comes with V4's 4:2:0 pass-through: a 128x64 picture written in
+block linear by the CPU copied exactly, to a step, on all 21 boots of 11-05 and 11-06 that checked it, so the check is
+gone. Without the pass-through the service still publishes, `tegra_vic_present_ready` is false, TegraNVDECInfo has no
+present feature and the decoders copy on the CPU. Refusals (odd sizes, unaddressable surfaces) are
 one line per kind per boot and leave the picture invalidated for the decoder's CPU copy. Stats: "TegraVIC: Ns
 present=..." per 5 s window with pictures.
