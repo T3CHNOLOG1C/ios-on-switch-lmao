@@ -14,5 +14,5 @@ static inline void writel(u32 v, volatile void *a) { __asm__ volatile("dmb st" :
 #define writel_relaxed(v, a) __raw_writel(v, a)
 void memcpy_toio(volatile void *dst, const void *src, size_t n);
 void memcpy_fromio(void *dst, const volatile void *src, size_t n);
-static inline void *ioremap(phys_addr_t pa, size_t size) { return (void *)bpxnu_ioremap(pa, size); }
+static inline void *ioremap(phys_addr_t pa, size_t size) { return (void *)switch_linux_ioremap(pa, size, 0); }
 #endif

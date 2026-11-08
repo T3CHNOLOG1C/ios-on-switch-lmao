@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// XNU side of the TegraBPMP shim (bpxnu.h): heap, IOSimpleLock spin locks, event sleeps, device mappings, and the
-// T210 BPMP doorbells that L4T's drivers/irqchip/irq-tegra.c provides (tegra_ring_doorbell /
-// tegra_register_doorbell_handler, soc/tegra/doorbell.h).
+// XNU side of the TegraBPMP shim (bpxnu.h): the T210 BPMP doorbells that L4T's drivers/irqchip/irq-tegra.c provides
+// (tegra_ring_doorbell / tegra_register_doorbell_handler, soc/tegra/doorbell.h).
 //
 // Doorbells (irq-tegra.c tegra_ictlr_init + l4t-hardware-soc-t210 tegra210-soc-base.dtsi lic node):
 //   * inbound, BPMP -> CPU: the ICTLR node's `interrupts = <0 4 4  0 5 4  0 7 4  0 18 4>`, i.e. GIC SPIs 4, 5, 7, 18
@@ -19,16 +18,10 @@
 #include <IOKit/IOService.h>
 #include <IOKit/IOWorkLoop.h>
 #include <IOKit/IOFilterInterruptEventSource.h>
-#include <kern/clock.h>
-#include <kern/sched_prim.h>
 #include "../../ArmGIC/SwitchInterrupts.h"
 #include "include/bpxnu.h"
 
 extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
-// NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
-extern "C" boolean_t ml_get_interrupts_enabled(void);
-// NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
-extern "C" int cpu_number(void);
 
 namespace
 {
@@ -197,113 +190,6 @@ void bpxnu_doorbell_lost(int ch, int mrq)
 	panic("TegraBPMP: doorbell lost: BPMP answered mrq %d on ch %d, no interrupt in 4 s; LIC "
 	      "FIR %08x IER %08x; %s",
 	      mrq, ch, fir, ier, gic);
-}
-
-void bpxnu_log(const char *fmt, ...)
-{
-	char line[256];
-	// NOLINTNEXTLINE(cppcoreguidelines-init-variables): va_start initializes it
-	va_list ap;
-	va_start(ap, fmt);
-	vsnprintf(line, sizeof(line), fmt, ap);
-	va_end(ap);
-	IOLog("%s", line);
-}
-
-void bpxnu_warn(const char *file, int line)
-{
-	IOLog("TegraBPMP: WARN_ON at %s:%d\n", file, line);
-}
-
-void *bpxnu_zalloc(unsigned long size)
-{
-	unsigned long *p = static_cast<unsigned long *>(IOMallocZero(size + 16));
-	if (!p)
-		return nullptr;
-	p[0] = size;
-	return p + 2;
-}
-
-void bpxnu_free(void *p)
-{
-	unsigned long *block = static_cast<unsigned long *>(p) - 2;
-	IOFree(block, block[0] + 16);
-}
-
-void *bpxnu_spin_alloc(void)
-{
-	return IOSimpleLockAlloc();
-}
-
-void bpxnu_spin_free(void *lock)
-{
-	IOSimpleLockFree(static_cast<IOSimpleLock *>(lock));
-}
-
-void bpxnu_spin_lock(void *lock)
-{
-	IOSimpleLockLock(static_cast<IOSimpleLock *>(lock));
-}
-
-void bpxnu_spin_unlock(void *lock)
-{
-	IOSimpleLockUnlock(static_cast<IOSimpleLock *>(lock));
-}
-
-unsigned long bpxnu_spin_lock_irqsave(void *lock)
-{
-	return static_cast<unsigned long>(
-		IOSimpleLockLockDisableInterrupt(static_cast<IOSimpleLock *>(lock)));
-}
-
-void bpxnu_spin_unlock_irqrestore(void *lock, unsigned long flags)
-{
-	IOSimpleLockUnlockEnableInterrupt(static_cast<IOSimpleLock *>(lock),
-					  static_cast<IOInterruptState>(flags));
-}
-
-int bpxnu_interrupts_disabled(void)
-{
-	return static_cast<int>(static_cast<int>(ml_get_interrupts_enabled()) == 0);
-}
-
-int bpxnu_cpu_number(void)
-{
-	return cpu_number();
-}
-
-unsigned long long bpxnu_nanotime(void)
-{
-	uint64_t ns = 0;
-	absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
-	return ns;
-}
-
-void bpxnu_assert_wait(const void *event, unsigned long long deadline_ns)
-{
-	uint64_t deadline = 0;
-	nanoseconds_to_absolutetime(deadline_ns, &deadline);
-	assert_wait_deadline((event_t)event, THREAD_UNINT, deadline);
-}
-
-int bpxnu_block(void)
-{
-	return static_cast<int>(thread_block(THREAD_CONTINUE_NULL) == THREAD_TIMED_OUT);
-}
-
-void bpxnu_wakeup(const void *event)
-{
-	thread_wakeup((event_t)event);
-}
-
-volatile void *bpxnu_ioremap(unsigned long long pa, unsigned long size)
-{
-	const vm_offset_t base =
-		static_cast<vm_offset_t>(pa) & ~static_cast<vm_offset_t>(PAGE_MASK);
-	const vm_size_t span = round_page(static_cast<vm_offset_t>(pa) - base + size);
-	const vm_offset_t va = ml_io_map(base, span);
-	return va ? reinterpret_cast<volatile void *>(va + (static_cast<vm_offset_t>(pa) - base))
-		  : nullptr;
 }
 
 }  // extern "C"
