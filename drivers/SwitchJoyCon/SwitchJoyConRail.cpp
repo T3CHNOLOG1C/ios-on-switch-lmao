@@ -147,10 +147,10 @@
 #include "SwitchJoyConHID.h"
 #include "SwitchJoyConForward.h"
 #include "SwitchJoyConSession.h"
+#include "../../kits/SwitchCAR/SwitchPMC.h"
 #include "../../kits/SwitchDMA/SwitchDcache.h"
+#include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
 #include "../../kits/SwitchTime/SwitchTime.h"
-
-extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 
 namespace {
 constexpr vm_offset_t kCarPA = 0x60006000, kGpioPA = 0x6000D000, kApbMiscPA = 0x70000000, kPinmuxPA = 0x70003000,
@@ -246,11 +246,11 @@ enum : uint32_t {
 enum : uint32_t {
     PMC_NO_IOPOWER = 0x444,
     PMC_PWR_DET_VAL = 0x4e4,
-    PMC_IO_DPD_REQ = 0x5b8,
     PMC_IO_DPD_STATUS = 0x5bc
 };
 
-constexpr uint32_t kPadUartPower = 1u << 2, kPadUartDpd = 1u << 14, kDpdOff = 1u << 30;
+constexpr unsigned kPadUartDpdBit = 14;  // Linux tegra210 io_pad uart .dpd
+constexpr uint32_t kPadUartPower = 1u << 2, kPadUartDpd = 1u << kPadUartDpdBit;
 constexpr uint32_t PP_PINMUX_GLOBAL = 0x40, kClampTristatedInputs = 1u << 0;
 constexpr unsigned kPin5V = TEGRA_GPIO(A, 5);  // the 5 V regulator feeding both rails (SwitchThermal drives it)
 
@@ -551,42 +551,42 @@ OSDefineMetaClassAndStructors(SwitchJoyConPairing, IOService)
 
     static uint32_t rd(Side &s, uint32_t reg)
     {
-        return *reinterpret_cast<volatile uint32_t *>(s.uart + reg);
+        return switch_mmio_read32(s.uart, reg);
     }
 
     static void wr(Side &s, uint32_t reg, uint32_t value)
     {
-        *reinterpret_cast<volatile uint32_t *>(s.uart + reg) = value;
+        switch_mmio_write32(s.uart, reg, value);
     }
 
     void carWrite(uint32_t reg, uint32_t value)
     {
-        *reinterpret_cast<volatile uint32_t *>(car + reg) = value;
+        switch_mmio_write32(car, reg, value);
     }
 
     uint32_t carRead(uint32_t reg)
     {
-        return *reinterpret_cast<volatile uint32_t *>(car + reg);
+        return switch_mmio_read32(car, reg);
     }
 
     void pinWrite(uint32_t reg, uint32_t value)
     {
-        *reinterpret_cast<volatile uint32_t *>(pinmux + reg) = value;
+        switch_mmio_write32(pinmux, reg, value);
     }
 
     uint32_t pinRead(uint32_t reg)
     {
-        return *reinterpret_cast<volatile uint32_t *>(pinmux + reg);
+        return switch_mmio_read32(pinmux, reg);
     }
 
     void pmcWrite(uint32_t reg, uint32_t value)
     {
-        *reinterpret_cast<volatile uint32_t *>(pmc + reg) = value;
+        switch_mmio_write32(pmc, reg, value);
     }
 
     uint32_t pmcRead(uint32_t reg)
     {
-        return *reinterpret_cast<volatile uint32_t *>(pmc + reg);
+        return switch_mmio_read32(pmc, reg);
     }
 
     void gpioMask(unsigned pin, uint32_t reg, bool on);
@@ -663,15 +663,15 @@ OSDefineMetaClassAndStructors(SwitchJoyConRail, IOService)
 {
     const uint32_t bit = 1u << (pin & 7);
     const uint32_t at = (pin >> 5) * 0x100 + ((pin >> 3) & 3) * 4 + reg;
-    *reinterpret_cast<volatile uint32_t *>(gpio + at) = (bit << 8) | (on ? bit : 0);
-    (void)*reinterpret_cast<volatile uint32_t *>(gpio + at);
+    switch_mmio_write32(gpio, at, (bit << 8) | (on ? bit : 0));
+    (void)switch_mmio_read32(gpio, at);
 }
 
 // One pin's bit of CNF, OE, OUT or IN (IN follows the pad whenever its input receiver is on, GPIO or UART mode).
 unsigned SwitchJoyConRail::gpioBit(unsigned pin, uint32_t reg)
 {
     const uint32_t at = (pin >> 5) * 0x100 + ((pin >> 3) & 3) * 4 + reg;
-    return (*reinterpret_cast<volatile uint32_t *>(gpio + at) >> (pin & 7)) & 1;
+    return (switch_mmio_read32(gpio, at) >> (pin & 7)) & 1;
 }
 
 SwitchJoyConRail::Side *SwitchJoyConRail::sideFor(const OSObject *source)
@@ -1864,7 +1864,7 @@ void SwitchJoyConRail::describe(Side &s, char *buffer, size_t size)
         mux[1], mux[2], mux[3], gpioBit(cfg->detectPin, GPIO_IN), driven(cfg->chargePin), driven(kPin5V),
         flag(pmcRead(PMC_IO_DPD_STATUS), kPadUartDpd), flag(pmcRead(PMC_NO_IOPOWER), kPadUartPower),
         flag(pmcRead(PMC_PWR_DET_VAL), kPadUartPower),
-        *reinterpret_cast<volatile uint32_t *>(apbMisc + PP_PINMUX_GLOBAL) & kClampTristatedInputs);
+        switch_mmio_read32(apbMisc, PP_PINMUX_GLOBAL) & kClampTristatedInputs);
 }
 
 // The pads both rails share (see the header): UART pads powered and out of deep power-down (a bounded handshake, as
@@ -1875,9 +1875,7 @@ void SwitchJoyConRail::preparePads(const char *when)
 {
     char fixed[96] = "";
     if (pmcRead(PMC_IO_DPD_STATUS) & kPadUartDpd) {
-        pmcWrite(PMC_IO_DPD_REQ, kDpdOff | kPadUartDpd);
-        for (unsigned us = 0; us < 250 && (pmcRead(PMC_IO_DPD_STATUS) & kPadUartDpd); ++us)
-            IODelay(1);
+        (void)switch_pmc_io_pad_on(kPadUartDpdBit);
         strlcat(fixed,
                 pmcRead(PMC_IO_DPD_STATUS) & kPadUartDpd ? " deep power-down stuck on," : " deep power-down off,",
                 sizeof(fixed));
@@ -1887,10 +1885,9 @@ void SwitchJoyConRail::preparePads(const char *when)
         (void)pmcRead(PMC_NO_IOPOWER);
         strlcat(fixed, " IO power on,", sizeof(fixed));
     }
-    volatile uint32_t *global = reinterpret_cast<volatile uint32_t *>(apbMisc + PP_PINMUX_GLOBAL);
-    if (*global & kClampTristatedInputs) {
-        *global = *global & ~kClampTristatedInputs;
-        (void)*global;
+    if (switch_mmio_read32(apbMisc, PP_PINMUX_GLOBAL) & kClampTristatedInputs) {
+        switch_mmio_write32_flush(apbMisc, PP_PINMUX_GLOBAL,
+                                  switch_mmio_read32(apbMisc, PP_PINMUX_GLOBAL) & ~kClampTristatedInputs);
         strlcat(fixed, " tristate input clamp off,", sizeof(fixed));
     }
     if (!fixed[0])
@@ -2088,12 +2085,12 @@ bool SwitchJoyConRail::start(IOService *provider)
 {
     if (!IOService::start(provider))
         return false;
-    car = reinterpret_cast<volatile uint8_t *>(ml_io_map(kCarPA, 0x1000));
-    gpio = reinterpret_cast<volatile uint8_t *>(ml_io_map(kGpioPA, 0x1000));
-    apbMisc = reinterpret_cast<volatile uint8_t *>(ml_io_map(kApbMiscPA, 0x1000));
-    pinmux = reinterpret_cast<volatile uint8_t *>(ml_io_map(kPinmuxPA, 0x1000));
-    uarts = reinterpret_cast<volatile uint8_t *>(ml_io_map(kUartPA, 0x1000));
-    pmc = reinterpret_cast<volatile uint8_t *>(ml_io_map(kPmcPA, 0x1000));
+    car = switch_mmio_map(kCarPA, 0x1000);
+    gpio = switch_mmio_map(kGpioPA, 0x1000);
+    apbMisc = switch_mmio_map(kApbMiscPA, 0x1000);
+    pinmux = switch_mmio_map(kPinmuxPA, 0x1000);
+    uarts = switch_mmio_map(kUartPA, 0x1000);
+    pmc = switch_mmio_map(kPmcPA, 0x1000);
     loop = IOWorkLoop::workLoop();
     if (!car || !gpio || !apbMisc || !pinmux || !uarts || !pmc || !loop) {
         panic("SwitchJoyCon: cannot map CAR/GPIO/APB_MISC/pinmux/UART/PMC or make a work loop");
