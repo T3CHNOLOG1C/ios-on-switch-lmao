@@ -15,8 +15,9 @@
 // DMA, I2S and jack state and the codec's power and volume registers. The register fields are read at the moment of the
 // line: between streams the I2S is off (en 0) and, 5 s after the last one, the codec's power registers are 0.
 // The Tegra backend is interrupt driven throughout: the ADMA period interrupt moves the positions, the codec's IRQ
-// line reports the jack, and an interrupt that does not arrive, a DMA that stalls or runs fast, or hardware that does
-// not answer, panics with one line.
+// line reports the jack, and an interrupt that does not arrive, a DMA that stalls or runs fast, or SoC hardware that
+// does not answer, panics with one line. An RT5639 that does not answer is one line: absent at boot, the null backend
+// (as switch-no-audio); lost later, off for the boot while the I2S plays on.
 //
 // The OLED's audio path. Sources: the shipped DTB (oled-sku3.dtb in bl33.bin = CTCaer
 // switch-l4t-platform-t210-nx tegra210b01-fric.dts over tegra210b01-nx-common.dtsi:864-950), switchroot Android
@@ -191,6 +192,8 @@ bool SwitchAudio::start(IOService *provider)
         return false;
     uint32_t off = 0;
     tegra = PE_parse_boot_argn("switch-no-audio", &off, sizeof(off)) == 0 || off == 0u;
+    if (tegra && !SwitchRT5639::present())
+        tegra = false;
     tegraCapture = tegra;
     const IOOptionBits options = static_cast<IOOptionBits>(kIODirectionInOut) |
                                  static_cast<IOOptionBits>(kIOMemoryKernelUserShared) |

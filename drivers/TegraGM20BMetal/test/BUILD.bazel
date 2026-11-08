@@ -122,7 +122,7 @@ host_test(
         "//drivers/NativeMetal:NativeBridgeMetalFrontend.mm",
         "//drivers/NativeMetal:bridge/NativeMetalObjects.rs",
         "//drivers/TegraGM20BMetal:TegraGM20BMetalPlugin.mm",
-        "//drivers/TegraGM20BMetal:raw/runtime/RawMetal.mm",
+        "//drivers/TegraGM20BMetal:raw/runtime/RawMetalEvents.mm",
         "//third_party/m2v/crates/metal2vulkan-runtime:sources",
     ],
 )

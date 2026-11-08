@@ -1127,18 +1127,46 @@ static void expectPanic(const std::function<void()> &body, const std::string &ne
     }
 }
 
+// The panel stops answering with a contact down: one line, the contact lifted, the panel powered down, no panic; the
+// next display power-on brings it up from scratch.
 static void scenarioNack()
 {
     bringUp();
-    expectPanic(
-        [] {
-            gSchedule(gNow + 1000000, [] {
-                gFtm4.scan({contactEvent(3, 0, 400, 400)});
-                gControllers[3].devices.erase(0x49);  // the panel stops answering
-            });
-            gRunUntil(gNow + 50000000);
-        },
-        "SwitchTouch: reading the FTM4 event FIFO failed: I2C error -4", "NACK on the chain's write half");
+    gSchedule(gNow + 1000000, [] {
+        gFtm4.scan({contactEvent(3, 0, 400, 400)});
+    });
+    gSchedule(gNow + 9000000, [] {
+        gFtm4.scan({contactEvent(5, 0, 420, 400)});
+        gControllers[3].devices.erase(0x49);
+    });
+    gRunUntil(gNow + 50000000);
+    check(logged("IOLog: SwitchTouch: off: reading the FTM4 event FIFO failed: I2C error -4"), "NACK: one line");
+    check(!gReports.empty() && downContacts(gReports.back().report) == 0, "NACK: the contact lifted");
+    check(gResetLine == 0 && (gPmic.regs[0x2f] & 0xc0) == 0, "NACK: panel powered down");
+    check(!IOTimerEventSource::last->armed, "NACK: no watchdog while off");
+    gControllers[3].devices[0x49] = &gFtm4;
+    switch_touch_display_power(true);
+    fireWatchdog();
+    gRunUntil(gNow + 1000000);
+    check(gResetLine == 1 && gFtm4.intEnabled && gFtm4.sensing, "NACK: up again at the next display power-on");
+}
+
+// No FTM4 answers at all: one line, the panel's interrupt never enabled, no watchdog, no panic. LDO6 stays on for the
+// ALS that shares it.
+static void scenarioAbsent()
+{
+    gControllers[5].devices[0x3c] = &gPmic;
+    for (unsigned bus = 1; bus <= 5; ++bus)
+        gControllers[bus].bus = bus;
+    gAfterEvent = deliver;
+    check(switch_touch_start() == 0, "absent: switch_touch_start");
+    fireWatchdog();
+    gRunUntil(gNow + 1000000);
+    check(logged("IOLog: SwitchTouch: off: FTM4 on I2C3 0x49 did not come up: I2C error -4, chip id 0000"),
+          "absent: one line");
+    check(!logged("SwitchTouch: started"), "absent: not started");
+    check(!IOTimerEventSource::last->armed, "absent: no watchdog");
+    check((gPmic.regs[0x2f] & 0xc0) == 0xc0, "absent: LDO6 left on");
 }
 
 // The channel's first end of count never reaches the CPU (never booted): one line, DMA off, touch on PIO. No panic.
@@ -1520,6 +1548,11 @@ TEST(SwitchTouch, Untimed)
 TEST(SwitchTouch, Nack)
 {
     run(scenarioNack);
+}
+
+TEST(SwitchTouch, Absent)
+{
+    run(scenarioAbsent);
 }
 
 TEST(SwitchTouch, DmaFirstEndOfCountLost)

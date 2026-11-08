@@ -150,7 +150,7 @@ void SwitchAudio::jackSettled(OSObject *owner, IOTimerEventSource *)
 {
     auto *self = static_cast<SwitchAudio *>(owner);
     const uint16_t status = SwitchRT5639::read(rt5639::INT_IRQ_ST);
-    const bool in = SwitchRT5639::jackPlugged(status);
+    const bool in = SwitchRT5639::answering() && SwitchRT5639::jackPlugged(status);
     const bool first = !self->jackKnown;
     if (first) {
         self->jackKnown = true;
@@ -268,7 +268,7 @@ void SwitchAudio::codecStart()
         codecLoop->addEventSource(idleTimer) != kIOReturnSuccess) {
         panic("SwitchAudio: codec work loop setup failed");
     }
-    codec.probe(false, tegraCapture);
+    codec.probe(true, tegraCapture);
     // PV6 as a GPIO input (CNF set, output off), so its IN bit is the pad's level; no event source, so its interrupt
     // stays masked: the codec's IRQ reports the jack.
     if (!tegra_gpio_interrupt_nub(kJackDetect, TEGRA_GPIO_EDGE_BOTH))

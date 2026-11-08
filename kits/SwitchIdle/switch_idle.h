@@ -47,9 +47,13 @@ void switch_idle_set_frames_started(void (*started)(void));  // NOLINT(modernize
 void switch_emc_gpu_submit(void);
 
 /* Debug kernels: time in each state (timebase ticks), entries, and C7 requests the firmware returned from at once,
- * since boot. Returns 0, or -1 for a core that does not exist. */
+ * since boot; frame lines (switch_idle_note_frame) that were the first interrupt the core took back from C7, so paid
+ * its exit; and the exits its wake timer ended (switch_idle_c7_exit: count, sum and largest in ticks, and how many came
+ * back after the deadline). Returns 0, or -1 for a core that does not exist. */
 struct switch_idle_counts {
     uint64_t residency[2], entries[2], skipped;
+    uint64_t frame_wakes;
+    uint64_t timer_exits, exit_ticks, exit_max, exits_late;
 };
 
 int switch_idle_read_counts(uint32_t cpu, struct switch_idle_counts *out);
