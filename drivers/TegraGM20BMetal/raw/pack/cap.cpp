@@ -35,6 +35,7 @@ uint64_t gSubmit;
 bool gDecode;  // RAWCAP_LOG or NVDEC_WRITETHROUGH given
 std::map<uint32_t, std::unique_ptr<nvdec::Decoder>>
     gChannels;  // r8-rawca: one decoder per channel (each has its own state)
+uint32_t gLastChannel;
 const uint8_t *host(uint64_t va, uint64_t bytes);
 
 extern "C" void cap_describe(uint64_t va)
@@ -166,6 +167,7 @@ extern "C" void pushcount_exec(const struct TegraGM20BAbiExec *e)
     init();
     gSubmit++;
     gC.submits++;
+    gLastChannel = e->channel;
     PushParse p = {};
     nvdec::Decoder *dec = nullptr;
     if (gDecode) {
@@ -207,6 +209,24 @@ extern "C" void pushcount_exec(const struct TegraGM20BAbiExec *e)
         dec->submitEnd();
         fflush(gLog);
     }
+}
+
+// What reached the GPU, for the raw harnesses' checks (decoding only: RAWCAP_LOG or NVDEC_WRITETHROUGH set): the draws of
+// every channel so far, and a 3D method's value after the last submission
+extern "C" uint64_t cap_draws(void)
+{
+    std::lock_guard<std::mutex> l(gLock);
+    uint64_t n = 0;
+    for (auto &c : gChannels)
+        n += c.second->draws;
+    return n;
+}
+
+extern "C" uint32_t cap_reg3d(uint32_t mthd)
+{
+    std::lock_guard<std::mutex> l(gLock);
+    const auto it = gChannels.find(gLastChannel);
+    return it == gChannels.end() ? 0 : it->second->reg3d(mthd);
 }
 
 extern "C" void pushcount_report(const char *what)
