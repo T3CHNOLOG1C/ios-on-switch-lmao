@@ -11,6 +11,7 @@
 #include "raw_owned.h"
 #include "raw_samples.h"
 #include "raw_slm.h"
+#include "raw_stamps.h"
 #include "raw_target.h"
 #include "raw_tiled_cache.h"
 #include "TegraGM20BLayout.h"
@@ -419,7 +420,8 @@ bool Device::open(const char *packPath, uint64_t stack, std::string &err, Role r
 bool Device::init(std::string &err)
 {
     if (!k_.alloc(kTicCount * 32, true, tic_) || !k_.alloc(kTscCount * 32, true, tsc_) ||
-        !k_.alloc(0x1000, true, root_) || !k_.alloc(0x10000, true, zero_) || !k_.alloc(0x1000, true, tickets_)) {
+        !k_.alloc(0x1000, true, root_) || !k_.alloc(0x10000, true, zero_) || !k_.alloc(0x1000, true, tickets_) ||
+        !k_.alloc(kStampSlots * sizeof(StampSlot), true, stamps_)) {
         err = k_.error();
         return false;
     }
@@ -434,6 +436,7 @@ bool Device::init(std::string &err)
     memset(root_.cpu, 0, root_.bytes);
     memset(zero_.cpu, 0, zero_.bytes);
     memset(tickets_.cpu, 0, tickets_.bytes);
+    memset(stamps_.cpu, 0, stamps_.bytes);
     // texture header 0: NIL's null descriptor (block linear over the zero page), what NVK keeps at index 0
     uint32_t *t0 = reinterpret_cast<uint32_t *>(tic_.cpu);
     t0[0] = 0x2491d;
@@ -2326,8 +2329,8 @@ std::string Device::vaOwner(uint64_t va)
         in(push_.bo, push_.bo.bytes, "the push ring") || in(upload_.bo, upload_.bo.bytes, "the upload ring") ||
         in(root_, root_.bytes, "the root table") || in(tic_, tic_.bytes, "the texture headers") ||
         in(tsc_, tsc_.bytes, "the sampler headers") || in(zero_, zero_.bytes, "the zero page") ||
-        in(tickets_, tickets_.bytes, "the interlock tickets") || chunk(chunks_, "a pool chunk") ||
-        chunk(blChunks_, "a block-linear chunk") ||
+        in(tickets_, tickets_.bytes, "the interlock tickets") || in(stamps_, stamps_.bytes, "the GPU time stamps") ||
+        chunk(chunks_, "a pool chunk") || chunk(blChunks_, "a block-linear chunk") ||
         std::any_of(std::begin(zChunks_), std::end(zChunks_),
                     [&](const std::vector<Chunk> &z) {
                         return chunk(z, "a zeta chunk");
@@ -2455,12 +2458,14 @@ CommandBuffer *Device::begin()
         std::lock_guard<std::mutex> l(lock_);
         if (commitCount_ % 64 == 0)
             trimBackings();
+        cb.stamp = stampOf(commitCount_);
     }
     // submission prologue, as NVK opens each submission: header/sampler caches (headers written since), constant, shader data and
     // texture caches, and the instruction caches where commit finds the heap grew
     uint64_t va;
     uint32_t *start = reinterpret_cast<uint32_t *>(alloc(push_, 64 * 4, 256, va));
     Push p{start, start + 64};
+    emitStamp(p, stamps_.va + stampOffset(cb.stamp), cb.stamp);
     p.m(INVALIDATE_SAMPLER_CACHE_NO_WFI, 0);
     p.m(INVALIDATE_TEXTURE_HEADER_CACHE_NO_WFI, 0);
     p.inc(INVALIDATE_SHADER_CACHES_NO_WFI, {kInvalidateConstant});
@@ -2658,10 +2663,14 @@ bool CommandBuffer::commit(uint32_t &seqno)
         emitSlm(p, slmVa, slmArea(slmGiven, d.k_.info().tpc_count));
         segments_.insert(segments_.begin(), {va, uint32_t(p.at - head), 0});
     }
-    if (tiledCache(d.k_.info()) && !segments_.empty()) {
+    if (!segments_.empty()) {
         uint64_t va;
-        auto *tail = reinterpret_cast<uint32_t *>(d.alloc(d.push_, kTiledCacheFlushWords * 4, 4, va));
-        segment(tail, tiledCacheFlush(tail));
+        auto *tail = reinterpret_cast<uint32_t *>(d.alloc(d.push_, (kTiledCacheFlushWords + kStampWords) * 4, 4, va));
+        Push p{tail, tail + kTiledCacheFlushWords + kStampWords};
+        if (tiledCache(d.k_.info()))
+            p.at = tiledCacheFlush(p.at);
+        emitStamp(p, d.stamps_.va + stampOffset(stamp), stamp);
+        segment(tail, p.at);
     }
     // CPU writes the GPU reads: to memory, by address (no set/way operation, nothing global)
     uint64_t cleaned = 0;
@@ -2719,6 +2728,14 @@ bool CommandBuffer::commit(uint32_t &seqno)
     }
     d.stats.commits++;
     return true;
+}
+
+bool Device::gpuNanoseconds(uint32_t stamp, uint64_t &ns) const
+{
+    if (!stamp || !stamps_.cpu)
+        return false;
+    const auto *slot = reinterpret_cast<const volatile StampSlot *>(stamps_.cpu + stampOffset(stamp));
+    return stampedNanoseconds(*slot, stamp, ns);
 }
 
 void CommandBuffer::abandon()

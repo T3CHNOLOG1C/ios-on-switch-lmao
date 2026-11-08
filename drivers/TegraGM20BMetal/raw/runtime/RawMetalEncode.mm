@@ -667,6 +667,7 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
     for (RMTexture *t : planesWritten)  // a write the surface's seed does not show: its image is converted again
         t->_imageCurrent = false;
     cb->_seqno = seq;
+    cb->_stamp = cb->_segs.empty() ? rc->stamp : 0;
     d.stats.levelPasses += levelPasses;
     gRM->stats.draws += rc->draws;
     gRM->stats.passes += rc->passes;
