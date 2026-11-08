@@ -12,6 +12,7 @@
 #include "../ArmGIC/ArmGIC.h"
 #include "../../kits/SwitchDMA/SwitchDcache.h"
 #include "../../kits/SwitchDMA/SwitchHwPage.h"
+#include "../../kits/SwitchDT/SwitchDTProperty.h"
 #include "../../kits/SwitchMMIO/SwitchMMIO.h"
 #include "../../diagnostics/switch/SwitchPowerTrail.h"
 #include "../SwitchSuspend/SwitchSleepSteps.h"
@@ -315,14 +316,11 @@ static void gicV2IpiObserved(uint32_t cpu, uint32_t acknowledge)
 
 IOService *ArmCpu::probe(IOService *provider, SInt32 *score)
 {
-    const OSData *type = OSDynamicCast(OSData, provider->getProperty("device_type"));
-    const OSData *reg = OSDynamicCast(OSData, provider->getProperty("reg"));
     uint32_t id = 0;
-    if ((type == nullptr) || (type->getLength() != 4) || (memcmp(type->getBytesNoCopy(), "cpu", 4) != 0) ||
-        (reg == nullptr) || (reg->getLength() < sizeof(id))) {
+    if (!switch_dt_string_is(provider, "device_type", "cpu") ||
+        !switch_dt_read_prefix(provider, "reg", &id, sizeof(id))) {
         return nullptr;
     }
-    memcpy(&id, reg->getBytesNoCopy(), sizeof(id));
     if (ml_get_cpu_number(id) != ml_get_boot_cpu_number() &&
         (ml_get_cpu_number(id) < 0 || ml_get_cpu_number(id) >= ARMCPU_SMP_SLOTS)) {
         return nullptr;
@@ -343,31 +341,17 @@ bool ArmCpu::mapGic()
         }
         return false;
     }
-    const OSData *ranges = OSDynamicCast(OSData, soc->getProperty("ranges"));
-    const OSData *reg = OSDynamicCast(OSData, gic->getProperty("reg"));
-    const OSData *compatible = OSDynamicCast(OSData, gic->getProperty("compatible"));
     uint64_t bus[3];
     uint64_t regions[4];
     // A GICv2 ADT supplies distributor and CPU-interface MMIO, not a redistributor.
-    gicV2 = compatible != nullptr &&
-            ((compatible->getLength() == sizeof("arm,cortex-a15-gic") &&
-              memcmp(compatible->getBytesNoCopy(), "arm,cortex-a15-gic", sizeof("arm,cortex-a15-gic")) == 0) ||
-             (compatible->getLength() == sizeof("arm,gic-400") &&
-              memcmp(compatible->getBytesNoCopy(), "arm,gic-400", sizeof("arm,gic-400")) == 0));
-    const bool gicV3 = compatible != nullptr && compatible->getLength() == sizeof("arm,gic-v3") &&
-                       memcmp(compatible->getBytesNoCopy(), "arm,gic-v3", sizeof("arm,gic-v3")) == 0;
-    const bool valid = (ranges != nullptr) && (ranges->getLength() == sizeof(bus)) && (reg != nullptr) &&
-                       (reg->getLength() == sizeof(regions)) && (gicV2 || gicV3);
-    if (valid) {
-        memcpy(bus, ranges->getBytesNoCopy(), sizeof(bus));
-        memcpy(regions, reg->getBytesNoCopy(), sizeof(regions));
-    }
-    const OSData *strideProperty = OSDynamicCast(OSData, gic->getProperty("redistributor-stride"));
-    if (strideProperty != nullptr && strideProperty->getLength() == sizeof(uint64_t)) {
-        memcpy(&gRedistStride, strideProperty->getBytesNoCopy(), sizeof(uint64_t));
-        if (gRedistStride != 0x20000 && gRedistStride != 0x30000 && gRedistStride != 0x40000) {
-            gRedistStride = 0;
-        }
+    gicV2 = switch_dt_string_is(gic, "compatible", "arm,cortex-a15-gic") ||
+            switch_dt_string_is(gic, "compatible", "arm,gic-400");
+    const bool gicV3 = switch_dt_string_is(gic, "compatible", "arm,gic-v3");
+    const bool valid =
+        (gicV2 || gicV3) && switch_dt_value(soc, "ranges", &bus) && switch_dt_value(gic, "reg", &regions);
+    if (switch_dt_value(gic, "redistributor-stride", &gRedistStride) && gRedistStride != 0x20000 &&
+        gRedistStride != 0x30000 && gRedistStride != 0x40000) {
+        gRedistStride = 0;
     }
     armcpu_gic_stride = static_cast<uint32_t>(gRedistStride);
     soc->release();
@@ -653,11 +637,9 @@ void ArmCpu::enableGic() const
 bool ArmCpu::start(IOService *provider)
 {
     uint32_t physical = 0;
-    const OSData *reg = OSDynamicCast(OSData, provider->getProperty("reg"));
-    if (!reg || reg->getLength() < sizeof(physical)) {
+    if (!switch_dt_read_prefix(provider, "reg", &physical, sizeof(physical))) {
         return false;
     }
-    memcpy(&physical, reg->getBytesNoCopy(), sizeof(physical));
     logicalId = static_cast<uint32_t>(ml_get_cpu_number(physical));
     if (logicalId >= ARMCPU_SMP_SLOTS) {
         return false;
@@ -776,22 +758,17 @@ static bool psciConduit(bool *hvc)
     if (psci == nullptr) {
         return false;
     }
-    const OSData *method = OSDynamicCast(OSData, psci->getProperty("method"));
     bool ok = false;
-    if (method != nullptr && method->getLength() == 4 && memcmp(method->getBytesNoCopy(), "smc", 4) == 0) {
+    if (switch_dt_string_is(psci, "method", "smc")) {
         *hvc = false;
         ok = true;
-    } else if (method != nullptr && method->getLength() == 4 && memcmp(method->getBytesNoCopy(), "hvc", 4) == 0) {
+    } else if (switch_dt_string_is(psci, "method", "hvc")) {
         *hvc = true;
         ok = true;
     }
     if (armcpu_gic_version == 2) {
-        const OSData *compatible = OSDynamicCast(OSData, psci->getProperty("compatible"));
-        const bool known = (compatible != nullptr) &&
-                           ((compatible->getLength() == sizeof("arm,psci-0.2") &&
-                             (memcmp(compatible->getBytesNoCopy(), "arm,psci-0.2", sizeof("arm,psci-0.2")) == 0)) ||
-                            (compatible->getLength() == sizeof("arm,psci-1.0") &&
-                             (memcmp(compatible->getBytesNoCopy(), "arm,psci-1.0", sizeof("arm,psci-1.0")) == 0)));
+        const bool known = switch_dt_string_is(psci, "compatible", "arm,psci-0.2") ||
+                           switch_dt_string_is(psci, "compatible", "arm,psci-1.0");
         ok = ok && !*hvc && known && gNativeSmp;
     }
     psci->release();
