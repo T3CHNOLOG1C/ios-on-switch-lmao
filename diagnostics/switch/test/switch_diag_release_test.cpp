@@ -10,6 +10,9 @@
 #include "bazel/testing/source_text.h"
 #include "diagnostics/switch/test/switch_diag_debug_view.h"
 
+// The host toolchain's debug builds define DEBUG; a release kernel defines neither.
+#undef DEBUG
+#undef DEVELOPMENT
 extern "C" {
 #include "diagnostics/switch/SwitchDiag.h"
 }
