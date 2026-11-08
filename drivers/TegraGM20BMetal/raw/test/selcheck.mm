@@ -118,6 +118,9 @@ int main(int argc, char **argv)
             {"RMQueue", "addResidencySets:count:"},
             {"RMQueue", "removeResidencySet:"},
             {"RMQueue", "removeResidencySets:count:"},
+            {"RMRenderEncoder", "useResidencySet:"},
+            {"RMRenderEncoder", "useResidencySets:count:"},
+            {"RMBlitEncoder", "useResidencySet:"},
         };
         int bad = 0, own = 0, m2v = 0;
         for (const Use &u : uses) {
@@ -161,6 +164,7 @@ int main(int argc, char **argv)
             id<MTLCommandBuffer> cb = [q commandBuffer];
             ((void (*)(id, SEL, id))objc_msgSend)(cb, sel_registerName("useResidencySet:"), set);
             id<MTLBlitCommandEncoder> b = [cb blitCommandEncoder];
+            ((void (*)(id, SEL, id))objc_msgSend)(b, sel_registerName("useResidencySet:"), set);
             [b copyFromTexture:keep[0]
                       sourceSlice:0
                       sourceLevel:0
