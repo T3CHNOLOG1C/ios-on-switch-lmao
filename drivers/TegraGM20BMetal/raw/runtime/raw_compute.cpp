@@ -21,7 +21,7 @@ enum : uint32_t {
     INVALIDATE_SAMPLER_CACHE_NO_WFI = 0x1424,
 };
 
-constexpr uint32_t kRootBytes = 0x800, kSetBytes = 0x100, kRootSets = 0x38, kRootPush = 0x700, kUploadChunk = 0x100;
+constexpr uint32_t kRootBytes = 0x800, kRootSets = 0x38, kRootPush = 0x700, kUploadChunk = 0x100;
 constexpr uint32_t kPcasInvalidateSchedule = 3;
 constexpr uint32_t kInvalidateData = 1u << 4, kInvalidateConstant = 1u << 12;
 constexpr uint32_t kEncoderWords = 1 << 12;
@@ -34,16 +34,51 @@ constexpr uint32_t qmdCbufLo(uint32_t i)
     return 29 + 2 * i;
 }
 
+// The states made, by device and key (a pack kernel's keyHash, a record's address): a device lives as long as its process
 std::mutex gStatesLock;
-std::map<std::pair<const Device *, const ComputeRecord *>, ComputeState> gStates;
+std::map<std::pair<const Device *, uint64_t>, ComputeState> gStates;
+
+// m2v's DispatchRegion push field (metal2vulkan lower/dispatch.rs region_bytes): the region's first threadgroup, Metal's
+// threadgroup size packed 10 bits an axis (each size - 1), the grid in threads
+bool regionWords(const uint32_t groups[3], const uint32_t threads[3], uint32_t out[8])
+{
+    uint32_t nominal = 0;
+    for (int i = 0; i < 3; i++) {
+        if (!threads[i] || threads[i] > 1024)
+            return false;
+        nominal |= (threads[i] - 1) << (10 * i);
+    }
+    const uint32_t w[8] = {0, 0, 0, nominal, groups[0] * threads[0], groups[1] * threads[1], groups[2] * threads[2], 0};
+    memcpy(out, w, sizeof w);
+    return true;
+}
 
 }  // namespace
+
+const ComputeState *computeState(Device &dev, uint64_t keyHash)
+{
+    std::lock_guard<std::mutex> hold(gStatesLock);
+    if (auto it = gStates.find({&dev, keyHash}); it != gStates.end())
+        return &it->second;
+    const PackKernel *k = dev.pack().findKernel(keyHash);
+    if (!k)
+        return nullptr;
+    ComputeState c;
+    c.rec = k;
+    if (!dev.place(k->program, c.program, c.data)) {
+        dev.stats.heapFull++;
+        return nullptr;
+    }
+    const PackProgram &p = dev.pack().section<PackProgram>(PackPrograms)[k->program];
+    memcpy(c.cbufType, p.cbufType, std::min<size_t>(sizeof c.cbufType, p.cbufs));
+    return &gStates.emplace(std::make_pair(&dev, keyHash), c).first->second;
+}
 
 const ComputeState *placeCompute(Device &dev, const ComputeRecord &r)
 {
     std::lock_guard<std::mutex> hold(gStatesLock);
-    auto it = gStates.find({&dev, &r});
-    if (it != gStates.end())
+    const uint64_t key = uint64_t(uintptr_t(&r));
+    if (auto it = gStates.find({&dev, key}); it != gStates.end())
         return &it->second;
     const size_t dataAt = r.data.empty() ? r.code.size() : (r.code.size() + 0xff) & ~size_t(0xff);
     std::vector<uint8_t> slot(dataAt + r.data.size(), 0);
@@ -59,11 +94,12 @@ const ComputeState *placeCompute(Device &dev, const ComputeRecord &r)
         }
     }
     dev.stats.programsPlaced++;
-    ComputeState k;
-    k.rec = &r;
-    k.program = uint32_t(at);
-    k.data = r.data.empty() ? 0 : dev.heap_.va + at + dataAt;
-    return &gStates.emplace(std::make_pair(&dev, &r), k).first->second;
+    ComputeState c;
+    c.rec = &r.kernel;
+    memcpy(c.cbufType, r.cbufType, sizeof c.cbufType);
+    c.program = uint32_t(at);
+    c.data = r.data.empty() ? 0 : dev.heap_.va + at + dataAt;
+    return &gStates.emplace(std::make_pair(&dev, key), c).first->second;
 }
 
 ComputeEncoder::ComputeEncoder(CommandBuffer &cb, Device &dev) : cb_(cb), dev_(dev)
@@ -127,7 +163,7 @@ void ComputeEncoder::setSampler(uint32_t slot, const Sampler *s)
         samplers_[slot] = s;
 }
 
-bool ComputeEncoder::dispatch(const uint32_t groups[3], const char **why)
+bool ComputeEncoder::dispatch(const uint32_t groups[3], const uint32_t threads[3], const char **why)
 {
     if (!state_) {
         *why = "a dispatch without a kernel";
@@ -139,15 +175,28 @@ bool ComputeEncoder::dispatch(const uint32_t groups[3], const char **why)
         *why = "a grid taller or deeper than 65535 threadgroups";
         return false;
     }
-    const ComputeRecord &r = *state_->rec;
+    const PackKernel &r = *state_->rec;
+    uint32_t region[8] = {};
+    if (r.regionWord >= 0 && !regionWords(groups, threads, region)) {
+        *why = "a threadgroup m2v's dispatch region cannot name";
+        return false;
+    }
+    const uint32_t setBytes = std::max<uint32_t>((r.setBytes + 255) & ~255u, 256);
     uint64_t setVa = 0;
-    uint32_t *set = reinterpret_cast<uint32_t *>(dev_.alloc(dev_.upload_, kSetBytes, 256, setVa));
-    memset(set, 0, kSetBytes);
-    for (const ComputeEntry &e : r.entries) {
+    uint32_t *set = reinterpret_cast<uint32_t *>(dev_.alloc(dev_.upload_, setBytes, 256, setVa));
+    memset(set, 0, setBytes);
+    for (uint32_t i = 0; i < r.entries; i++) {
+        const PackKernelEntry &e = r.entry[i];
         uint32_t *at = set + e.offset / 4;
-        if (e.kind == ComputeBuffer) {
+        if (e.kind == KernelBuffer) {
             const Bound &b = bufs_[e.slot];
-            uint32_t range = std::min<uint32_t>((b.size + 15) & ~15u, 0x10000u);
+            // m2v's descriptor (bind/instantiate.rs descriptor_range): from the bind offset rounded down to 16, its
+            // residual a push word no record names
+            if (b.va & 15) {
+                *why = "a buffer bound at an offset that is not a multiple of 16";
+                return false;
+            }
+            uint32_t range = (b.size + 15) & ~15u;
             if (e.window && e.window < range)
                 range = e.window;
             if (b.buffer && !b.buffer->wc && b.buffer->cpu)
@@ -156,7 +205,7 @@ bool ComputeEncoder::dispatch(const uint32_t groups[3], const char **why)
             at[1] = uint32_t(b.va >> 32);
             at[2] = b.va ? range : 0;
             at[3] = 0;
-        } else if (e.kind == ComputeTexture) {
+        } else if (e.kind == KernelTexture) {
             const Texture *t = textures_[e.slot];
             if (t && !t->tic) {
                 *why = "a texture the raw path cannot sample";
@@ -176,9 +225,11 @@ bool ComputeEncoder::dispatch(const uint32_t groups[3], const char **why)
     root[5] = groups[2];
     root[kRootSets / 4 + 0] = uint32_t(setVa);
     root[kRootSets / 4 + 1] = uint32_t(setVa >> 32);
-    root[kRootSets / 4 + 2] = kSetBytes;
+    root[kRootSets / 4 + 2] = r.setBytes;
     for (uint32_t m = r.pushMask; m; m &= m - 1)
-        root[kRootPush / 4 + __builtin_ctz(m)] = r.push[__builtin_ctz(m)];
+        root[kRootPush / 4 + __builtin_ctz(m)] = r.pushWords[__builtin_ctz(m)];
+    if (r.regionWord >= 0)
+        memcpy(root + kRootPush / 4 + r.regionWord, region, std::min<size_t>(sizeof region, 4 * (32 - r.regionWord)));
     uint64_t qmdVa = 0;
     uint32_t *qmd = reinterpret_cast<uint32_t *>(dev_.alloc(dev_.upload_, kQmdWords * 4, 256, qmdVa));
     memcpy(qmd, r.qmd, sizeof r.qmd);
@@ -189,7 +240,7 @@ bool ComputeEncoder::dispatch(const uint32_t groups[3], const char **why)
         if (!(qmd[kQmdCbufValid] >> i & 1))
             continue;
         uint64_t va = 0;
-        switch (cbufKind(r.cbufType[i])) {
+        switch (cbufKind(state_->cbufType[i])) {
         case CbufRoot:
             va = rootVa;
             break;
@@ -206,7 +257,7 @@ bool ComputeEncoder::dispatch(const uint32_t groups[3], const char **why)
         qmd[qmdCbufLo(i)] = uint32_t(va);
         qmd[qmdCbufLo(i) + 1] = (qmd[qmdCbufLo(i) + 1] & ~0xffu) | uint32_t(va >> 32);
     }
-    dev_.stats.uploadBytes += kSetBytes + kRootBytes + kQmdWords * 4;
+    dev_.stats.uploadBytes += setBytes + kRootBytes + kQmdWords * 4;
     room(8);
     p_.m(SEND_PCAS_A, uint32_t(qmdVa >> 8), SUBC_COMPUTE);
     p_.m(SEND_SIGNALING_PCAS_B, kPcasInvalidateSchedule, SUBC_COMPUTE);

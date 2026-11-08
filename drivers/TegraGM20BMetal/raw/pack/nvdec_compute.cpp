@@ -18,6 +18,10 @@ enum : uint32_t {
     kSendPcasA = 0x02b4,
     kInvalidateTextureDataCacheNoWfi = 0x1288,
     kInvalidateSamplerCacheNoWfi = 0x1424,
+    kTscPoolA = 0x155c,
+    kTscPoolB = 0x1560,
+    kTicPoolA = 0x1574,
+    kTicPoolB = 0x1578,
     kProgramRegionA = 0x1608,
     kProgramRegionB = 0x160c,
 };
@@ -134,7 +138,25 @@ void Decoder::dispatch(uint64_t qmd)
     static const bool probe = getenv("NVDEC_KERNELS") != nullptr;
     if (probe)
         probeKernel(q, prog);
+    // set 0's handles whose sampler index is 0 read no sampler (a texture read: m2v's handle names none, and NVK hands
+    // index 0 out like any other)
+    Layout handles;
     layout_ = nullptr;
+    if (field(q, 640, 640)) {
+        const uint64_t root = (uint64_t(field(q, 960, 967)) << 32) | q[29];
+        uint32_t set[4] = {};
+        read(root + 0x38, set, sizeof set);
+        const uint64_t setVa = (uint64_t(set[1]) << 32) | set[0];
+        std::vector<uint32_t> w(std::min<uint32_t>(set[2], 0x1000) / 4);
+        if (setVa && read(setVa, w.data(), w.size() * 4)) {
+            handles.bytes = uint32_t(w.size() * 4);
+            handles.ranges = {{0, handles.bytes}};
+            for (uint32_t k = 0; k < w.size(); k++)
+                if (w[k] && !(w[k] >> 20))
+                    handles.textureOnly.insert(4 * k);
+            layout_ = &handles;
+        }
+    }
     for (int i = 0; i < 8; i++) {
         if (!field(q, 640 + i, 640 + i))
             continue;
@@ -152,6 +174,7 @@ void Decoder::dispatch(uint64_t qmd)
             fprintf(out_, "  cb%d size=%x data=%s\n", i, size, contentHash(addr, size, 1, true, false).c_str());
         }
     }
+    layout_ = nullptr;
 }
 
 // NVDEC_KERNELS: what a probe dispatch shows of its kernel (raw_compute.h KernelRecord), for the pack's generator: the QMD, the
@@ -179,17 +202,48 @@ void Decoder::probeKernel(const uint32_t *q, const std::string &prog)
             push += w;
         }
     fprintf(out_, "%s\n", push.c_str());
+    // m2v's DispatchRegion push field (metal2vulkan lower/dispatch.rs region_bytes): base 0, the nominal threadgroup size 10
+    // bits an axis (size - 1), the grid in threads, 0; the grid's threadgroups are the QMD's
+    const uint32_t *pw = r + 0x700 / 4, raster[3] = {field(q, 384, 415), field(q, 416, 431), field(q, 432, 447)};
+    for (int k = 0; k + 8 <= 32; k++) {
+        bool region = !pw[k] && !pw[k + 1] && !pw[k + 2] && pw[k + 3] && !pw[k + 7];
+        for (int i = 0; region && i < 3; i++)
+            region = pw[k + 4 + i] == (((pw[k + 3] >> (10 * i)) & 0x3ff) + 1) * raster[i];
+        if (region) {
+            fprintf(out_, "K region %d\n", k);
+            break;
+        }
+    }
     const uint64_t set = (uint64_t(r[0x38 / 4 + 1]) << 32) | r[0x38 / 4];
     const uint32_t setBytes = r[0x38 / 4 + 2];
+    fprintf(out_, "K set %x\n", setBytes);
     if (!set || setBytes > 0x1000)
         return;
     std::vector<uint32_t> w(setBytes / 4);
     read(set, w.data(), setBytes);
-    for (uint32_t k = 0; k + 4 <= w.size(); k += 4) {
-        const uint64_t va = (uint64_t(w[k + 1]) << 32) | w[k];
-        uint32_t tag = 0;
-        if (va >> 32 && read(va, &tag, 4) && (tag & 0xffff0000u) == 0xc0de0000u)
-            fprintf(out_, "K entry %u buffer %u %x\n", k * 4, tag & 0xff, w[k + 2]);
+    // the set's words: a buffer descriptor (an address of tagged bytes, its range), else a texture and sampler handle (tic |
+    // tsc << 20) by the header each names: a texture's size and a sampler's words
+    const uint64_t ticPool = (uint64_t(reg_[1][kTicPoolA >> 2] & 0xff) << 32) | reg_[1][kTicPoolB >> 2];
+    const uint64_t tscPool = (uint64_t(reg_[1][kTscPoolA >> 2] & 0xff) << 32) | reg_[1][kTscPoolB >> 2];
+    for (uint32_t k = 0; k < w.size(); k++) {
+        if (k % 4 == 0 && k + 4 <= w.size()) {
+            const uint64_t va = (uint64_t(w[k + 1]) << 32) | w[k];
+            uint32_t tag = 0;
+            if (va >> 32 && read(va, &tag, 4) && (tag & 0xffff0000u) == 0xc0de0000u) {
+                fprintf(out_, "K entry %u buffer %u %x\n", k * 4, tag & 0xff, w[k + 2]);
+                k += 3;
+                continue;
+            }
+        }
+        if (!w[k])
+            continue;
+        const uint32_t tic = w[k] & 0xfffff, tsc = w[k] >> 20;
+        uint32_t t[8] = {}, s[8] = {};
+        if (tic && read(ticPool + uint64_t(tic) * 32, t, sizeof t))
+            fprintf(out_, "K entry %u texture %u %u\n", k * 4, (t[4] & 0xffff) + 1, (t[5] & 0xffff) + 1);
+        if (tsc && read(tscPool + uint64_t(tsc) * 32, s, sizeof s))
+            fprintf(out_, "K entry %u sampler %x %x %x %x %x %x %x %x\n", k * 4, s[0], s[1], s[2], s[3], s[4], s[5],
+                    s[6], s[7]);
     }
 }
 

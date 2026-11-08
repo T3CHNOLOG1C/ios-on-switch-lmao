@@ -893,6 +893,7 @@ private:
     friend class BlitEncoder;
     friend class ComputeEncoder;
     friend const ComputeState *placeCompute(Device &dev, const ComputeRecord &r);
+    friend const ComputeState *computeState(Device &dev, uint64_t keyHash);
 
     struct Ring {
         Bo bo;

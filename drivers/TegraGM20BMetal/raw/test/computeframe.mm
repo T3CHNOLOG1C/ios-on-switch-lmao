@@ -3,24 +3,28 @@
 // (runtime/raw_compute.h), over the mock GPU; test/computeeq.sh compares the two decodes (pack/eqcheck.py's DISPATCH records).
 //   computeframe nvk <nvk dylib> <cache dir> <metallib> <kernel> <threads x,y,z> <groups x,y,z>
 //     with NVDEC_KERNELS set, its log's K lines are the kernel's record (pack/nvdec_compute.cpp)
-//   computeframe raw <pack.bin> <nvk log> <programs.bin> <groups x,y,z>
+//   computeframe raw <pack.bin> <nvk log> <programs.bin> <threads x,y,z> <groups x,y,z>
+//   computeframe pack <pack.bin> - <key> <threads x,y,z> <groups x,y,z>: the pack's kernel of that raw_compute_key.h key
 // Both bind every buffer slot 0..kSlots-1 to the same tagged bytes (pack/probe.mm's scheme).
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #include <cstdio>
 #include <fstream>
+#include <map>
 #include <sstream>
 #include <string>
 #include <vector>
 #include "NativeBridgeMetalFrontend.h"
 #include "bridge/NativeMetalObjects.h"
 #include "../runtime/raw_compute.h"
+#include "../runtime/raw_compute_key.h"
 
 extern "C" void pushcount_report(const char *what);
 
 namespace {
 
-constexpr uint32_t kSlots = 8, kTagBytes = 4096;
+constexpr uint32_t kSlots = 8, kTextures = 8, kTagBytes = 4096;
+constexpr uint32_t kRgba8Unorm = 70;
 
 std::vector<uint32_t> tag(uint32_t slot)
 {
@@ -29,6 +33,37 @@ std::vector<uint32_t> tag(uint32_t slot)
     for (uint32_t k = 1; k < t.size(); k++)
         t[k] = 0xA0000000u | slot << 16 | k;
     return t;
+}
+
+// Texture slot t: (16 + t) x (8 + t) RGBA8 texels of a pattern; sampler slot s: max LOD clamp 1 + s / 2 (probecompute.mm's tags)
+uint32_t texel(uint32_t t, uint32_t x, uint32_t y)
+{
+    return 0x01000000u * t ^ x * 0x00010307u ^ y * 0x00070103u;
+}
+
+std::vector<uint32_t> texels(uint32_t t)
+{
+    std::vector<uint32_t> v((16 + t) * (8 + t));
+    for (uint32_t y = 0; y < 8 + t; y++)
+        for (uint32_t x = 0; x < 16 + t; x++)
+            v[y * (16 + t) + x] = texel(t, x, y);
+    return v;
+}
+
+// FRAME_BIG_BUFFER=<bytes>: slot kBigSlot bound to a buffer of that many bytes instead of its tag (a storage range past
+// a constant buffer's 64 KiB)
+constexpr uint32_t kBigSlot = 1;
+
+uint32_t bigBuffer()
+{
+    const char *bytes = getenv("FRAME_BIG_BUFFER");
+    return bytes ? uint32_t(strtoul(bytes, nullptr, 0)) : 0;
+}
+
+void fillBig(uint8_t *p, uint32_t bytes)
+{
+    for (uint32_t i = 0; i < bytes; i++)
+        p[i] = uint8_t(i * 7 + (i >> 9));
 }
 
 bool size3(const char *text, uint32_t v[3])
@@ -66,6 +101,32 @@ int runNvk(char **argv)
     [enc setComputePipelineState:ps];
     for (uint32_t s = 0; s < kSlots; s++)
         [enc setBytes:tag(s).data() length:kTagBytes atIndex:s];
+    if (const uint32_t big = bigBuffer()) {
+        id<MTLBuffer> b = [dev newBufferWithLength:big options:MTLResourceStorageModeShared];
+        fillBig(static_cast<uint8_t *>(b.contents), big);
+        [enc setBuffer:b offset:0 atIndex:kBigSlot];
+    }
+    if (const char *length = getenv("FRAME_THREADGROUP_MEMORY"))
+        [enc setThreadgroupMemoryLength:strtoul(length, nullptr, 0) atIndex:0];
+    [dev newSamplerStateWithDescriptor:[MTLSamplerDescriptor new]];
+    for (uint32_t t = 0; t < kTextures; t++) {
+        const char *format = getenv("FRAME_TEXTURE_FORMAT");
+        MTLTextureDescriptor *d = [MTLTextureDescriptor
+            texture2DDescriptorWithPixelFormat:format ? MTLPixelFormat(atoi(format)) : MTLPixelFormatRGBA8Unorm
+                                         width:16 + t
+                                        height:8 + t
+                                     mipmapped:NO];
+        d.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+        id<MTLTexture> x = [dev newTextureWithDescriptor:d];
+        [x replaceRegion:MTLRegionMake2D(0, 0, 16 + t, 8 + t)
+             mipmapLevel:0
+               withBytes:texels(t).data()
+             bytesPerRow:4 * (16 + t)];
+        [enc setTexture:x atIndex:t];
+        MTLSamplerDescriptor *sd = [MTLSamplerDescriptor new];
+        sd.lodMaxClamp = 1 + t / 2.0f;
+        [enc setSamplerState:[dev newSamplerStateWithDescriptor:sd] atIndex:t];
+    }
     [enc dispatchThreadgroups:MTLSizeMake(groups[0], groups[1], groups[2])
         threadsPerThreadgroup:MTLSizeMake(threads[0], threads[1], threads[2])];
     [enc endEncoding];
@@ -108,57 +169,81 @@ bool program(const char *path, const std::string &id, raw::ComputeRecord &r)
     return false;
 }
 
-// The first dispatch's K lines of an NVDEC_KERNELS log
+// The first dispatch's K lines of an NVDEC_KERNELS log (pack/nvdec_compute.cpp), read as pack/mkpack.py reads them
 bool record(const char *log, const char *programs, raw::ComputeRecord &r)
 {
     std::ifstream in(log);
     std::string line, prog;
     bool qmd = false;
+    std::map<int, uint32_t> push;
+    raw::PackKernel &k = r.kernel;
+    k.regionWord = -1;
+    auto entry = [&](uint32_t offset, uint8_t kind, uint32_t slot, uint32_t window) {
+        if (k.entries < 16)
+            k.entry[k.entries++] = {uint16_t(offset), kind, uint8_t(slot), window};
+    };
     while (std::getline(in, line)) {
+        unsigned offset, slot, bytes, w, h, t[8];
         if (!qmd && line.rfind("K qmd=", 0) == 0) {
             std::istringstream words(line.substr(6, line.find(' ', 6) - 6));
-            std::string w;
-            for (uint32_t i = 0; i < raw::kQmdWords && std::getline(words, w, ','); i++)
-                r.qmd[i] = uint32_t(strtoul(w.c_str(), nullptr, 16));
+            std::string word;
+            for (uint32_t i = 0; i < raw::kQmdWords && std::getline(words, word, ','); i++)
+                k.qmd[i] = uint32_t(strtoul(word.c_str(), nullptr, 16));
             prog = line.substr(line.find(" prog=") + 6);
             qmd = true;
         } else if (qmd && line.rfind("K push", 0) == 0) {
             std::istringstream words(line.substr(6));
-            std::string w;
-            while (words >> w) {
-                const int k = atoi(w.c_str());
-                r.pushMask |= 1u << k;
-                r.push[k] = uint32_t(strtoul(w.c_str() + w.find('=') + 1, nullptr, 16));
-            }
-        } else if (qmd && line.rfind("K entry ", 0) == 0) {
-            unsigned offset, slot, bytes;
-            if (sscanf(line.c_str(), "K entry %u buffer %u %x", &offset, &slot, &bytes) == 3)
-                r.entries.push_back(
-                    {uint16_t(offset), raw::ComputeBuffer, uint8_t(slot), bytes < kTagBytes ? bytes : 0});
+            std::string word;
+            while (words >> word)
+                push[atoi(word.c_str())] = uint32_t(strtoul(word.c_str() + word.find('=') + 1, nullptr, 16));
+        } else if (qmd && sscanf(line.c_str(), "K region %u", &slot) == 1) {
+            k.regionWord = int8_t(slot);
+        } else if (qmd && sscanf(line.c_str(), "K set %x", &bytes) == 1) {
+            k.setBytes = uint16_t(bytes);
+        } else if (qmd && sscanf(line.c_str(), "K entry %u buffer %u %x", &offset, &slot, &bytes) == 3) {
+            entry(offset, raw::KernelBuffer, slot, bytes < kTagBytes ? bytes : 0);
+        } else if (qmd && sscanf(line.c_str(), "K entry %u texture %u %u", &offset, &w, &h) == 3) {
+            if (w < 16 || h != w - 8)
+                return false;
+            entry(offset, raw::KernelTexture, w - 16, 0);
+        } else if (qmd && sscanf(line.c_str(), "K entry %u sampler %x %x %x %x %x %x %x %x", &offset, &t[0], &t[1],
+                                 &t[2], &t[3], &t[4], &t[5], &t[6], &t[7]) == 9) {
+            const uint32_t lod = (t[2] >> 12) & 0xfff;  // max LOD clamp, 4.8 fixed: the probe's tag 1 + slot / 2
+            if (lod < 256 || lod % 128)
+                return false;
+            entry(offset, raw::KernelSampler, (lod - 256) / 128, 0);
         } else if (qmd && line.rfind("DISPATCH", 0) == 0) {
             break;
         }
     }
+    for (const auto &[word, value] : push)
+        if (k.regionWord < 0 || word < k.regionWord || word >= k.regionWord + 8) {
+            k.pushMask |= 1u << word;
+            k.pushWords[word] = value;
+        }
     return qmd && program(programs, prog, r);
 }
 
 int runRaw(char **argv)
 {
-    uint32_t groups[3];
-    if (!size3(argv[5], groups))
+    uint32_t threads[3], groups[3];
+    if (!size3(argv[5], threads) || !size3(argv[6], groups))
         return 2;
-    raw::ComputeRecord rec;
-    if (!record(argv[3], argv[4], rec)) {
-        fprintf(stderr, "no kernel record in %s\n", argv[3]);
-        return 1;
-    }
     raw::Device dev;
     std::string err;
     if (!dev.open(argv[2], 0, err)) {
         fprintf(stderr, "NO DEVICE %s\n", err.c_str());
         return 1;
     }
-    const raw::ComputeState *k = raw::placeCompute(dev, rec);
+    // the pack's kernel of key argv[4] (pack mode), or the record of an NVK run's log
+    raw::ComputeRecord rec;
+    const bool packed = !strcmp(argv[1], "pack");
+    if (!packed && !record(argv[3], argv[4], rec)) {
+        fprintf(stderr, "no kernel record in %s\n", argv[3]);
+        return 1;
+    }
+    const raw::ComputeState *k =
+        packed ? raw::computeState(dev, raw::computeKeyHash(argv[4])) : raw::placeCompute(dev, rec);
     raw::CommandBuffer *cb = dev.begin();
     if (!k || !cb) {
         fprintf(stderr, "no kernel or command buffer\n");
@@ -168,8 +253,33 @@ int runRaw(char **argv)
     enc.setState(k);
     for (uint32_t s = 0; s < kSlots; s++)
         enc.setBytes(s, tag(s).data(), kTagBytes);
+    raw::Buffer big;
+    if (const uint32_t bytes = bigBuffer()) {
+        if (!dev.createBuffer(bytes, big))
+            return 1;
+        fillBig(big.cpu, bytes);
+        enc.setBuffer(kBigSlot, &big, 0);
+    }
+    std::vector<raw::Texture> textures(kTextures);
+    std::vector<raw::Sampler> samplers(kTextures);
+    for (uint32_t t = 0; t < kTextures; t++) {
+        if (!dev.createTexture(16 + t, 8 + t, kRgba8Unorm, textures[t], false, getenv("FRAME_TILED") != nullptr))
+            return 1;
+        if (textures[t].cpu && !textures[t].blockLinear) {
+            const std::vector<uint32_t> v = texels(t);
+            for (uint32_t y = 0; y < 8 + t; y++)
+                memcpy(textures[t].cpu + y * textures[t].pitch, &v[y * (16 + t)], 4 * (16 + t));
+            cb->clean(textures[t].cpu, uint64_t(textures[t].pitch) * (8 + t));
+        }
+        raw::SamplerDesc sd;
+        sd.lodMax = 1 + t / 2.0f;
+        if (!dev.createSampler(sd, samplers[t]))
+            return 1;
+        enc.setTexture(t, &textures[t]);
+        enc.setSampler(t, &samplers[t]);
+    }
     const char *why = nullptr;
-    if (!enc.dispatch(groups, &why)) {
+    if (!enc.dispatch(groups, threads, &why)) {
         fprintf(stderr, "refused: %s\n", why);
         return 1;
     }
@@ -190,10 +300,11 @@ int main(int argc, char **argv)
     @autoreleasepool {
         if (argc >= 8 && !strcmp(argv[1], "nvk"))
             return runNvk(argv);
-        if (argc >= 6 && !strcmp(argv[1], "raw"))
+        if (argc >= 7 && (!strcmp(argv[1], "raw") || !strcmp(argv[1], "pack")))
             return runRaw(argv);
         fprintf(stderr, "usage: computeframe nvk <nvk> <cache> <metallib> <kernel> <threads x,y,z> <groups x,y,z>\n"
-                        "       computeframe raw <pack.bin> <nvk log> <programs.bin> <groups x,y,z>\n");
+                        "       computeframe raw <pack.bin> <nvk log> <programs.bin> <threads x,y,z> <groups x,y,z>\n"
+                        "       computeframe pack <pack.bin> - <key> <threads x,y,z> <groups x,y,z>\n");
         return 2;
     }
 }

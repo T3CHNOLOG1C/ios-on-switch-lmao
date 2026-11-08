@@ -91,7 +91,7 @@ def option(name: str, required: bool = True) -> str | None:
     return None
 
 
-BUILT = ('probe', 'libmock_iokit.dylib', 'own.metallib')
+BUILT = ('probe', 'probecompute', 'libmock_iokit.dylib', 'own.metallib')
 # Another framework's states (their lines keep lib=, tools/gpu/rawpack.py): the probe loads that library from the
 # crawl's root
 FRAMEWORK = re.compile(r' lib=/System/Library/(?:Private)?Frameworks/\w+\.framework/default\.metallib ')
@@ -215,6 +215,48 @@ def build(work: Path, bridge: Path, metal_abi: Path) -> None:
             work / 'probe',
         ]
     )
+    run(
+        [
+            'xcrun',
+            'clang++',
+            '-O2',
+            '-std=c++17',
+            '-fobjc-arc',
+            '-Wno-deprecated-declarations',
+            *maps,
+            '-I',
+            METAL,
+            '-I',
+            metal_abi.parent,
+            '-x',
+            'objective-c++',
+            HERE / 'probecompute.mm',
+            METAL / 'NativeBridgeMetalFrontend.mm',
+            '-x',
+            'c++',
+            RAW / 'runtime/raw_metallib.cpp',
+            '-x',
+            'none',
+            bridge,
+            '-L',
+            work,
+            '-lmock_iokit',
+            '-Wl,-rpath,@executable_path',
+            '-lobjc',
+            '-framework',
+            'Foundation',
+            '-framework',
+            'Metal',
+            '-framework',
+            'IOSurface',
+            '-framework',
+            'IOKit',
+            '-framework',
+            'CoreVideo',
+            '-o',
+            work / 'probecompute',
+        ]
+    )
     own = ('ycbcr', 'xr')
     for name in own:
         run(
@@ -243,6 +285,8 @@ def split_buckets(corpus: Path, work: Path, count: int) -> list[Path]:
         for line in f:
             if line.startswith('R ') and (' label=com.apple.coreanimation.' in line or FRAMEWORK.search(line)):
                 lines[packfile.fnv(line.split(' ', 3)[3].encode()) % count].append(line)
+            elif line.startswith('D ok=1 '):  # a compute dispatch shape (probecompute.mm)
+                lines[packfile.fnv(line.encode()) % count].append(line)
                 warm = warm or (line if 'f downsample_4_frag' in line else '')
     dirs = []
     for i, part in enumerate(lines):
@@ -333,9 +377,28 @@ def probe_runs(tools: Path, d: Path, nvk: Path, qc: Path, env: dict[str, str]) -
         tail = [line for line in r.stderr.splitlines() if line.startswith('probe:')]
         said.append(f'{name}: {tail[-1] if tail else "?"}')
 
+    def kernels(name: str, extra: dict[str, str]) -> None:
+        root = library_root(qc)
+        with open(d / f'{name}.out', 'w') as out:
+            r = subprocess.run(
+                [str(tools / 'probecompute'), str(nvk), str(d / 'cache'), str(d / 'corpus.log')],
+                env=dict(env, PROBE_LIB_ROOT=root, PROBE_DATA_LIBS=str(Path(root).parent / 'data'), **extra),
+                stdout=out,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+        if r.returncode:
+            sys.exit(f'rawpack: {d.name} compute probe {name} failed:\n{r.stderr[-4000:]}')
+        tail = [line for line in r.stderr.splitlines() if line.startswith('probecompute:')]
+        said.append(f'{name}: {tail[-1] if tail else "?"}')
+
+    compute = any(line.startswith('D ok=1 ') for line in (d / 'corpus.log').read_text().splitlines())
     shutil.rmtree(d / 'cache', ignore_errors=True)
     (d / 'cache').mkdir()
     probe('warm', {})
+    if compute:
+        kernels('computewarm', {})
     run([sys.executable, HERE / 'mkprograms.py', d / 'programs.bin', d / 'cache'])
     for size in (256, 16, 4096):
         probe(
@@ -355,6 +418,11 @@ def probe_runs(tools: Path, d: Path, nvk: Path, qc: Path, env: dict[str, str]) -
             'RAWCAP_PROGRAMS': str(d / 'programs.bin'),
         },
     )
+    if compute:
+        kernels(
+            'compute',
+            {'NVDEC_KERNELS': '1', 'RAWCAP_LOG': str(d / 'compute.log'), 'RAWCAP_PROGRAMS': str(d / 'programs.bin')},
+        )
     shutil.rmtree(d / 'cache')
     return f'rawpack: {d.parent.name + "/" if d.name == "barrier" else ""}{d.name}: ' + '; '.join(said)
 
@@ -385,7 +453,8 @@ def probe_env() -> dict[str, str]:
 def stamp(pack_bin: Path, stack: int) -> None:
     """Write the stack key into pack.bin's header."""
     pack = bytearray(pack_bin.read_bytes())
-    struct.pack_into('<Q', pack, 8 + 16 + 8 * 2 * 8, stack)  # PackHeader.stack (after the section table)
+    # PackHeader.stack, after the section table
+    struct.pack_into('<Q', pack, 8 + 16 + 8 * 2 * packfile.SECTIONS, stack)
     pack_bin.write_bytes(pack)
 
 

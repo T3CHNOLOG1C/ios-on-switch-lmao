@@ -24,12 +24,15 @@ enum PackSectionId {
     PackBlob,
     PackStrings,
     PackHeap,
+    PackKernels,
     PackSectionCount
 };
 
+constexpr uint32_t kPackVersion = 6;
+
 struct PackHeader {
     char magic[8];                                    // "GM20BPK1"
-    uint32_t version, programs, pipelines, samplers;  // version 5
+    uint32_t version, programs, pipelines, samplers;  // kPackVersion
     PackSection section[PackSectionCount];
     uint64_t stack;  // the build's stack key (build-tegra-gm20b-metal.py: the plugin is compiled with the same one)
 };
@@ -128,6 +131,39 @@ struct PackPipeline {
     uint32_t pushWords[32];
 };
 
+// A compute state at one threadgroup shape (runtime/raw_compute.h): NVK's work for the kernel m2v made of it, keyed by
+// computeKeyHash. Its program is a PackProgram whose code starts its slot (no shader header); its constant buffers are the
+// program's (PackProgram::cbufType, QMD slot c its cbuf c)
+enum PackKernelEntryKind : uint8_t {
+    KernelBuffer,
+    KernelTexture,
+    KernelSampler
+};
+
+// A word range of set 0 and the Metal argument it holds: a buffer's {address, range} descriptor (its range the bound bytes
+// padded to 16, at most `window` bytes where the function proves it reads no further: m2v's descriptor_range), a texture's
+// header index or a sampler's (tic | tsc << 20, either alone in a word or both)
+struct PackKernelEntry {
+    uint16_t offset;
+    uint8_t kind;  // PackKernelEntryKind
+    uint8_t slot;
+    uint32_t window;  // buffers: 0 the whole buffer
+};
+
+struct PackKernel {
+    uint64_t keyHash;
+    uint32_t keyString;
+    uint16_t program;  // index in the programs section
+    uint8_t entries;
+    int8_t regionWord;  // root push word of m2v's DispatchRegion field (two uvec4: base, nominal size, grid), -1: none
+    uint32_t qmd[64];   // NVK's QMD (QMDV01_07), its program offset, grid and constant buffer addresses zero
+    uint16_t setBytes;  // set 0's size in the root table's set address
+    uint16_t pad;
+    uint32_t pushMask;  // root table [0x700, 0x780): the constant words m2v's push ranges write, and which
+    uint32_t pushWords[32];
+    PackKernelEntry entry[16];
+};
+
 struct PackInitMethod {
     uint16_t subc, mthd;
     uint32_t data, reloc;
@@ -161,6 +197,7 @@ struct InitAddresses {
 uint32_t relocated(const PackInitMethod &m, const InitAddresses &a);
 static_assert(sizeof(PackPipeline) == 36 + 16 * 8 + 4 + 32 * 4, "pack layout");
 static_assert(sizeof(PackProgram) == 32, "pack layout");
+static_assert(sizeof(PackKernel) == 16 + 256 + 8 + 128 + 128, "pack layout");
 
 class Pack {
 public:
@@ -184,6 +221,7 @@ public:
     }
 
     const PackPipeline *find(uint64_t keyHash, PackForm form = PackForm::Default) const;  // nullptr: not in the pack
+    const PackKernel *findKernel(uint64_t keyHash) const;                                 // nullptr: not in the pack
 
     const char *string(uint32_t off) const
     {

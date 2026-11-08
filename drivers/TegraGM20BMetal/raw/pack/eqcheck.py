@@ -138,12 +138,12 @@ def fold_runs(events: list[dict]) -> list[dict]:
 
 
 def rename_all(out: list[list[dict]]) -> list[list[dict]]:
-    # persistent resources renamed in order of first appearance in draws (clears of textures no draw uses, such as m2v's
-    # initialisation of new textures, would otherwise shift every name)
+    # persistent resources renamed in order of first appearance in draws and dispatches (clears of textures no draw
+    # uses, such as m2v's initialisation of new textures, would otherwise shift every name)
     names = {}
     for events in out:
         for e in events:
-            if e['head'].startswith('DRAW'):
+            if e['head'].startswith(('DRAW', 'DISPATCH')):
                 e['lines'] = [rename(line, names, True) for line in e['lines']]
     for events in out:
         for e in events:
