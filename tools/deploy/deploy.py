@@ -13,7 +13,8 @@ Steps:
                    images' NAME.SII.NNN parts), AppleDouble files by name; nothing else on the FAT. Refused
                    when the card's iOS is another kind than the build's (its System volume is not the IPSW's)
   3 overlay        <Data>/Switch/overlay := the package's overlay/; when its /Applications changed, writes
-                   <Data>/datamigrator/migrate so the next boot registers the apps (system_apps.py); also removes the
+                   <Data>/datamigrator/migrate so the next boot registers the apps (system_apps.py; --rerun-migration
+                   writes it regardless, e.g. after a migration the power cut short); also removes the
                    r3 Wi-Fi bring-up's configd Debug logging profile (STALE_LOGGING_PROFILES) if a card still has
                    it; and stages hekate's "Dump Joy-Con BT" (the FAT's switchroot/joycon_mac.ini, only read) as
                    <Data>/Switch/bluetooth/{host-address, joycon-pairing.plist}, removed when the FAT has none
@@ -122,6 +123,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument('--harvest-script', help="harvest.py's path in the checkout (//deploy passes it)")
     parser.add_argument('--launchd-check', nargs='+', metavar='LABEL', default=None)
     parser.add_argument('--awdl', choices=('on', 'off'))
+    parser.add_argument('--rerun-migration', action='store_true')
     parser.add_argument('--reset-gallery-snapshots', nargs='+', metavar='BUNDLE', default=None)
     parser.add_argument('--no-eject', action='store_true')
     parser.add_argument('--no-joycon-pairing', action='store_true')
@@ -164,6 +166,7 @@ def _plan(args: argparse.Namespace, changes: list, removed: list, pairing: dict 
         steps.append('Joy-Con pairing: ' + (controllers or 'remove any staged dump'))
     steps.append('remove the GPU bundle' if args.remove_gpu else 'GPU bundle: stage what changed')
     steps += [f'AWDL {args.awdl} (<Data>/Switch/awdl-enable)'] if args.awdl else []
+    steps += ['run the data migration again on the next boot'] if args.rerun_migration else []
     gallery = args.reset_gallery_snapshots
     steps += ['reset gallery snapshots of {}'.format(' '.join(gallery))] if gallery else []
     steps += [f'launchd check {args.launchd_check}'] if args.launchd_check else []
@@ -203,7 +206,7 @@ def _write(args: argparse.Namespace, data_root: Path, fat: object, pairing: dict
         cards.sync_boot_entry(fat_root, args.boot_package, log)
     apps = system_apps.digest(data_root)
     cards.sync_overlay(data_root, args.boot_package, log)
-    system_apps.request_migration(data_root, apps, log)
+    system_apps.request_migration(data_root, apps, log, force=args.rerun_migration)
     remove_stale_logging_profiles(data_root, log)
     if not args.no_joycon_pairing:
         joycon_pairing.stage(data_root, pairing, log)

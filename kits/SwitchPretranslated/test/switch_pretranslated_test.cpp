@@ -354,6 +354,16 @@ TEST(Trust, AListedRootFileWithAPinnedCdhash)
     EXPECT_TRUE(switch_pt_trusted(&setuid));
 }
 
+TEST(Trust, ApplicationsAsTheIpswShipsThem)
+{
+    struct switch_pt_trust_facts facts = trusted();
+    facts.gid = 80;
+    facts.mode = 0100775;
+    EXPECT_TRUE(switch_pt_trusted(&facts));
+    facts.mode = 0100777;
+    EXPECT_FALSE(switch_pt_trusted(&facts));
+}
+
 TEST(Trust, EachMissingFactRefuses)
 {
     const std::vector<void (*)(struct switch_pt_trust_facts &)> breaks = {
@@ -370,6 +380,10 @@ TEST(Trust, EachMissingFactRefuses)
             f.gid = 20;
         },
         [](struct switch_pt_trust_facts &f) {
+            f.mode = 0775;
+        },
+        [](struct switch_pt_trust_facts &f) {
+            f.gid = 20;
             f.mode = 0775;
         },
         [](struct switch_pt_trust_facts &f) {

@@ -66,6 +66,20 @@ class SystemAppsTest(unittest.TestCase):
         self.assertFalse(self.deploy(None))
         self.assertFalse(self.sentinel.exists())
 
+    def test_a_request_clears_the_kernels_one_try_marker(self):
+        marker = self.data / system_apps.MARKER
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.touch()
+        self.assertTrue(self.deploy(b'v1'))
+        self.assertFalse(marker.exists())
+
+    def test_force_asks_with_unchanged_apps(self):
+        self.deploy(b'v1')
+        self.sentinel.unlink()
+        before = system_apps.digest(self.data)
+        self.assertTrue(system_apps.request_migration(self.data, before, Log(), force=True))
+        self.assertTrue(self.sentinel.is_file())
+
 
 if __name__ == '__main__':
     unittest.main()
