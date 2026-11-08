@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from tools.emu import machine, qemu, report, sdcard
@@ -22,6 +23,7 @@ from tools.emu.monitor import Monitor, socket_path
 from tools.install import stages
 
 KINDS = {'ios17': '21H461', 'ios27': '24B119'}
+WATCH_SECONDS = 3
 
 
 def workspace() -> Path:
@@ -92,7 +94,10 @@ def regwrite() -> Path:
     return Path(__file__).parent / 'regwrite.bin'
 
 
-def run_machine(run: Path, inputs: machine.Inputs, seconds: float) -> None:
+def run_machine(
+    run: Path, inputs: machine.Inputs, seconds: float, done: Callable[[Monitor], bool] | None = None
+) -> None:
+    """Run the machine for `seconds` of wall time, or until `done` (asked every WATCH_SECONDS) says so; save the run."""
     command = machine.command(run, inputs)
     with (run / 'qemu.log').open('w') as log:
         process = subprocess.Popen(command, cwd=run, stdout=log, stderr=subprocess.STDOUT)
@@ -103,8 +108,13 @@ def run_machine(run: Path, inputs: machine.Inputs, seconds: float) -> None:
             sys.exit(f'qemu exited at once ({run / "qemu.log"}):\n' + (run / 'qemu.log').read_text()[-2000:])
         monitor = Monitor(inputs.qmp)
         deadline = time.monotonic() + seconds
+        asked = time.monotonic()
         while time.monotonic() < deadline and process.poll() is None:
             time.sleep(0.5)
+            if done and time.monotonic() - asked >= WATCH_SECONDS:
+                asked = time.monotonic()
+                if done(monitor):
+                    break
         if process.poll() is None:
             report.capture(monitor, run, inputs.kernel)
             with contextlib.suppress(OSError, RuntimeError):
@@ -117,10 +127,8 @@ def run_machine(run: Path, inputs: machine.Inputs, seconds: float) -> None:
         shutil.rmtree(inputs.qmp.parent, ignore_errors=True)
 
 
-def parse() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument('--kind', choices=sorted(KINDS), required=True)
-    parser.add_argument('--seconds', type=float, default=120)
     parser.add_argument('--sd', help="IOS27.SII.001, a raw stage image (populated.img) or none (default: //:image's)")
     parser.add_argument('--bootargs', help='switchroot/ios/bootargs.txt for this run, e.g. -v')
     parser.add_argument('--out', type=Path, help='the run directory (default out/emu/<kind>-<time>)')
@@ -129,11 +137,10 @@ def parse() -> argparse.Namespace:
     parser.add_argument('--bazel-flag', action='append', default=[], help='a flag for the //:boot build')
     parser.add_argument('--qemu', type=Path, help='this qemu-system-aarch64 instead of the cached build')
     parser.add_argument('--mttcg', action='store_true', help='one host thread per core, guest time from the clock')
-    return parser.parse_args()
 
 
-def main() -> None:
-    args = parse()
+def prepare(args: argparse.Namespace) -> tuple[Path, machine.Inputs]:
+    """Build or take the boot package, get the emulator, make the run directory and its card."""
     if args.package:
         package, kernel = args.package.resolve(), args.kernel
     else:
@@ -152,6 +159,15 @@ def main() -> None:
         kernel=kernel,
         icount=not args.mttcg,
     )
+    return run, inputs
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    add_arguments(parser)
+    parser.add_argument('--seconds', type=float, default=120)
+    args = parser.parse_args()
+    run, inputs = prepare(args)
     run_machine(run, inputs, args.seconds)
     print(report.summarize(run), end='')
 
