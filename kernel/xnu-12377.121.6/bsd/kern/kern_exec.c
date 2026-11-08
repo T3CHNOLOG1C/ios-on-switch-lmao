@@ -6840,10 +6840,21 @@ native_switch_disabled(const char *name)
 static const char *const native_switch_bluetoothd_environment[] = {
 	"BT_HCI_TRANSPORT=H4BC:POSIX:com.apple.uart.bluetooth,3000000", NULL
 };
+/*
+ * CA_DISABLE_LUMA_COMPUTE: QuartzCore 27 measures a luma-tracking backdrop (the home grabber, glass that adapts to what is
+ * behind it) with compute kernels (compute_sum_luma, compute_average_luma) unless this debug option is set, which it reads
+ * from the environment on release builds too; set, it takes the backdrop's average from a mipmapped copy (the 2D engine's
+ * chain) and a one-texel readback. The raw GM20B path runs no compute, so each measurement sent its frame's command buffer
+ * to m2v.
+ */
 #if NATIVE_SWITCH_CA_VBL
-static const char *const native_switch_backboardd_vbl_environment[] = {"CA_DISABLE_DETACHED=1", "CA_FORCE_TIMER=1", NULL};
+static const char *const native_switch_backboardd_vbl_environment[] = {
+	"CA_DISABLE_DETACHED=1", "CA_FORCE_TIMER=1", "CA_DISABLE_LUMA_COMPUTE=1", NULL
+};
 #else
-static const char *const native_switch_backboardd_environment[] = {"CA_DISABLE_DETACHED=1", NULL};
+static const char *const native_switch_backboardd_environment[] = {
+	"CA_DISABLE_DETACHED=1", "CA_DISABLE_LUMA_COMPUTE=1", NULL
+};
 #endif
 
 /* The extra environment strings for imgp's executable, NULL-terminated, or NULL for none. */
@@ -6871,6 +6882,7 @@ native_switch_exec_environment(const struct image_params *imgp)
 		if (single) {
 			return native_switch_backboardd_environment;
 		}
+		return native_switch_backboardd_environment + 1;
 #endif
 	}
 	return NULL;
