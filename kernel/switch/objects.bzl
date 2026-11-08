@@ -25,6 +25,7 @@ SWITCH_OBJECTS = {
     "bsd": [
         ("bsd/kern/bsd_init.c", "boot/bsd_init.c", []),
         ("bsd/kern/kern_exec.c", "boot/prefs.c", []),
+        ("bsd/kern/kern_exit.c", "diag/exit.c", []),
         ("bsd/kern/lockdown_mode.c", "sysctl/lockdown.c", [], ["12377.121.6"]),
         ("bsd/kern/kern_shutdown.c", "shutdown/shutdown.c", []),
         ("bsd/vfs/vfs_lookup.c", "vfs/pretranslated.c", []),
@@ -49,6 +50,7 @@ SWITCH_OBJECTS = {
         ("osfmk/kern/sched_prim.c", "diag/stall.c", []),
         ("osfmk/kern/sched_prim.c", "diag/stall_snapshot.c", []),
         ("osfmk/kern/sched_prim.c", "diag/stall_frame.c", []),
+        ("osfmk/kern/exception.c", "diag/crash.c", []),
     ],
 }
 
