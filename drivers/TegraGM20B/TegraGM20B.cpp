@@ -256,6 +256,17 @@ extern "C" int switch_tiled_cache_on(void)
 		(off == 0u));
 }
 
+extern "C" int switch_gpu_compression_on(void)
+{
+	static bool logged = false;
+	unsigned off = 0;
+	const bool on = (PE_parse_boot_argn("switch-no-gpu-compression", &off, sizeof(off)) == 0) ||
+			(off == 0u);
+	if (!on && !__atomic_exchange_n(&logged, true, __ATOMIC_RELAXED))
+		IOLog("tegra-gm20b: compression off (switch-no-gpu-compression)\n");
+	return static_cast<int>(on);
+}
+
 extern "C" void tgm_journal(const char *fmt, ...)
 {
 	char line[256];

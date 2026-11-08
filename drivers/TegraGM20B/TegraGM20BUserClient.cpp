@@ -2035,7 +2035,7 @@ IOReturn AGXDeviceUserClient::getInfo(TegraGM20BAbiInfo *out)
 		     TegraGM20BInfoOrder | TegraGM20BInfoSurfaceWrites |
 		     TegraGM20BInfoSurfaceLayout | TegraGM20BInfoExecSurfaces |
 		     TegraGM20BInfoPriority | TegraGM20BInfoKillRecord;
-	if (info.comptag_lines)
+	if (info.comptag_lines && switch_gpu_compression_on())
 		out->flags |= TegraGM20BInfoCompression;
 	if (switch_tiled_cache_on())
 		out->flags |= TegraGM20BInfoTiledCache;
