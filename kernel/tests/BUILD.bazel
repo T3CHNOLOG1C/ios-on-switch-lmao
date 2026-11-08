@@ -25,13 +25,18 @@
 #                            and the cache text they write, against the assembler and the bytes the 1.6-only sites
 #                            shipped; the status bar battery's fill in whole pixels with equal gaps at 1.25; the
 #                            switcher's landscape card scale; Control Center's battery row in whole pixels at 1.25
-#   xnu_ui_scale_sites_test  bsd/vm/switch_ui_scale_sites.h against 21H461's text mappings: every edit in its site's
+#   xnu_ui_scale_sites_test  bsd/vm/switch_ui_scale_sites_21H461.h against 21H461's text mappings: every edit in its site's
 #                            chunk, each site the one site of its slot in its mapping and on no other pager's slot; the
 #                            two battery fills one edit of the same code, the CoverSheetKit row's tbz and the CoreUI
 #                            row bytes decoded; the switcher's card scale (its branches kept, the landscape scale the
 #                            largest that keeps six cards clear of the status bar and the dock, as Apple lays them out);
 #                            the SystemStatusUI row the icon size 15 entries of its tables; no two sites on one page;
-#                            the header the same in both trees, no UI scale pager at scale 1
+#                            the headers the same in both trees, no UI scale pager at scale 1, the kernel's kind's
+#                            table and cache magic
+#   xnu_ui_scale_sites_24B119_test  bsd/vm/switch_ui_scale_sites_24B119.h against 24B119's (translated) text mappings:
+#                            the same placement checks; the FrontBoardServices, MobileGestalt, CoreUI, ProgressUI and
+#                            CoverSheetKit edits decoded; the keyboard's iPad table giving the 10.2-inch iPad's idiom
+#                            below 768x1024 and every other screen's unchanged
 #   xnu_page_ratio_test      16 KiB VM pages over the 4 KiB granule: pmap.c's write_pte_fast (both trees) writes a
 #                            VM page as four consecutive 4 KiB frames, repeats empty and compressed entries, refuses an
 #                            unaligned PTE
@@ -291,11 +296,18 @@ copy_file(
     out = "vm/switch_ui_scale.h",
 )
 
-copy_file(
-    name = "switch_ui_scale_sites",
-    src = "//kernel/xnu-10063.141.1/bsd:vm/switch_ui_scale_sites.h",
-    out = "vm/switch_ui_scale_sites.h",
-)
+[
+    copy_file(
+        name = "switch_ui_scale_sites" + kind,
+        src = "//kernel/xnu-10063.141.1/bsd:vm/switch_ui_scale_sites{}.h".format(kind),
+        out = "vm/switch_ui_scale_sites{}.h".format(kind),
+    )
+    for kind in [
+        "",
+        "_21H461",
+        "_24B119",
+    ]
+]
 
 host_test(
     name = "xnu_ui_scale_test",
@@ -306,21 +318,42 @@ host_test(
     includes = ["."],
 )
 
+_UI_SCALE_SITES_HDRS = [
+    "vm/switch_ui_scale.h",
+    "vm/switch_ui_scale_sites.h",
+    "vm/switch_ui_scale_sites_21H461.h",
+    "vm/switch_ui_scale_sites_24B119.h",
+    "xnu_ui_scale_sites_checks.h",
+]
+
+_UI_SCALE_SITES_DATA = [
+    "//kernel/xnu-10063.141.1/osfmk:vm/vm_shared_region.c",
+    "//kernel/xnu-12377.121.6/osfmk:vm/vm_shared_region.c",
+]
+
 host_test(
     name = "xnu_ui_scale_sites_test",
-    srcs = [
-        "vm/switch_ui_scale.h",
-        "vm/switch_ui_scale_sites.h",
-        "xnu_ui_scale_sites_test.cpp",
+    srcs = _UI_SCALE_SITES_HDRS + ["xnu_ui_scale_sites_test.cpp"],
+    data = _UI_SCALE_SITES_DATA + [
+        "//kernel/xnu-{}/bsd:vm/{}".format(tree, file)
+        for tree in [
+            "10063.141.1",
+            "12377.121.6",
+        ]
+        for file in [
+            "switch_ui_scale_sites.h",
+            "switch_ui_scale_sites_21H461.h",
+            "switch_ui_scale_sites_24B119.h",
+            "vm_unix.c",
+        ]
     ],
-    data = [
-        "//kernel/xnu-10063.141.1/bsd:vm/switch_ui_scale_sites.h",
-        "//kernel/xnu-10063.141.1/bsd:vm/vm_unix.c",
-        "//kernel/xnu-10063.141.1/osfmk:vm/vm_shared_region.c",
-        "//kernel/xnu-12377.121.6/bsd:vm/switch_ui_scale_sites.h",
-        "//kernel/xnu-12377.121.6/bsd:vm/vm_unix.c",
-        "//kernel/xnu-12377.121.6/osfmk:vm/vm_shared_region.c",
-    ],
+    includes = ["."],
+)
+
+host_test(
+    name = "xnu_ui_scale_sites_24B119_test",
+    srcs = _UI_SCALE_SITES_HDRS + ["xnu_ui_scale_sites_24B119_test.cpp"],
+    data = _UI_SCALE_SITES_DATA,
     includes = ["."],
 )
 
