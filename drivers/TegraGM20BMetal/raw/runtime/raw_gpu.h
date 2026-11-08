@@ -483,10 +483,6 @@ public:
     void convertPlanar(const Texture &t);
     // generateMipmaps of a mipmapped texture (Texture::chain) on the 2D engine: each later level from the one above, in place
     void generate(Texture &t);
-    // `w` x `h` texels of chain level `level` of `t` at (sx, sy) into the pitch texture `dst` at (dx, dy) (copyFromTexture of a
-    // level below the first); 1:1 on the 2D engine
-    void copyFromLevel(const Texture &t, uint32_t level, uint32_t sx, uint32_t sy, const Texture &dst, uint32_t dx,
-                       uint32_t dy, uint32_t w, uint32_t h);
     void end();
 
 private:
@@ -806,8 +802,8 @@ public:
         // color targets in rows the raw path rendered through a block-linear shadow, beside a block-linear one in their pass
         std::atomic<uint64_t> rtMixed{0};
         std::atomic<uint32_t> rtUnalignedPitch{0}, rtUnalignedVa{0};
-        // mip chains: made, chain bytes, generated, copies out of a level
-        std::atomic<uint64_t> chains{0}, chainBytes{0}, chainGenerates{0}, chainCopies{0};
+        // mip chains: made, chain bytes, generated
+        std::atomic<uint64_t> chains{0}, chainBytes{0}, chainGenerates{0};
         // write-combined buffers: live bytes, and the buffers that asked for one and got pool memory (the WC pool full)
         std::atomic<uint64_t> wcBytes{0}, wcFallbacks{0};
         // the copy engine's work encoded: launches and the bytes they write (copies, remaps, the pass prologue's shadow copies)

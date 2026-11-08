@@ -109,13 +109,10 @@ static bool sameSizeLevels(id<MTLTexture> s, id<MTLTexture> d, NSUInteger &sl, N
 {
     RMTexture *a = (RMTexture *)s, *b = (RMTexture *)d;
     const bool both = [(id)a isKindOfClass:[RMTexture class]] && [(id)b isKindOfClass:[RMTexture class]];
-    // a level below the first into rows is the 2D engine's 1:1 copy out of the chain (raw::BlitEncoder::copyFromLevel), which
-    // takes rows 128-byte aligned, where the 2D engine takes the format; every other copy is the copy engine's, of bytes
-    const bool twoD = both && sl && !dl && !b->_raw.blockLinear && a->_raw.chain && a->_raw.chain->fmt2d;
+    // the copy engine's, of bytes, between pitch and block-linear sides as each side is laid out
     const bool ok = both && !ss && !ds && size.depth == 1 && a->_raw.bpp == b->_raw.bpp &&
                     copySideOk(a, sl, so.x, so.y, size.width, size.height) &&
-                    copySideOk(b, dl, dorg.x, dorg.y, size.width, size.height) &&
-                    (!twoD || (b->_raw.format == a->_raw.format && !((b->_raw.va | b->_raw.pitch) & 127)));
+                    copySideOk(b, dl, dorg.x, dorg.y, size.width, size.height);
     if (!ok) {
         [_cb takeReason:WhyTexture why:@"a texture copy the raw path does not do (levels, slices, formats)"];
         hit(_cb, PredBlitTexCopy, ss | sl << 8 | ds << 16 | dl << 24,

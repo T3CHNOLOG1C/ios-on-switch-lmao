@@ -3672,26 +3672,6 @@ void BlitEncoder::generate(Texture &t)
     dev_->stats.chainGenerates++;
 }
 
-void BlitEncoder::copyFromLevel(const Texture &t, uint32_t level, uint32_t sx, uint32_t sy, const Texture &dst,
-                                uint32_t dx, uint32_t dy, uint32_t w, uint32_t h)
-{
-    const Texture::Chain *c = t.chain;
-    if (!c)
-        return;
-    if (dst.blockLinear ||
-        !c->fmt2d) {  // the copy engine (the 2D engine's destination here is pitch, of a format it takes)
-        Texture from;
-        if (chainLevelImage(t, level, from))
-            copyTexels(from, sx, sy, dst, dx, dy, w, h);
-        dev_->stats.chainCopies++;
-        return;
-    }
-    room(uint32_t(fx::copyWords()));
-    const fx::Pitch d{dst.va, dst.pitch, dst.width, dst.height};
-    fx::emitCopyFromLevel(p_, c->layout, c->va, level, d, c->fmt2d, sx, sy, dx, dy, w, h);
-    dev_->stats.chainCopies++;
-}
-
 void BlitEncoder::end()
 {
     checkRoom(p_, "a blit encoder");
