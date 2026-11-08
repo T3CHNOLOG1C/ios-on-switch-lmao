@@ -23,7 +23,8 @@ def located(path: str | os.PathLike | None) -> str | None:
         return path
     path = os.fspath(path)
     if not os.path.isabs(path) and _runfiles():
-        path = _runfiles().Rlocation(path) or path
+        # Every caller names its runfiles from the main repository: '' says so without a walk up the call stack.
+        path = _runfiles().Rlocation(path, '') or path
     return os.path.abspath(path)
 
 
