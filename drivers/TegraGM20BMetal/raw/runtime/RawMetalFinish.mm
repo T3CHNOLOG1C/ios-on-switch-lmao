@@ -43,6 +43,9 @@ void forEachWritten(RMCommandBuffer *cb, size_t from, size_t to, void (*written)
         case OpCopyTextureToBuffer:
             written(c.obj2);
             break;
+        case OpFillBuffer:
+            written(c.obj);
+            break;
         case OpBuffer:
         case OpTexture:
             if (compute)
@@ -182,7 +185,13 @@ void completionLoop()
         }
         // false: the kernel killed the channel with it in flight (a GPU fault or hang); the next command buffer gets a new one
         const bool ok = r.raw->wait(cb->_seqno);
-        if (!ok) {
+        if (!ok && r.raw->lostError() == raw::Device::kWaitRefused) {
+            os_log_error(
+                rawLog(),
+                "raw: command buffer %u failed: the kernel kept refusing to wait for it on a channel it called "
+                "healthy, so the channel was taken as killed",
+                cb->_seqno);
+        } else if (!ok) {
             const uint64_t va = r.raw->lostFaultVa();
             os_log_error(rawLog(),
                          "raw: command buffer %u failed: the kernel killed its channel (error %u, fault VA 0x%llx%s%s)",

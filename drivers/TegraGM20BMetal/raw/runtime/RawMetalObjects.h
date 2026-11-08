@@ -181,6 +181,7 @@ enum Op : uint8_t {
     OpWaitEvent,
     OpDrawIndexed,
     OpVisibility,
+    OpFillBuffer,
 };
 
 // one record: `stage` 1 vertex, 2 fragment; `obj` unretained (the command buffer keeps it); `x` into the extras
@@ -237,6 +238,8 @@ struct RMSegment {
 @interface RMCommandBuffer : RMObject {
 @public
     uint64_t _protection;  // setProtectionOptions: (kept, no effect)
+    NSMutableDictionary *_userDictionary;
+    uint64_t _traceId;
     raw::ResidencySets _residency;
     // Its encoders: each one's first command (OpRender, OpBlit, OpCompute) carries index 1 where it goes to m2v (a refusal taken
     // while it was the active encoder: _encRefused, written into it as the next encoder begins or at commit, _encAt the
@@ -273,7 +276,7 @@ struct RMSegment {
     std::condition_variable _changed;
     uint32_t _seqno;
     double _gpuStart, _gpuEnd;
-    id _active;               // the encoder being recorded
+    __weak id _active;        // the encoder being recorded (weak: it holds the command buffer, its caller holds it)
     uint64_t _preds;          // every refusal predicate it hit (1 << RMPred)
     uint64_t _predA, _predB;  // the first one's values
     uint8_t _pred0;           // the first one

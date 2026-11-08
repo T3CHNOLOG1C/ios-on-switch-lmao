@@ -104,6 +104,24 @@ static void giveRecording(RMCommandBuffer *b)
     [self takeReason:reason why:why];
 }
 
+// Answered here, not recorded as invocations (each one sent the whole command buffer to m2v)
+- (NSMutableDictionary *)userDictionary
+{
+    std::lock_guard<std::mutex> l(_lock);
+    if (!_userDictionary)
+        _userDictionary = [NSMutableDictionary dictionary];
+    return _userDictionary;
+}
+
+- (uint64_t)globalTraceObjectID
+{
+    static std::atomic<uint64_t> ids{0};
+    std::lock_guard<std::mutex> l(_lock);
+    if (!_traceId)
+        _traceId = ++ids;
+    return _traceId;
+}
+
 - (void)useResidencySet:(id)set
 {
     _residency.add(&set, 1);

@@ -74,7 +74,7 @@ id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool pa
 
     std::vector<Range> ranges;
     auto range = [&](RMBuffer *b, uint64_t offset, uint64_t bytes, bool flush = false) {
-        if (!b || offset >= b->_raw.length || b->_raw.wc)
+        if (![(id)b isKindOfClass:[RMBuffer class]] || offset >= b->_raw.length || b->_raw.wc)
             return;  // (write-combined: in memory once the DSB below drains it)
         ranges.push_back({b->_raw.cpu + offset, std::min(bytes, b->_raw.length - offset), flush});
     };
@@ -249,6 +249,12 @@ id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool pa
                 destinationOrigin:MTLOriginMake(uint32_t(o), o >> 32, extra(cb, x + 11))];
             break;
         }
+        case OpFillBuffer:
+            range((__bridge RMBuffer *)c.obj, c.c, extra(cb, c.x), true);
+            [enc fillBuffer:twinOf((__bridge id)c.obj)
+                      range:NSMakeRange(NSUInteger(c.c), NSUInteger(extra(cb, c.x)))
+                      value:uint8_t(c.a)];
+            break;
         case OpCopyBuffer:
             range((__bridge RMBuffer *)c.obj, c.c, extra(cb, c.x + 1));
             range((__bridge RMBuffer *)c.obj2, extra(cb, c.x), extra(cb, c.x + 1), true);
