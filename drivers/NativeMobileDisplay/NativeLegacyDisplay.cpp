@@ -1754,6 +1754,7 @@ private:
         }
         add("; planes %s: flips %u (b-only %u) latched %u, maps %u, dropped %u, underflow %u, unready %u", planesState,
             stPlaneFlips, stPlaneOnly, stPlaneLatched, stPlaneMaps, stPlaneDropped, stPlaneUnderflows, stPlaneUnready);
+        planeTotalsClose();
         stPlaneFlips = stPlaneOnly = stPlaneLatched = stPlaneMaps = stPlaneDropped = stPlaneUnderflows =
             stPlaneUnready = 0;
         add("; long %u: idle %u/%u ca %u/%u gpu %u/%u queue %u/%u latch %u/%u rate %u/%u",
@@ -3534,6 +3535,7 @@ public:
         if (primary) {
             __atomic_store_n(&primaryDisplay, this, __ATOMIC_RELEASE);
             columnScanRegister();
+            planeTotalsRegister();
         }
         return true;
     }
@@ -4897,6 +4899,7 @@ public:
 
 #include "NativePlanesDisplay.h"
 #include "NativePlaneFenceDisplay.h"
+#include "NativePlanesTotals.h"
 #include "NativeColumnScanDisplay.h"
 
     IOReturn collectCompletionReports(uint32_t, void *, uint32_t *count, uint32_t) override

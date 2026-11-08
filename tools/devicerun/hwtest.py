@@ -85,6 +85,7 @@ TESTS: dict[str, bool] = {
     'display.pacing': False,
     'display.brightness': False,
     'display.colour': False,
+    'display.planes': False,
     'display.wake_gpu': True,
     'ui.text': False,
     'ui.blur': False,

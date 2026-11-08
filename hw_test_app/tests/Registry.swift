@@ -21,7 +21,7 @@ public enum Registry {
     ]
 
     static let display: [any HWTest] = [
-        DisplayModeTest(), DisplayPacingTest(), BrightnessTest(), ColourPipelineTest(), WakeTest(),
+        DisplayModeTest(), DisplayPacingTest(), BrightnessTest(), ColourPipelineTest(), PlanesTest(), WakeTest(),
     ]
 
     static let sensorsAndInput: [any HWTest] = [
