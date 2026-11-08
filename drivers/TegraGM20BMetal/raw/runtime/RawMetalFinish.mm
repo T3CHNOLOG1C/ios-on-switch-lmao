@@ -50,17 +50,11 @@ static void markWritten(RMCommandBuffer *cb)
             if (compute)
                 markDirty(c.obj);
             break;
-        case OpInvocation: {  // compute and other recorded calls: every buffer and texture they name
-            NSInvocation *inv = (__bridge NSInvocation *)c.obj;
-            for (NSUInteger i = 2; i < inv.methodSignature.numberOfArguments; i++) {
-                if (*[inv.methodSignature getArgumentTypeAtIndex:i] != '@')
-                    continue;
-                __unsafe_unretained id arg = nil;
-                [inv getArgument:&arg atIndex:i];
-                markDirty((__bridge void *)arg);
-            }
+        case OpInvocation:  // compute and other recorded calls: every buffer and texture they name
+            raw::forEachObject((__bridge NSInvocation *)c.obj, [](id o) {
+                markDirty((__bridge void *)o);
+            });
             break;
-        }
         default:
             break;
         }
@@ -118,7 +112,7 @@ void finish(RMCommandBuffer *cb, NSError *error)
         for (const Cmd &c : cb->_tape)
             if (c.op == OpSignalEvent)
                 [(id<MTLSharedEvent>)(__bridge id)c.obj setSignaledValue:c.c];
-    NSArray *handlers;
+    NSArray *handlers, *unscheduled = nil;
     {
         std::lock_guard<std::mutex> l(cb->_lock);
         cb->_status = error ? MTLCommandBufferStatusError : MTLCommandBufferStatusCompleted;
@@ -127,9 +121,17 @@ void finish(RMCommandBuffer *cb, NSError *error)
         handlers = cb->_completedHandlers;
         cb->_completedHandlers = nil;
         cb->_completedSent = true;
-        cb->_scheduledSent = true;  // a completed command buffer is scheduled; its own scheduled() runs no more
+        // a completed command buffer is scheduled: its scheduled handlers scheduled() never took run here, first (one that
+        // completes before its submit thread schedules it, or that never reaches a GPU), and scheduled() runs no more
+        if (!cb->_scheduledSent) {
+            unscheduled = cb->_scheduledHandlers;
+            cb->_scheduledHandlers = nil;
+        }
+        cb->_scheduledSent = true;
     }
     void (^run)(void) = ^{
+        for (MTLCommandBufferHandler h in unscheduled)
+            h((id<MTLCommandBuffer>)cb);
         for (MTLCommandBufferHandler h in handlers)
             h((id<MTLCommandBuffer>)cb);
         {

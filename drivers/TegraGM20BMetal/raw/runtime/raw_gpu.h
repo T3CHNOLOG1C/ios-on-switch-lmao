@@ -578,7 +578,8 @@ public:
     }
 
     // The channel and its context, made now if not yet (a client's first command buffer, Order or mipmapped texture); with it
-    // the 2D engine's mip-chain self-test. False: the kernel refused it (`channelError()`), and the device submits nothing.
+    // the 2D engine's mip-chain self-test. False: the kernel refused it (`channelError()`), and the device submits nothing
+    // until a call kChannelRetryNs or more later gets one.
     bool ensureChannel();
 
     // Why the kernel last refused the channel or its context (ensureChannel, or begin() making a killed channel again)
@@ -648,7 +649,7 @@ public:
     // Memoryless (a pass gives it a backing); Depth32Float_Stencil8 among them, as zeta (Texture::zeta)
     bool createMemoryless(uint32_t width, uint32_t height, uint32_t format, Texture &t);
     // A mipmapped 2D texture of `levels` levels: level 0 of its block-linear chain (Texture::chain), its header the chain's.
-    // False: not one the raw path keeps (chainsOn() false, a format the 2D engine does not filter, no memory).
+    // False: not one the raw path keeps (a format the 2D engine does not filter, no memory).
     bool createMipTexture(uint32_t width, uint32_t height, uint32_t format, uint32_t levels, Texture &t);
     // The texture header of level `level` of mipmapped texture `t`'s chain alone, as NVK's view of that level (a pass into
     // the level fetches its color through it); 0: none
@@ -658,18 +659,6 @@ public:
     bool shared() const
     {
         return k_.shared();
-    }
-
-    // Whether mip chains are on: the 2D engine's self-test, run with the channel, made the chain the design expects (fx_mip.h)
-    bool chainsOn() const
-    {
-        return chainsOn_;
-    }
-
-    // The same, the channel made first where it is not yet (a client's first mipmapped texture)
-    bool chains()
-    {
-        return ensureChannel() && chainsOn_;
     }
 
     // The memory no resource holds goes back to the kernel: empty chunks of the pool, of images and of buffers, and the kept
@@ -857,19 +846,6 @@ public:
     static const char *fetchBarrierName(FetchBarrier b);
 #endif
 
-    // The self-test's result (open), per sampling candidate (fx::sampling(i)): bytes off by more than 1 in the CPU's Tegra and
-    // Fermi views (~0u: not run); the one chains use (selfTestChosen, fx::kSamplings: none passed) and its view; the first
-    // candidate's detail in the Tegra view (what the documented convention gave)
-    uint32_t selfTestTegra[fx::kSamplings], selfTestFermi[fx::kSamplings];
-    uint32_t selfTestChosen = fx::kSamplings;
-    bool selfTestFermiView = false;
-    fx::SelfTestReport selfTestFirst;
-
-    fx::Sampling sampling() const
-    {
-        return sampling_;
-    }
-
 private:
     friend class CommandBuffer;
     friend class RenderEncoder;
@@ -925,6 +901,8 @@ private:
     std::mutex channelLock_;
     std::atomic<bool> channelReady_{false};
     bool channelFailed_ = false;
+    uint64_t channelRetryNs_ = 0;  // CLOCK_UPTIME_RAW: a refused channel is asked for again from then on
+    static constexpr uint64_t kChannelRetryNs = 1000000000;
     std::string channelError_;
     // The channel died and the one made since has no context yet (reopen gave up before the context's Exec): begin() makes it
     // again before it gives out a command buffer. channel_ is 0 while the kernel holds none of this device's.
@@ -1000,8 +978,6 @@ private:
     std::vector<Chunk> wcChunks_;
     bool wcAlloc(uint64_t bytes, Span &s);
     void wcFree(Span &s);
-    bool chainsOn_ = false;
-    fx::Sampling sampling_;  // the self-test's winner: how every chain's scaled steps sample
 
     bool blAlloc(uint64_t bytes, uint64_t align, Span &s)
     {
@@ -1016,7 +992,6 @@ private:
     // a span of chunks bound with PTE kind `kind` (block-linear images), lock_ held
     bool tiledAlloc(std::vector<Chunk> &chunks, uint32_t kind, uint64_t bytes, uint64_t align, Span &s);
     void tiledFree(std::vector<Chunk> &chunks, Span &s);
-    void selfTest();
 
     struct Backing {
         Texture texture;

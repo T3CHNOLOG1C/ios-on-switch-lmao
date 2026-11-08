@@ -44,6 +44,9 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
     raw::CommandBuffer *rc = d.begin();
     if (!rc) {
         *why = "the kernel gave the raw path no channel";
+        if (!predLogged(PredEncNoChannel))
+            logPred(PredEncNoChannel, 0, 0, @(d.channelError().c_str()));
+        hit(cb, PredEncNoChannel);
         return false;
     }
     raw::RenderEncoder *re = nullptr;
