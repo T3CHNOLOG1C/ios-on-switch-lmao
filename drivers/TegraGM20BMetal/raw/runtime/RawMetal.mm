@@ -84,31 +84,31 @@ RawState *gRM;
     return (id<MTLDevice>)_device;
 }
 
-// A selector this class does not answer goes to the twin (an m2v object: its answer is today's). respondsToSelector: says what the
-// twin's class says, so Core Animation's optional paths choose as they do on m2v.
-- (id)forwardingTargetForSelector:(SEL)selector
+// The m2v class this object stands in for: its twin's, or the one it would make
+- (Class)rmTwinClass
 {
-    id twin = [self rmTwin];
-    if (!twin)
-        SWITCH_REFUSE_DETAIL("raw", "twin.missing", uintptr_t(selector), "-[%s %s] with no m2v twin",
-                             class_getName(object_getClass(self)), sel_getName(selector));
-    else
-        SWITCH_REFUSE_DETAIL("raw", "twin.forward", uintptr_t(selector), "-[%s %s] answered by its m2v twin",
-                             class_getName(object_getClass(self)), sel_getName(selector));
-#if SWITCH_FRAME_TIMELINE
-    gRM->stats.twinForwards.fetch_add(1, std::memory_order_relaxed);
-#endif
-    return twin;
+    id twin = _twin;
+    return twin ? object_getClass(twin) : [[self class] twinClass];
 }
 
-- (BOOL)respondsToSelector:(SEL)selector
+// A selector this class does not answer is never forwarded to an m2v twin: it is answered zero here (forwardInvocation:). When
+// m2v's class does answer it, raw is missing a method (raw/test/selcover finds none any kind sends): answerMissing says so. An
+// RMTwinObject is the exception: it stands for the m2v object it carries.
+- (NSMethodSignature *)methodSignatureForSelector:(SEL)selector
 {
-    if ([super respondsToSelector:selector])
-        return YES;
-    if (_twin)
-        return [_twin respondsToSelector:selector];
-    Class c = [[self class] twinClass];
-    return c ? [c instancesRespondToSelector:selector] : NO;
+    if (NSMethodSignature *s = [super methodSignatureForSelector:selector])
+        return s;
+    if (const char *types = metalTypes(selector))
+        return [NSMethodSignature signatureWithObjCTypes:types];
+    return [[self rmTwinClass] instanceMethodSignatureForSelector:selector];
+}
+
+- (void)forwardInvocation:(NSInvocation *)invocation
+{
+    if (twinAnswers([self rmTwinClass], invocation.selector))
+        answerMissing(self, invocation);
+    else
+        answerZero(self, invocation);
 }
 
 + (Class)twinClass

@@ -22,6 +22,8 @@
 // SurfaceLayout (method 16; MOCK_NO_SURFACE_LAYOUT=1 hides it) decides a surface's layout as the kext does: at its first asking
 // import, block-linear when that import writes it, is the surface's only import and its shape tiles, its rows then tiled in
 // place (TegraGM20BLayout.h); pitch for good otherwise.
+// Priority (method 18; MOCK_NO_PRIORITY=1 hides it): one per process, as the kext keeps one per connection
+// (mock_iokit_priority).
 // mock_iokit_kill_next(error): the next Exec on a 3D channel (a queue's, not NVK's upload channel) is accepted, then its
 // channel dies as the kext kills one (method 11's error, and with mock_iokit_kill_next_at the fault VA GetStatus reports
 // for an MMU fault): what it had in flight never runs, its kill record
@@ -110,12 +112,13 @@ static unsigned bo_new(struct bo o)
 }
 
 static uint64_t kill_next_va;
-static atomic_ulong calls[16];
-static atomic_uint fail_left[16]; /* mock_iokit_fail_next's, by method */
-static atomic_uint fail_skip[16]; /* mock_iokit_fail_after's calls that go through first */
-static atomic_int fail_kr[16];
-static atomic_ulong import_maps;    /* VmBind map ops onto imported pages */
-static atomic_ulong kind_maps[256]; /* VmBind map ops by PTE kind */
+static atomic_ulong calls[32];
+static atomic_uint fail_left[32]; /* mock_iokit_fail_next's, by method */
+static atomic_uint fail_skip[32]; /* mock_iokit_fail_after's calls that go through first */
+static atomic_int fail_kr[32];
+static atomic_uint priority_now[2] = {2, 4}; /* Priority's (method 18): the connection's foreground and background */
+static atomic_ulong import_maps;             /* VmBind map ops onto imported pages */
+static atomic_ulong kind_maps[256];          /* VmBind map ops by PTE kind */
 #include "mock_comp.h"
 
 /* Surfaces' layouts (method 16), by surface ID */
@@ -466,9 +469,9 @@ static kern_return_t mock_call(mach_port_t c, uint32_t sel, const void *in, size
     }
     if (sel == TegraGM20BTunnelProbe)
         return KERN_SUCCESS;
-    if (sel < 16)
+    if (sel < 32)
         atomic_fetch_add(&calls[sel], 1);
-    if (sel < 16 && atomic_load(&fail_left[sel])) {
+    if (sel < 32 && atomic_load(&fail_left[sel])) {
         if (atomic_load(&fail_skip[sel])) {
             atomic_fetch_sub(&fail_skip[sel], 1);
         } else {
@@ -493,7 +496,8 @@ static kern_return_t mock_call(mach_port_t c, uint32_t sel, const void *in, size
                                                (getenv("MOCK_NO_SURFACE_LAYOUT") ? 0 : TegraGM20BInfoSurfaceLayout) |
                                                (getenv("MOCK_NO_KILL_RECORD") ? 0 : TegraGM20BInfoKillRecord) |
                                                (getenv("MOCK_TILED_CACHE") ? TegraGM20BInfoTiledCache : 0) |
-                                               (getenv("MOCK_COMPRESSION") ? TegraGM20BInfoCompression : 0),
+                                               (getenv("MOCK_COMPRESSION") ? TegraGM20BInfoCompression : 0) |
+                                               (getenv("MOCK_NO_PRIORITY") ? 0 : TegraGM20BInfoPriority),
                                       .chipset = 0x12e,
                                       .gpc_count = 1,
                                       .tpc_count = 2,
@@ -791,6 +795,14 @@ static kern_return_t mock_call(mach_port_t c, uint32_t sel, const void *in, size
         memcpy(out, &t, sizeof(t));
         return KERN_SUCCESS;
     }
+    case TegraGM20BMethodPriority: {
+        const struct TegraGM20BAbiPriority *p = in;
+        if (insz != sizeof(*p) || p->priority > TegraGM20BMaxPriority || p->background_priority > TegraGM20BMaxPriority)
+            return kIOReturnBadArgument;
+        atomic_store(&priority_now[0], p->priority);
+        atomic_store(&priority_now[1], p->background_priority);
+        return KERN_SUCCESS;
+    }
     case TegraGM20BMethodGetStatus: {
         const struct TegraGM20BAbiChannel *ch = in;
         struct TegraGM20BAbiStatus s = {.completed = fence[(ch->channel & 15) * 4],
@@ -863,7 +875,7 @@ void mock_iokit_kill_next_at(uint32_t error, uint64_t fault_va)
  * ChannelCreate, a WaitFence that fails with no kill) */
 void mock_iokit_fail_after(unsigned method, unsigned skip, unsigned count, int kr)
 {
-    if (method >= 16)
+    if (method >= 32)
         return;
     atomic_store(&fail_kr[method], kr);
     atomic_store(&fail_skip[method], skip);
@@ -877,7 +889,13 @@ void mock_iokit_fail_next(unsigned method, unsigned count, int kr)
 
 unsigned long mock_iokit_calls(unsigned method)
 {
-    return method < 16 ? calls[method] : 0;
+    return method < 32 ? calls[method] : 0;
+}
+
+void mock_iokit_priority(uint32_t out[2])
+{
+    out[0] = atomic_load(&priority_now[0]);
+    out[1] = atomic_load(&priority_now[1]);
 }
 
 /* The GPU's runs so far (MOCK_GPU_US), up to `most`: channel, seqno, kick, start and end (us), acquires */

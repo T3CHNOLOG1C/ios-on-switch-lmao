@@ -125,6 +125,42 @@ static bool faceWritesStencil(const raw::StencilFace &f)
 
 @end
 
+// The facade's heaps hold ordinary resources: nothing to make resident (RMRenderEncoder's are the same)
+@interface RMComputeEncoder (Answers)
+@end
+@implementation RMComputeEncoder (Answers)
+
+- (void)useHeap:(id<MTLHeap>)heap
+{
+    (void)heap;
+}
+
+- (void)useHeaps:(const id<MTLHeap> __unsafe_unretained[])heaps count:(NSUInteger)count
+{
+    (void)heaps;
+    (void)count;
+}
+
+- (void)setSamplerState:(id<MTLSamplerState>)sampler
+            lodMinClamp:(float)lodMin
+            lodMaxClamp:(float)lodMax
+                atIndex:(NSUInteger)index
+{
+    [(id<MTLComputeCommandEncoder>)self setSamplerState:clampedSampler(sampler, lodMin, lodMax) atIndex:index];
+}
+
+- (void)setSamplerStates:(const id<MTLSamplerState> __unsafe_unretained[])samplers
+            lodMinClamps:(const float[])lodMin
+            lodMaxClamps:(const float[])lodMax
+               withRange:(NSRange)range
+{
+    for (NSUInteger k = 0; k < range.length; k++)
+        [(id<MTLComputeCommandEncoder>)self setSamplerState:clampedSampler(samplers[k], lodMin[k], lodMax[k])
+                                                    atIndex:range.location + k];
+}
+
+@end
+
 @interface RMCommandBuffer (Answers)
 @end
 @implementation RMCommandBuffer (Answers)

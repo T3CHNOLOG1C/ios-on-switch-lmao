@@ -37,6 +37,7 @@ static inline id twinPublish(id object, __strong id &slot, id made)
 }
 @property (nonatomic, copy) NSString *label;
 - (id)rmTwin;  // made now if needed; nil if it cannot be
+- (Class)rmTwinClass;
 @end
 
 @interface RMDevice : NSObject  // the methods the device class gets (raw_metal_device_open); no state of its own
@@ -218,6 +219,7 @@ inline Cmd cmd(Op op, uint8_t stage = 0, uint16_t index = 0)
 @interface RMQueue : RMObject {
 @public
     dispatch_queue_t _completionQueue;
+    uint32_t _gpuPriority, _backgroundGpuPriority;  // what it asked for (RawMetalQueuePriority.mm)
     raw::ResidencySets _residency;
 }
 @end
@@ -387,6 +389,9 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
 - (void)updateFence:(id<MTLFence>)fence;
 - (void)waitForFence:(id<MTLFence>)fence;
 @end
+
+// `s` with a bind's LOD clamps (RawMetalBindings.mm)
+id<MTLSamplerState> clampedSampler(id<MTLSamplerState> s, float lodMin, float lodMax);
 
 @interface RMRenderEncoder (Bindings)
 - (void)texture:(int)stage object:(id<MTLTexture>)t index:(NSUInteger)index;

@@ -201,7 +201,7 @@ void recordBytes(RMCommandBuffer *cb, Cmd m, const void *bytes, NSUInteger lengt
 
 // A bind's LOD clamps replace the state's (Metal's rule): the state of its descriptor with those clamps, made once per state and
 // clamps, bound as any state is (the frontend's the same)
-static id<MTLSamplerState> clampedSampler(id<MTLSamplerState> s, float lodMin, float lodMax)
+id<MTLSamplerState> clampedSampler(id<MTLSamplerState> s, float lodMin, float lodMax)
 {
     if (![(id)s isKindOfClass:[RMSampler class]])
         return s;

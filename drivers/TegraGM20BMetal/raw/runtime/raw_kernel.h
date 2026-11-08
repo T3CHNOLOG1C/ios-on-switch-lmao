@@ -53,6 +53,9 @@ public:
     bool importPages(void *addr, uint64_t bytes, Bo &bo, uint32_t surfaceId = 0, bool gpuReads = false);
     // The GPU may write the IOSurface from now on (BoImport took it as only sampled): before its first render or store.
     bool surfaceGpuWrites(uint32_t surfaceId);
+    // Priority (method 18): every channel of the connection runs at the most urgent of the process's queues' Metal
+    // priorities (TegraGM20BABI.h); false without the method
+    bool priority(uint32_t priority, uint32_t background);
     // SurfaceLayout (method 16) for the import `bo` of a surface: its layout, decided by the kernel once for every process
     // at the first asking import (TegraGM20BLayout.h: block-linear when that importer writes it alone). `writes`: this
     // texture renders into or stores to it. TegraGM20BLayoutTiled, TegraGM20BLayoutOtherShape, or 0 (pitch; also without

@@ -29,9 +29,17 @@ void logPred(RMPred p, uint64_t a, uint64_t b, NSString *detail)
 #endif
 }
 
-// The type encoding of a selector some MTL* protocol declares (the plugin's answerUnimplemented uses the same lookup).
+// The type encoding of a selector some MTL* protocol declares (the plugin's answerUnimplemented uses the same lookup), walked
+// once per selector: objc_copyProtocolList copies the shared cache's protocols (the frontend's forwardSignature, r14-maps)
 const char *metalTypes(SEL selector)
 {
+    static std::mutex lock;
+    static auto *known = new std::unordered_map<SEL, const char *>;
+    {
+        std::lock_guard<std::mutex> l(lock);
+        if (const auto it = known->find(selector); it != known->end())
+            return it->second;
+    }
     unsigned count = 0;
     Protocol *__unsafe_unretained *protocols = objc_copyProtocolList(&count);
     const char *types = nullptr;
@@ -45,7 +53,59 @@ const char *metalTypes(SEL selector)
         }
     }
     free(protocols);
+    std::lock_guard<std::mutex> l(lock);
+    known->emplace(selector, types);
     return types;
+}
+
+bool twinAnswers(Class twinClass, SEL selector)
+{
+    return twinClass && [twinClass instancesRespondToSelector:selector];
+}
+
+static void returnZero(NSInvocation *invocation)
+{
+    if (const NSUInteger length = invocation.methodSignature.methodReturnLength) {
+        uint64_t small[8] = {};
+        void *zero = length <= sizeof small ? small : calloc(1, length);
+        [invocation setReturnValue:zero];
+        if (zero != small)
+            free(zero);
+    }
+}
+
+void answerZero(id object, NSInvocation *invocation)
+{
+    Class cls = object_getClass(object);
+    SWITCH_REFUSE_DETAIL("raw", "selector.zero", uintptr_t(invocation.selector) * 31 + uintptr_t(cls),
+                         "-[%s %s] answered zero, as m2v's object answers it", class_getName(cls),
+                         sel_getName(invocation.selector));
+#if SWITCH_FRAME_TIMELINE
+    if (gRM)
+        gRM->stats.zeroAnswers.fetch_add(1, std::memory_order_relaxed);
+#endif
+    returnZero(invocation);
+}
+
+void answerMissing(id object, NSInvocation *invocation)
+{
+    Class cls = object_getClass(object);
+    const uint64_t key = switch_refusal_key_with(SWITCH_REFUSAL_KEY("raw", "selector.missing"),
+                                                 uintptr_t(invocation.selector) * 31 + uintptr_t(cls));
+    if (switch_refusal_first(key)) {
+        char text[256];
+        snprintf(text, sizeof text, "-[%s %s] has no raw method (m2v's object has one): answered zero",
+                 class_getName(cls), sel_getName(invocation.selector));
+        switch_refusal_log("raw", "selector.missing", text);
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+        os_log_fault(rawLog(), "raw: %{public}s", text);
+#endif
+    }
+#if SWITCH_FRAME_TIMELINE
+    if (gRM)
+        gRM->stats.twinForwards.fetch_add(1, std::memory_order_relaxed);
+#endif
+    returnZero(invocation);
 }
 
 // A format the raw path has a header for. RGB10A8_2P_XR10 only private or memoryless: its texels are m2v's own layout, not the two

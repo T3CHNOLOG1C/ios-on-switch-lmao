@@ -78,6 +78,38 @@ static size_t constantBytes(uint64_t type)
     return [(id<MTLFunction>)_twin functionType];
 }
 
+// Reflection: the AIR's, as m2v's function decodes it (the library raw keeps of m2v)
+- (NSDictionary<NSString *, MTLFunctionConstant *> *)functionConstantsDictionary
+{
+    return [(id<MTLFunction>)_twin functionConstantsDictionary];
+}
+
+- (MTLFunctionOptions)options
+{
+    return [(id<MTLFunction>)_twin options];
+}
+
+- (NSArray<MTLVertexAttribute *> *)vertexAttributes
+{
+    return [(id<MTLFunction>)_twin vertexAttributes];
+}
+
+- (NSArray<MTLAttribute *> *)stageInputAttributes
+{
+    return [(id<MTLFunction>)_twin stageInputAttributes];
+}
+
+- (id<MTLArgumentEncoder>)newArgumentEncoderWithBufferIndex:(NSUInteger)index
+{
+    return [(id<MTLFunction>)_twin newArgumentEncoderWithBufferIndex:index];
+}
+
+- (id<MTLArgumentEncoder>)newArgumentEncoderWithBufferIndex:(NSUInteger)index
+                                                 reflection:(MTLAutoreleasedArgument *)reflection
+{
+    return [(id<MTLFunction>)_twin newArgumentEncoderWithBufferIndex:index reflection:reflection];
+}
+
 @end
 
 static std::string constantsText(MTLFunctionConstantValues *values)
@@ -161,6 +193,39 @@ static std::string constantsText(MTLFunctionConstantValues *values)
     return (id<MTLFunction>)[self wrap:[(id<MTLLibrary>)_twin newFunctionWithDescriptor:d error:error]
                                   name:d.name
                              constants:d.constantValues];
+}
+
+// Made at once, as m2v's library makes it: through the descriptor, so the function is this library's (its states keyed by
+// the pack), never m2v's own
+- (void)newFunctionWithDescriptor:(MTLFunctionDescriptor *)d
+                completionHandler:(void (^)(id<MTLFunction>, NSError *))handler
+{
+    NSError *error = nil;
+    id<MTLFunction> function = [self newFunctionWithDescriptor:d error:&error];
+    handler(function, error);
+}
+
+// A pipeline library holds an Apple GPU's compiled functions, none for this device: the function is made as without one
+- (id<MTLFunction>)newFunctionWithName:(NSString *)name
+                        constantValues:(MTLFunctionConstantValues *)values
+                       pipelineLibrary:(id)pipelineLibrary
+                                 error:(NSError **)error
+{
+    (void)pipelineLibrary;
+    MTLFunctionDescriptor *d = [MTLFunctionDescriptor functionDescriptor];
+    d.name = name;
+    d.constantValues = values;
+    return [self newFunctionWithDescriptor:d error:error];
+}
+
+- (NSArray<NSString *> *)functionNames
+{
+    return [(id<MTLLibrary>)_twin functionNames];
+}
+
+- (MTLLibraryType)type
+{
+    return [(id<MTLLibrary>)_twin type];
 }
 
 @end

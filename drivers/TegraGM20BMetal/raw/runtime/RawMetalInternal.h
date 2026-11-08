@@ -20,6 +20,7 @@
 #include <set>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 #include "GpuMemoryRelease.h"
 #include "LimitsTable.h"
@@ -79,7 +80,9 @@ struct Stats {
     std::atomic<uint64_t> replayDraws{0}, twinTextures{0}, twinBuffers{0}, twinOthers{0}, twinTextureUs{0};
     // command buffers completed before their submitting thread scheduled them (finish() ran their scheduled handlers)
     std::atomic<uint64_t> scheduledByFinish{0};
-    std::atomic<uint64_t> twinForwards{0};  // selectors a facade object forwarded to its m2v twin (RMObject)
+    std::atomic<uint64_t> twinForwards{
+        0};  // selectors m2v's object answers that a facade object has no method for (answerMissing)
+    std::atomic<uint64_t> zeroAnswers{0};  // selectors answered zero, as m2v's objects answer them (answerZero)
 #endif
 };
 
@@ -151,6 +154,12 @@ extern RawState *gRM;
 
 // RawMetalPredicates.mm
 const char *metalTypes(SEL selector);
+// m2v's object of `twinClass` has a method for `selector`: else it answers zero (the frontend's forwardZero), and so does the
+// facade's object, with no twin made and nothing sent to m2v (answerZero)
+bool twinAnswers(Class twinClass, SEL selector);
+void answerZero(id object, NSInvocation *invocation);
+// A selector m2v's object answers that raw has no method for: answered zero, a fault in debug builds and the rates line's tw=../f
+void answerMissing(id object, NSInvocation *invocation);
 bool rawShape(MTLTextureDescriptor *d);
 bool chainShape(MTLTextureDescriptor *d);
 bool lineShape(MTLTextureDescriptor *d);
@@ -223,6 +232,10 @@ void surfaceConverted(IOSurfaceRef s, bool made);  // a planar or YCbCr texture 
 uint64_t surfaceWrites(IOSurfaceRef s);
 void noteSurfaceWrite(IOSurfaceRef s);
 void noteSurfaceWrites(RMCommandBuffer *cb, size_t from, size_t to);  // after [from, to) of `cb` was submitted
+
+// RawMetalQueuePriority.mm
+void queuePriorityAdd(RMQueue *queue);
+void queuePriorityRemove(RMQueue *queue);
 
 // RawMetalSubmit.mm
 void orderRefused(const char *what, int kr);

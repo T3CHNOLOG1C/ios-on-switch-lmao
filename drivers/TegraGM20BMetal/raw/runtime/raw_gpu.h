@@ -628,6 +628,16 @@ public:
         return id && k_.surfaceGpuWrites(uint32_t(id));
     }
 
+    bool gpuPriority(uint32_t priority, uint32_t background)
+    {
+        return k_.priority(priority, background);
+    }
+
+    bool hasGpuPriority() const
+    {
+        return (k_.info().flags & TegraGM20BInfoPriority) != 0;
+    }
+
     // `writes`: the texture is rendered into or stored to. A surface the kernel decides block-linear (the first texture over
     // it writes it: TegraGM20BLayout.h) has block-linear textures only, at the decided shape (false: another one)
     bool createSurfaceTexture(uint64_t surfaceId, void *base, uint64_t allocBytes, const void *surface, uint64_t offset,
