@@ -16,6 +16,8 @@ class Inputs:
     regwrite: Path
     sd: Path | None
     qmp: Path
+    kernel: Path | None = None
+    icount: bool = True
 
 
 def _load(path: str, address: int) -> list[str]:
@@ -58,8 +60,14 @@ def command(run: Path, inputs: Inputs) -> list[str]:
         '-D', 'qemu-guest.log',
         '-object', 'secret,id=tegra.fuse.cache,file=fuse.bin,format=raw',
         '-global', f'driver=tegra.evp,property=cpu-reset-vector,value={IRAM_STUB:#x}',
+        '-global', 'driver=tegra.gpu,property=method-log,value=gpu-methods.raw',
+        '-global', 'driver=tegra.gpu,property=event-log,value=gpu-events.log',
     ]  # fmt: skip
     args += stage(run, inputs.package, inputs.regwrite)
+    if inputs.icount:
+        # Guest time follows executed instructions, so a loaded host cannot expire a driver's timeout before the
+        # device it waits for has run (with MTTCG at load ~50, drivers panicked on interrupts that had not been lost).
+        args += ['-icount', 'shift=auto']
     if inputs.sd:
         args += ['-drive', f'if=sd,index=0,format=vmdk,file={inputs.sd},snapshot=on']
     return args

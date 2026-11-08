@@ -49,6 +49,9 @@ def _bits(*bits: int) -> int:
 GENERAL_UPDATE, WIN_ALL_UPDATE = 1 << 8, _bits(8, 9, 10, 11, 12)
 GENERAL_ACT_REQ, WIN_ALL_ACT_REQ = 1 << 0, _bits(0, 1, 2, 3, 4)
 
+# hw_init.c: the microsecond timer's divider for clk_m at 19.2 MHz.
+TIMERS = [(0x60005014, 0x45F)]
+
 # di.c display_init: the display's clocks out of reset (DISP1, host1x, DSI, MIPI_CAL) and PLLD at hekate's rate.
 CLOCKS = [
     car(0x30C, _bits(24, 16)),  # RST_DEV_H_CLR: MIPI_CAL, DSI
@@ -190,7 +193,7 @@ HANDOFF = [
     (PMC + 0xB1C, PANEL_SAM_AMS699VC01),
 ]
 
-REGISTERS = CLOCKS + DC_INIT + DC_VIDEO_MODE + WIN_A_PITCH + MEMORY_CONTROLLER + HANDOFF
+REGISTERS = TIMERS + CLOCKS + DC_INIT + DC_VIDEO_MODE + WIN_A_PITCH + MEMORY_CONTROLLER + HANDOFF
 
 
 def register_table(entry: int) -> bytes:
