@@ -445,13 +445,20 @@ struct Stats {
     uint64_t flushes, flushErrors, flushNs;
     // Erase-based trim: erase commands, the sectors they freed and the time the card was busy with them.
     uint64_t trimErases, trimSectors, trimNs;
+#if DEVELOPMENT || DEBUG
     // SwitchSdBus.h: commands refused because the bus was not free at their one PRESENT_STATE read, and DAT0 releases
-    // awaited by CMD13 with busy (the card still programming after a transfer complete).
-    uint64_t busRefused, releases;
-    // ADMA2 chains that reached a non-cacheable page (dmaPage).
-    uint64_t uncachedChains;
+    // awaited by CMD13 with busy (the card still programming after a transfer complete). ADMA2 chains that reached a
+    // non-cacheable page (dmaPage).
+    uint64_t busRefused, releases, uncachedChains;
+#endif
 };
 }
+
+#if DEVELOPMENT || DEBUG
+#define SWITCH_SD_DEBUG_COUNT(field) (++stats.field)
+#else
+#define SWITCH_SD_DEBUG_COUNT(field) ((void)0)
+#endif
 
 class NativeSwitchBlock;
 
@@ -1044,7 +1051,7 @@ bool NativeSwitchBlock::claimBus(SwitchSdUse use)
         state = bus.claim(r32(PRESENT), use);
     if (state == SwitchSdBusState::kFree)
         return true;
-    ++stats.busRefused;
+    SWITCH_SD_DEBUG_COUNT(busRefused);
     return false;
 }
 
@@ -1060,9 +1067,9 @@ void NativeSwitchBlock::ended(uint32_t status)
 // waits for the release, so this runs only if the controller ends one early. 0, or 1 with the lines reset.
 int NativeSwitchBlock::awaitRelease()
 {
-    ++stats.releases;
+    SWITCH_SD_DEBUG_COUNT(releases);
     if (bus.claim(r32(PRESENT), SwitchSdUse::kBusy) != SwitchSdBusState::kFree) {
-        ++stats.busRefused;
+        SWITCH_SD_DEBUG_COUNT(busRefused);
         return 1;
     }
     w32(STATUS, 0xffffffff);
@@ -1736,7 +1743,7 @@ void NativeSwitchBlock::prepareDirect(bool write, ReadFill fill)
                   tableUncached, sinkPA, sinkPA ? static_cast<uint64_t>(kGapSectors) * kSector : 0);
     }
     if (tableUncached)
-        ++stats.uncachedChains;
+        SWITCH_SD_DEBUG_COUNT(uncachedChains);
     switch_dcache_sync();
     stats.syncNs += switch_now_ns() - began;
 }
@@ -3090,6 +3097,7 @@ void NativeSwitchBlock::logThroughput()
         snprintf(cqState + at, sizeof(cqState) - at, " wflush %llu/%llu %llums", stats.flushes, stats.flushErrors,
                  stats.flushNs / 1000000);
     }
+#if DEVELOPMENT || DEBUG
     // SwitchSdBus.h: commands refused at their PRESENT_STATE read and DAT0 releases awaited by CMD13 (both 0 per the
     // spec).
     if (stats.busRefused || stats.releases) {
@@ -3100,6 +3108,7 @@ void NativeSwitchBlock::logThroughput()
         const size_t at = strlen(cqState);
         snprintf(cqState + at, sizeof(cqState) - at, " uncached %llu", stats.uncachedChains);
     }
+#endif
     // Erase-based trim: erases, MiB freed and the card's busy ms for them (since boot), and AUs still due.
     if (stats.trimErases || trim.pending) {
         const size_t at = strlen(cqState);
