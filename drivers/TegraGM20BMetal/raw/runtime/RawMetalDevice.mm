@@ -133,7 +133,7 @@
     RMBuffer *b = [RMBuffer new];
     b->_device = self;
     b->_options = o;
-    if (!gRM->raw->createBufferNoCopy(p, n, b->_raw)) {  // (not page-aligned, or refused): m2v's, as today
+    if (!gRM->raw->createBufferNoCopy(p, n, b->_raw)) {  // (the import refused): m2v's, as today
         if (!predLogged(PredCallBufForeign))
             logPred(PredCallBufForeign, uintptr_t(p) & 0xfff, n, @"(made: a no-copy buffer the raw path refused)");
         RMTwinObject *t = [RMTwinObject new];

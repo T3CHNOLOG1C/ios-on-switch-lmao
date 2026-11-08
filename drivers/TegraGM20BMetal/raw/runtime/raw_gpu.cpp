@@ -1681,13 +1681,16 @@ uint64_t Device::wcChunkBytesHeld()
     return n;
 }
 
+// The caller's pages around [bytes, bytes + length): the frontend answers minBufferNoCopyAlignmentBytes with the kernel's 4 KiB
+// page, not getpagesize()'s 16 KiB, and Apple's own callers (iconservicesagent on 27) pass pointers inside a page; the import
+// binds whole kernel pages and the buffer's address is its first byte's inside them
 bool Device::createBufferNoCopy(void *bytes, uint64_t length, Buffer &b)
 {
     b = {};
-    if (!bytes || !length || (uintptr_t(bytes) & (pageSize() - 1)))
+    if (!bytes || !length)
         return false;
     std::lock_guard<std::mutex> l(lock_);
-    if (!(b.import = importSurface(0, bytes, (length + pageSize() - 1) & ~uint64_t(pageSize() - 1), nullptr)))
+    if (!(b.import = importSurface(0, bytes, length, nullptr)))
         return false;
     b.va = b.import->bo.va;
     b.cpu = static_cast<uint8_t *>(bytes);
