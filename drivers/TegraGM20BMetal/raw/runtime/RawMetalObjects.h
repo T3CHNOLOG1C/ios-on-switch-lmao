@@ -389,6 +389,9 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
 - (void)waitForFence:(id<MTLFence>)fence;
 @end
 
+// `s` with a bind's LOD clamps (RawMetalBindings.mm)
+id<MTLSamplerState> clampedSampler(id<MTLSamplerState> s, float lodMin, float lodMax);
+
 @interface RMRenderEncoder (Bindings)
 - (void)texture:(int)stage object:(id<MTLTexture>)t index:(NSUInteger)index;
 - (void)sampler:(int)stage object:(id<MTLSamplerState>)s index:(NSUInteger)index;

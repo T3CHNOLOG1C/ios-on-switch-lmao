@@ -22,6 +22,22 @@
 
 @implementation RMComputeState
 
+// What NAK made of the kernel, as the m2v state it carries compiled it
+- (NSUInteger)maxTotalThreadsPerThreadgroup
+{
+    return [(id<MTLComputePipelineState>)_twin maxTotalThreadsPerThreadgroup];
+}
+
+- (NSUInteger)threadExecutionWidth
+{
+    return [(id<MTLComputePipelineState>)_twin threadExecutionWidth];
+}
+
+- (NSUInteger)staticThreadgroupMemoryLength
+{
+    return [(id<MTLComputePipelineState>)_twin staticThreadgroupMemoryLength];
+}
+
 // The pack's kernel of this state at `threads` threads a threadgroup, threadgroup memory `memory` and the textures and
 // samplers bound (raw_compute_key.h); null: none
 - (const raw::ComputeState *)kernel:(const uint32_t *)threads
