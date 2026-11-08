@@ -81,18 +81,14 @@ py_binary(
         ":loader_abi",
         ":native_oled_adt",
         ":native_xnu_layout",
-        ":trust_lib",
+        "//tools/trustcache",
     ],
-)
-
-py_library(
-    name = "trust_lib",
-    srcs = ["trust.py"],
 )
 
 py_binary(
     name = "trust",
     srcs = ["trust.py"],
+    deps = ["//tools/trustcache"],
 )
 
 py_binary(

@@ -4,6 +4,7 @@
 #include "../../drivers/NativeSwitchBlock/SwitchCryptex.h"
 #include "storage/block_backend.h"
 #include <sys/fcntl.h>
+#include <switch/auth_fs.h>
 
 #define SWITCH_RAW_DATA_UUID    "D1B1D053-D0A6-496C-8625-A947A3DA863E"
 #define SWITCH_RAW_PREBOOT_UUID "4AA4A761-5138-439D-9A30-D4138F6887FA"
@@ -170,6 +171,7 @@ static int native_switch_raw_cache_prepare(proc_t p, user_addr_t scratch, user_a
             cache_device = image_volume;
     }
     native_owner_cryptex_host = preboot_mount;
+    switch_auth_fs_init();
     /* dyld looks for code that only the OS cryptex has under the cryptex prefix that libignition reports. Ignition is
      * off here, so show each directory holding such code through the root's own: every one of 21H461's and 24B119's
      * (Mach-O files of the cryptex outside its dyld cache whose path the System volume lacks), each where the selected
