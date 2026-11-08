@@ -272,13 +272,13 @@ NAMES = {
     0xFFFFFFF00A68F4EC: '_csblob_register_profile',
     # One function of ours each under two names, so the GOT count cannot place them. kalloc.c's frees in lifs's GOT
     # order between kernel_thread_start and lck_grp_alloc_init: the data pair (tail calls into kfree_ext), then the
-    # typed pair (the zone view check, then kfree_ext). memcpy before memmove in IOGPUFamily's GOT: the 56-byte
+    # typed pair (the zone view check, then kfree_ext); the _external twins bound by the name our KPI exports. memcpy before memmove in IOGPUFamily's GOT: the 56-byte
     # front and the 432-byte body. IOLib.cpp's IOLockSleep and IOLockSleepDeadline, each only a branch to
     # lck_mtx_sleep / lck_mtx_sleep_deadline.
     0xFFFFFFF00A13041C: '_kfree_data',
-    0xFFFFFFF00A130430: '_kfree_data_external',
+    0xFFFFFFF00A130430: '_kfree_data',
     0xFFFFFFF00A1303D4: '_kfree_type_impl',
-    0xFFFFFFF00A130414: '_kfree_type_impl_external',
+    0xFFFFFFF00A130414: '_kfree_type_impl',
     0xFFFFFFF00A227074: '_memcpy',
     0xFFFFFFF00A972EB0: '_memmove',
     0xFFFFFFF00A80E4D0: '_IOLockSleep',
@@ -396,6 +396,26 @@ NAMES = {
     # apfs between lck_mtx_lock and lck_mtx_unlock (IOLockLock and IOLockUnlock's own names): six arguments, the
     # sleep action's flags tested first, the deadline in x5.
     0xFFFFFFF00A13C1F0: '_lck_mtx_sleep_with_inheritor',
+    # Read from the code, each the one name of ours in its GOT gap that does it: OSSerializer::withBlock (_Block_copy
+    # and OSSerializer's metaclass); IOUserClient::removeMappingForDescriptor (the mappings set walked with an
+    # OSCollectionIterator, each IOMemoryMap's descriptor compared); IOWorkLoop::setMaximumLockTime (under the gate,
+    # the interval stored and option bit 1 into the flags, as ours).
+    0xFFFFFFF00A7DA930: '__ZN12OSSerializer9withBlockEU13block_pointerFbP11OSSerializeE',
+    0xFFFFFFF00A8BB858: '__ZN12IOUserClient26removeMappingForDescriptorEP18IOMemoryDescriptor',
+    0xFFFFFFF00A868ACC: '__ZN10IOWorkLoop18setMaximumLockTimeEyj',
+    # Identified for 24A446 in UniXNU's XnuPrelink fixtures (fileset-24A446-symbols.json) and found here at the
+    # same place: task_is_privileged right after init_task_ledgers (a cached bool byte in 13432); isLPWMode after
+    # isAOTMode, reading the same +0x35c byte, before IOPMIsLPWMode; the {2, 2} SMR_SEQ_INIT clock apfs reaches as
+    # _apfs_smr, Private.exports' name for _vfs_smr (tsleep, mount_common and vflush use it here).
+    0xFFFFFFF00A16FB0C: '_task_is_privileged',
+    0xFFFFFFF00A91D6E8: '__ZN14IOPMrootDomain9isLPWModeEv',
+    0xFFFFFFF00ABD4640: '_apfs_smr',
+    # subr_log.c's logwakeup, read from the code (the log-open flag, selwakeup, then SIGIO to the pgid or pid):
+    # DiskImages' one entry between kauth_cred_unref and mach_absolute_time, where its 21H461 import was logwakeup.
+    0xFFFFFFF00A6737F4: '_logwakeup',
+    # OSMetaClass::getMetaClassWithName: NULL for no name, then sAllClassesDict->getObject(name) under
+    # sAllClassesLock (the virtual call's ptrauth discriminator 0x5837 is OSDictionary::getObject(const OSSymbol *)'s).
+    0xFFFFFFF00A7A17B8: '__ZN11OSMetaClass20getMetaClassWithNameEPK8OSSymbol',
 }
 
 
