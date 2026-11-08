@@ -26,6 +26,8 @@
 #   stage_test        stage-tegra-gm20b-metal.py on a directory standing in for the Data volume
 #   inventory_test    raw/test/inventory.tsv, selgaps.txt and refused.txt still describe the kinds' sent tables (selcover,
 #                     over the host harness, writes them from the raw device's objects)
+#   rawpack_records_test  what the pack generator keeps of a probe: texture3d entries, 32 set-0 entries and m2v's
+#                     own buffer beside an 8-bit sRGB target
 #   raw_ycbcr_test    raw/runtime/raw_ycbcr.cpp: the two-plane YCbCr textures the raw path converts (m2v's rules) and the
 #                     conversion's shape; its texels against Metal's reads are raw/test/ycbcroracle.mm's (this Mac's GPU)
 #   raw_xr_test       raw/runtime/raw_xr.h: the extended-range formats the raw path keeps and the codes Metal's Clear
@@ -202,6 +204,13 @@ py_test(
 py_test(
     name = "rawpack_split_test",
     srcs = ["rawpack_split_test.py"],
+    deps = ["//drivers/TegraGM20BMetal:raw_pack"],
+)
+
+py_test(
+    name = "rawpack_records_test",
+    srcs = ["rawpack_records_test.py"],
+    data = ["//drivers/TegraGM20BMetal:raw/runtime/raw_owned.h"],  # mkpack.py reads it at import
     deps = ["//drivers/TegraGM20BMetal:raw_pack"],
 )
 

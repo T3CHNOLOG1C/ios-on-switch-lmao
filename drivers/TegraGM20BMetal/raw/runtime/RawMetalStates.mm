@@ -266,11 +266,18 @@ static void completeLater(RMPipeline *p, MTLRenderPipelineDescriptor *d)
 // AsyncPipelines.h). A state the pack draws gets one made at its first set there, by a fallback: made eagerly on the
 // user-initiated workers (above backboardd's main thread), they cost ~9 ms of CPU each, 25-170 ms of a worker, while no
 // command buffer fell back (11-06 21:03: 61 twins, 1074 raw command buffers, none to m2v).
+// A packed state is the device's archive hit, so its twin goes without the archives the creation listed (Core Animation's
+// own, which holds nothing for this GPU) and without FailOnBinaryArchiveMiss: refused there, a command buffer that falls
+// back would have no state to draw with, and listed there, the twin would be made at once instead of at its first set.
 static id<MTLRenderPipelineState> pipelineTwin(MTLRenderPipelineDescriptor *d, MTLPipelineOption o, bool packed,
                                                NSError **error)
 {
-    if (packed && native_bridge_metal_render_pipeline_lazy)
-        return native_bridge_metal_render_pipeline_lazy(gRM->fallback, twinDescriptor(d), o);
+    if (packed && native_bridge_metal_render_pipeline_lazy) {
+        MTLRenderPipelineDescriptor *t = twinDescriptor(d);
+        t.binaryArchives = nil;
+        return native_bridge_metal_render_pipeline_lazy(gRM->fallback, t,
+                                                        o & ~MTLPipelineOptionFailOnBinaryArchiveMiss);
+    }
     return [gRM->fallback newRenderPipelineStateWithDescriptor:twinDescriptor(d) options:o reflection:nil error:error];
 }
 

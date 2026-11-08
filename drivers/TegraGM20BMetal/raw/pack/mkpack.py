@@ -234,8 +234,11 @@ EXPECTED_SKIPS = (
     'a sampler m2v derives from a bound one',
     'the raw path binds root, shader data, set 0 and its uniform buffers',
     'as a uniform buffer the layout does not name',
-    'the raw path has no 3D textures',
+    'set-0 entries',
+    "a buffer of m2v's own",
 )
+# raw_pack.h kNoSlot: a texture3d argument's Metal index, which the probe cannot tell (m2v binds its own 3D view there)
+NO_SLOT = 0xFF
 
 
 def unexpected(why: str) -> bool:
@@ -455,7 +458,7 @@ def handle_entry(e: tuple, tsc: dict[int, list[int]], constexpr_tsc: list[list[i
     elif tk[0] == 'fetch':
         ent['tex'] = ('fetch', tk[1])
     elif tk[0] == 'tex3d':
-        problems.append('a texture3d argument, and the raw path has no 3D textures')
+        ent['tex'] = ('tex3d', NO_SLOT)
     else:
         problems.append(f'texture {tk}')
     if sk is None:
@@ -512,6 +515,8 @@ def pipeline(
         for e in ents
     ]
     rec['entries'] = entries
+    if len(entries) > packfile.PACK_ENTRIES:
+        problems.append(f'more than {packfile.PACK_ENTRIES} set-0 entries')
     rec['vbs'] = vertex_streams(r, problems)
     rec['fetch'] = any(e.get('tex', [None])[0] == 'fetch' for e in entries if e['kind'] == 'handle')
     rec['clears'] = len(p['clears'])

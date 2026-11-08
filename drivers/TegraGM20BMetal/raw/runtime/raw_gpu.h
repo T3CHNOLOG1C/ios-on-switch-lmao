@@ -252,7 +252,7 @@ struct Pipeline {
         uint8_t group, slot, entry;
     };
 
-    UboCbuf ubos[16] = {};
+    UboCbuf ubos[2 * (sizeof(PackProgram::cbufType) - 1)] = {};  // constant buffers 1.. of each program
     uint8_t uboCount = 0;
     bool ubosNamed = true;
     uint8_t writeBits = 0;  // colors its draws write: SET_CT_WRITE(i) with a channel on
