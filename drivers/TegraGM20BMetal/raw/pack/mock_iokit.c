@@ -62,9 +62,9 @@ struct bo {
 static struct bo bos[kMaxBo];
 static atomic_uint nbo = 1;
 static uint32_t submitted[16];
-static uint32_t *fence;      /* the fence page, a TegraGM20BAbiFence per channel at slot*16 */
-static uint32_t dead[16];    /* method 11's error of a killed channel */
-static uint32_t made[16];    /* channels made in each slot: a wait on one destroyed and made again answers NotResponding */
+static uint32_t *fence;   /* the fence page, a TegraGM20BAbiFence per channel at slot*16 */
+static uint32_t dead[16]; /* method 11's error of a killed channel */
+static uint32_t made[16]; /* channels made in each slot: a wait on one destroyed and made again answers NotResponding */
 static uint64_t dead_va[16]; /* and its fault VA */
 static uint32_t engines[16];
 static uint8_t live[16]; /* slots in use: a connection gets its lowest free one, its seqnos continuing (the kext's) */
