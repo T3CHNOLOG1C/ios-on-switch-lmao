@@ -1,10 +1,10 @@
 """fill.fill as the user on a small composed container: System, Data and Preboot volumes in a GPT image.
 
 System's /private/var holds root's, mobile's and a daemon's files, given offline as Apple's are. Populate must copy them
-to Data with those owners, put the os role's translated files on Data (under /private/var in place, the rest in
-Switch/pretranslated, root's and system-immutable), stage a cryptex root's in Preboot, and give the boot package's
-overlay, the GPU stager's files and the shader seed root's, except what the stager writes into mobile's home. hdiutil
-and diskutil: macOS, outside the sandbox (--strategy=TestRunner=local).
+to Data with those owners, put the os role's translated files on Data (under /private/var in place, except the staged
+system apps, which keep Apple's bytes; the rest in Switch/pretranslated, root's and system-immutable), stage a cryptex
+root's in Preboot, and give the boot package's overlay, the GPU stager's files and the shader seed root's, except what
+the stager writes into mobile's home. hdiutil and diskutil: macOS, outside the sandbox (--strategy=TestRunner=local).
 """
 
 import hashlib
@@ -88,6 +88,8 @@ class Fill(unittest.TestCase):
                 (var / 'db/daemon/state').write_text('daemon')
                 (var / 'db/daemon/state').chmod(0o600)
                 (var / 'db/tool').write_bytes(b'arm64e var')
+                (var / 'staged_system_apps/App.app').mkdir(parents=True)
+                (var / 'staged_system_apps/App.app/App').write_bytes(b'arm64e app')
                 (root / 'usr/libexec').mkdir(parents=True)
                 (root / 'usr/libexec/tool').write_bytes(b'arm64e')
                 (root / 'usr/libexec/tool').chmod(0o755)
@@ -113,6 +115,7 @@ class Fill(unittest.TestCase):
         files = []
         for i, (path, before, after) in enumerate((
             ('/private/var/db/tool', b'arm64e var', b'arm64 var'),
+            ('/private/var/staged_system_apps/App.app/App', b'arm64e app', b'arm64 app'),
             ('/usr/libexec/tool', b'arm64e', b'arm64'),
         )):  # fmt: skip
             (delta / f'files/{i}').write_bytes(after)
@@ -159,6 +162,7 @@ class Fill(unittest.TestCase):
                 self.assertEqual(owner(data, 'db/daemon/state'), (DAEMON, DAEMON, 0o600))
                 self.assertEqual(owner(data, 'mobile/Library')[:2], (501, 501))
                 self.assertEqual((data / 'db/tool').read_bytes(), b'arm64 var')
+                self.assertEqual((data / 'staged_system_apps/App.app/App').read_bytes(), b'arm64e app')
                 placed = Path(pretranslate.OVERLAY) / 'usr/libexec/tool'
                 self.assertEqual(owner(data, str(placed)), (0, 0, 0o755))
                 self.assertTrue(os.lstat(data / placed).st_flags & stat.SF_IMMUTABLE)
