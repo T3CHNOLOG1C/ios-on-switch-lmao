@@ -64,6 +64,10 @@ constexpr MethodRange kOwnedMethods[] = {
     {0x1288, 0x128C},
     {0x1338, 0x133C},
     {0x1424, 0x142C},
+    // the sample layout, SET_ANTI_ALIAS and SET_ANTI_ALIAS_SAMPLE_POSITIONS: the pass's (raw_samples.h), as NVK sets them from its
+    // attachments' sample count
+    {0x11E0, 0x11F0},
+    {0x15D0, 0x15D4},
 };
 // clang-format on
 

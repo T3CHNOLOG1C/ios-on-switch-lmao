@@ -167,6 +167,7 @@ bool volumeShape(MTLTextureDescriptor *d);
 bool volumeRendered(MTLTextureDescriptor *d);
 uint32_t arrayType(MTLTextureDescriptor *d);
 bool zetaDescriptor(MTLTextureDescriptor *d);
+bool multisampleShape(MTLTextureDescriptor *d);
 uint32_t rawShapeTerm(MTLTextureDescriptor *d);
 // A texture the raw path does not keep: its predicate, and the predicate's first line with the texture's details
 void refuseTexture(RMTexture *t, RMPred p, uint64_t a, uint64_t b, NSString *kind, NSString *extra);

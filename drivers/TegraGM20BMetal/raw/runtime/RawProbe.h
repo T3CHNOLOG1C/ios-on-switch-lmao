@@ -43,7 +43,7 @@ private:
     PackRules rules_;
     bool rulesMade_ = false;
 
-    id<MTLTexture> target(MTLPixelFormat format, bool memoryless);
+    id<MTLTexture> target(MTLPixelFormat format, bool memoryless, NSUInteger samples);
     MTLRenderPassDescriptor *pass(MTLRenderPipelineDescriptor *d);
     Compiler::Outcome run(id<MTLRenderPipelineState> twin, MTLRenderPipelineDescriptor *d, uint32_t bytes,
                           nvdec::ProbeSubmission &out, std::string &why, bool bindOffsets = false);

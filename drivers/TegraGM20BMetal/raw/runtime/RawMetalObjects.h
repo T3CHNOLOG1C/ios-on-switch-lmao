@@ -109,7 +109,11 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
     uint64_t _imageWrites;  // and its surface's writes the seed does not show (surfaceWrites)
     bool _imageCurrent;
     RMTexture *_parent;  // a view's
-    RMBuffer *_buffer;   // a texture over a buffer's
+    // a view of part of its parent (newTextureViewWithPixelFormat:textureType:levels:slices:): those of the parent, which its
+    // twin views too; the view's type is its descriptor's
+    NSRange _viewLevels, _viewSlices;
+    bool _viewPart;
+    RMBuffer *_buffer;  // a texture over a buffer's
     NSUInteger _offset, _rowBytes;
     std::atomic<bool> _gpuDirty;
     MTLPurgeableState _purgeable;
@@ -351,6 +355,7 @@ static inline void hit(RMCommandBuffer *cb, RMPred p, uint64_t a = 0, uint64_t b
     uint32_t _formats[8];  // the pass's color attachments' formats as the raw path holds them (0: none)
     uint32_t _count;       // its attachment count (the last attachment's index + 1)
     uint32_t _zeta;        // its depth/stencil attachment's format as the raw path holds it (0: none)
+    uint32_t _samples;     // its color attachments' samples a pixel
     uint32_t _passAt;      // its pass's RMPass (the command buffer's _passes)
     raw::DepthStencilDesc _ds;
     MTLRenderPassDescriptor *_pass;  // the command buffer's copy, which the raw encode and m2v's replay read

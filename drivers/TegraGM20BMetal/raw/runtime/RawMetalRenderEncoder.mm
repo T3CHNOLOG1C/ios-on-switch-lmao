@@ -194,6 +194,10 @@ static void forwardCall(RMEncoder *e, SEL selector, const void *argument)
         [_cb takeReason:WhyEncode why:@"a depth/stencil state or format the pass's attachment does not take"];
         return hit(_cb, PredEncDepthStencil, pl.depthFormat, _zeta | uint64_t(_ds.active()) << 32);
     }
+    if (pl.samples != _samples || pl.samplePasses > 1) {
+        [_cb takeReason:WhyEncode why:@"a state whose samples a pixel or per-sample shading the pass does not take"];
+        return hit(_cb, PredEncSamples, pl.samples, _samples | uint64_t(pl.samplePasses) << 32);
+    }
     const raw::PackPipeline &r = *pl.rec;
     for (uint32_t i = 0; i < r.entries; i++) {
         const raw::PackEntry &e = r.entry[i];

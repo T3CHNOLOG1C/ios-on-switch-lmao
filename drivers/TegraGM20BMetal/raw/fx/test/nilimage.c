@@ -6,6 +6,11 @@
 // usage: nilimage <libvulkan_nouveau.dylib> <dim 1|2|3> WxHxDxL <bytes a texel 1|2|4|8|16> <2d-view 0|1> <view: plain|cube>...
 // prints per image: "dim W H D L bpp view2d view | size align array_stride | level offset row_stride y_log2 z_log2 ... |
 // header words | hash"
+//    or: nilimage <dylib> view WxHxL <levels> <bpp> <2d|2da|cube|cubea> <base level> <levels> <base layer> <layers>...
+// prints per view of a 2D image (array) of that many levels: its header at 0x100000, the image's base
+//    or: nilimage <dylib> ms WxH <bpp> <samples>...
+// prints per multisampled image: "WxH bpp samples layout | size align | row_stride y_log2 | header words | hash" (the pattern
+// copied in over its extent in samples)
 // build: nil.h from cbindgen (bazel build //third_party/mesa/src/nouveau/nil:nil_h), util/format/u_format_gen.h generated beside
 // it (uv run --with pyyaml python3 third_party/mesa/src/util/format/u_format_table.py <its u_format.yaml> --enums), then
 //   xcrun clang -O1 -DHAVE_FUNC_ATTRIBUTE_PACKED -I <that directory> -I third_party/mesa/include -I third_party/mesa/src
@@ -38,9 +43,126 @@ static enum pipe_format formatOf(uint32_t bpp)
     }
 }
 
+// Views of part of a 2D image of `levels` levels and L layers: 8 arguments a view
+static int views(const struct nv_device_info *dev, int n, char **v, typeof(&nil_image_init) init,
+                 typeof(&nil_image_view_descriptor) describe, typeof(&nil_format) format)
+{
+    for (int a = 0; a + 7 < n; a += 8) {
+        uint32_t w = 0, h = 0, layers = 1;
+        if (sscanf(v[a], "%ux%ux%u", &w, &h, &layers) < 2)
+            return 2;
+        const uint32_t levels = (uint32_t)atoi(v[a + 1]), bpp = (uint32_t)atoi(v[a + 2]),
+                       baseLevel = (uint32_t)atoi(v[a + 4]), viewLevels = (uint32_t)atoi(v[a + 5]),
+                       baseLayer = (uint32_t)atoi(v[a + 6]), viewLayers = (uint32_t)atoi(v[a + 7]);
+        const char *type = v[a + 3];
+        const struct nil_format f = format(formatOf(bpp));
+        struct nil_image_init_info info;
+        memset(&info, 0, sizeof info);
+        info.dim = NIL_IMAGE_DIM_2D;
+        info.format = f;
+        info.extent_px.width = w;
+        info.extent_px.height = h;
+        info.extent_px.depth = 1;
+        info.extent_px.array_len = layers;
+        info.levels = levels;
+        info.samples = 1;
+        info.modifier = DRM_FORMAT_MOD_INVALID;
+        struct nil_image img;
+        if (!init(dev, &img, &info)) {
+            printf("%ux%ux%u %u refused\n", w, h, layers, levels);
+            continue;
+        }
+        struct nil_view view;
+        memset(&view, 0, sizeof view);
+        view.view_type = !strcmp(type, "2da")     ? NIL_VIEW_TYPE_2D_ARRAY
+                         : !strcmp(type, "cube")  ? NIL_VIEW_TYPE_CUBE
+                         : !strcmp(type, "cubea") ? NIL_VIEW_TYPE_CUBE_ARRAY
+                                                  : NIL_VIEW_TYPE_2D;
+        view.access = NIL_VIEW_ACCESS_TEXTURE;
+        view.format = f;
+        view.base_level = baseLevel;
+        view.num_levels = viewLevels;
+        view.base_array_layer = baseLayer;
+        view.array_len = viewLayers;
+        view.swizzle[0] = PIPE_SWIZZLE_X;
+        view.swizzle[1] = PIPE_SWIZZLE_Y;
+        view.swizzle[2] = PIPE_SWIZZLE_Z;
+        view.swizzle[3] = PIPE_SWIZZLE_W;
+        const struct nil_descriptor desc = describe(dev, &img, &view, 0x100000);
+        printf("%ux%ux%u %u %u %s %u %u %u %u |", w, h, layers, levels, bpp, type, baseLevel, viewLevels, baseLayer,
+               viewLayers);
+        for (int k = 0; k < 8; k++)
+            printf(" %08x", desc.bits[k]);
+        printf("\n");
+    }
+    return 0;
+}
+
+// Multisampled 2D images, one level: 3 arguments an image
+static int multisampled(const struct nv_device_info *dev, int n, char **v, typeof(&nil_image_init) init,
+                        typeof(&nil_image_view_descriptor) describe, typeof(&nil_format) format,
+                        typeof(&nil_copy_linear_to_tiled) copy, typeof(&nil_extent4d_px_to_B) toBytes)
+{
+    for (int a = 0; a + 2 < n; a += 3) {
+        uint32_t w = 0, h = 0;
+        if (sscanf(v[a], "%ux%u", &w, &h) != 2)
+            return 2;
+        const uint32_t bpp = (uint32_t)atoi(v[a + 1]), samples = (uint32_t)atoi(v[a + 2]);
+        const struct nil_format f = format(formatOf(bpp));
+        struct nil_image_init_info info;
+        memset(&info, 0, sizeof info);
+        info.dim = NIL_IMAGE_DIM_2D;
+        info.format = f;
+        info.extent_px.width = w;
+        info.extent_px.height = h;
+        info.extent_px.depth = 1;
+        info.extent_px.array_len = 1;
+        info.levels = 1;
+        info.samples = samples;
+        info.modifier = DRM_FORMAT_MOD_INVALID;
+        struct nil_image img;
+        if (!init(dev, &img, &info)) {
+            printf("%ux%u %u %u refused\n", w, h, bpp, samples);
+            continue;
+        }
+        struct nil_view view;
+        memset(&view, 0, sizeof view);
+        view.view_type = NIL_VIEW_TYPE_2D;
+        view.access = NIL_VIEW_ACCESS_TEXTURE;
+        view.format = f;
+        view.num_levels = 1;
+        view.array_len = 1;
+        view.swizzle[0] = PIPE_SWIZZLE_X;
+        view.swizzle[1] = PIPE_SWIZZLE_Y;
+        view.swizzle[2] = PIPE_SWIZZLE_Z;
+        view.swizzle[3] = PIPE_SWIZZLE_W;
+        const struct nil_descriptor desc = describe(dev, &img, &view, 0x100000);
+        printf("%ux%u %u %u %u | %" PRIu64 " %u | %u %u |", w, h, bpp, samples, (unsigned)img.sample_layout, img.size_B,
+               img.align_B, img.levels[0].row_stride_B, img.levels[0].tiling.y_log2);
+        for (int k = 0; k < 8; k++)
+            printf(" %08x", desc.bits[k]);
+        const struct nil_Extent4D_Bytes level = toBytes(img.extent_px, f, img.sample_layout);
+        const size_t row = level.width, bytes = row * level.height;
+        uint8_t *linear = malloc(bytes), *tiled = calloc(1, img.size_B);
+        for (size_t k = 0; k < bytes; k++)
+            linear[k] = (uint8_t)(k * 131 + k / 251 + 7);
+        const struct nil_Offset4D_Bytes at = {0, 0, 0, 0};
+        copy(tiled, level, linear, row, bytes, at, level, &img.levels[0].tiling);
+        uint64_t hash = 0xcbf29ce484222325ull;
+        for (uint64_t k = 0; k < img.size_B; k++)
+            hash = (hash ^ tiled[k]) * 0x100000001b3ull;
+        printf(" | %016" PRIx64 "\n", hash);
+        free(linear);
+        free(tiled);
+    }
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
-    if (argc < 2 || (argc - 2) % 5) {
+    const bool viewMode = argc > 2 && !strcmp(argv[2], "view"), msMode = argc > 2 && !strcmp(argv[2], "ms");
+    if (argc < 2 || (!viewMode && !msMode && (argc - 2) % 5) || (viewMode && (argc - 3) % 8) ||
+        (msMode && (argc - 3) % 3)) {
         fprintf(stderr, "usage: %s <libvulkan_nouveau.dylib> (<dim> WxHxDxL <bpp> <view2d> <plain|cube>)...\n",
                 argv[0]);
         return 2;
@@ -67,6 +189,13 @@ int main(int argc, char **argv)
     dev.cls_eng2d = 0x902d;
     dev.cls_eng3d = 0xb197;
     dev.cls_compute = 0xb1c0;
+    if (msMode) {
+        SYM(nil_extent4d_px_to_B);
+        return multisampled(&dev, argc - 3, argv + 3, p_nil_image_init, p_nil_image_view_descriptor, p_nil_format,
+                            p_nil_copy_linear_to_tiled, p_nil_extent4d_px_to_B);
+    }
+    if (viewMode)
+        return views(&dev, argc - 3, argv + 3, p_nil_image_init, p_nil_image_view_descriptor, p_nil_format);
     for (int a = 2; a + 4 < argc; a += 5) {
         const uint32_t dim = (uint32_t)atoi(argv[a]), bpp = (uint32_t)atoi(argv[a + 2]),
                        view2d = (uint32_t)atoi(argv[a + 3]), cube = !strcmp(argv[a + 4], "cube");
