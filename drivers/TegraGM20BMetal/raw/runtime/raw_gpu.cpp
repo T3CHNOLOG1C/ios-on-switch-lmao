@@ -9,6 +9,7 @@
 #include "raw_follow.h"
 #include "raw_gpu.h"
 #include "raw_owned.h"
+#include "raw_samples.h"
 #include "raw_slm.h"
 #include "raw_target.h"
 #include "raw_tiled_cache.h"
@@ -55,6 +56,9 @@ enum : uint32_t {
     DEPTH_TEST = 0x12cc,
     STENCIL_TEST = 0x1380,
     ANTI_ALIAS_ALPHA_CONTROL = 0x153c,
+    SET_ANTI_ALIAS = 0x15d0,
+    ANTI_ALIAS_SAMPLE_POSITIONS = 0x11e0,
+    HYBRID_ANTI_ALIAS_CONTROL = 0x0754,
     // Not in NVIDIA's published class headers: the texture data cache invalidate that NVN (deko3d's ORDER_FRAGMENTS
     // barrier) and NVIDIA's Linux driver put after PIXEL_SHADER_BARRIER, which orders it after the earlier pixels. The
     // _NO_WFI form acts as the front end reads it, while those pixels may still be shading or in the ROP.
@@ -147,6 +151,20 @@ uint32_t fbits(float f)
     uint32_t u;
     memcpy(&u, &f, 4);
     return u;
+}
+
+// A pass's sample layout (raw_samples.h): its registers and the root table's sample words, the root table left selected
+constexpr uint32_t kSampleWords = 20;
+
+void sampleWords(Push &p, uint32_t samples, uint64_t root)
+{
+    SampleLayout l;
+    sampleLayout(samples, l);
+    p.m(SET_ANTI_ALIAS, l.antiAlias);
+    p.incArray(ANTI_ALIAS_SAMPLE_POSITIONS, l.positions, 4);
+    p.inc(CB_SELECTOR_A, {kRootBytes, uint32_t(root >> 32), uint32_t(root)});
+    p.m(LOAD_CB_OFFSET, kRootSampleInfo);
+    p.nonInc(LOAD_CB, l.root, kRootSampleInfoWords);
 }
 
 // Texture header word 0 per MTLPixelFormat as NVK writes it (pack/mkformats.py over the twin, 11-04), and the color target format
@@ -370,10 +388,8 @@ void Device::emitContext(Push &p)
         ds_ = unknown;
     }
     // root table selected for LOAD_CONSTANT_BUFFER from here on (draws reselect it after binding set 0 as a cbuf); NVK's init
-    // above zeroed it, so sample 0's location (the pixel centre, nvk_root_descriptor_table.draw.sample_locations) goes in now
-    p.inc(CB_SELECTOR_A, {kRootBytes, uint32_t(root_.va >> 32), uint32_t(root_.va)});
-    p.m(LOAD_CB_OFFSET, 0x1c);
-    p.nonInc(LOAD_CB, (const uint32_t[]){0x88}, 1);
+    // above zeroed it, so one sample's layout goes in now, as every pass but a multisampled one leaves it
+    sampleWords(p, 1, root_.va);
     // the pixel interlock's ticket buffer (nvk_root_descriptor_table.interlock_ticket_buffer; NAK's lowering waits on and
     // releases its words, 256 per GPC): zero, as this channel's ticket dispenser starts. NVK's init above may name the probe's.
     {
@@ -426,6 +442,12 @@ bool Device::init(std::string &err)
     t0[4] = 0xe2840000;
     t0[5] = 0x80000000;
     t0[7] = 0x80000001;
+    // sampler header 0: NVK's texel-fetch sampler (nvk_txf_sampler_header: nearest, clamp to border, unnormalized), which NVK
+    // reserves at index 0 on every GPU, so a handle naming no sampler names it
+    {
+        const uint32_t txf[8] = {0x260db, 0x2000291, 0xfff000, 0, 0, 0, 0, 0};
+        memcpy(tsc_.cpu, txf, 32);
+    }
     // m2v's neutral sampler, which it binds for a sampler slot the function reads and the encoder left unbound (Vulkan defaults:
     // nearest, clamp to edge, mip nearest, no LOD clamp), then the constexpr samplers the pack's functions use
     {
@@ -738,6 +760,8 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
     pl.caTransform = caTransform;
     if (const char *ds = strstr(keyString, "ds="))
         sscanf(ds, "ds=%u", &pl.depthFormat);
+    if (const char *n = strstr(keyString, "samples="))
+        pl.samples = uint8_t(std::max(1, atoi(n + 8)));
     // SPH word 0 bit 15 KILLS_PIXELS, bit 608 OMAP_SAMPLE_MASK (cla097sph.h); SET_DEPTH_TEST, SET_STENCIL_TEST and
     // SET_ANTI_ALIAS_ALPHA_CONTROL's alpha to coverage in bit 0
     uint32_t sph[20];
@@ -746,6 +770,8 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
     for (uint32_t k = 0; k < pp.blobDwords; k += 2) {
         const uint32_t m = blob[k], v = blob[k + 1];
         tests |= (m == DEPTH_TEST || m == STENCIL_TEST || m == ANTI_ALIAS_ALPHA_CONTROL) && (v & 1);
+        if (m == HYBRID_ANTI_ALIAS_CONTROL)
+            pl.samplePasses = uint8_t(std::max(1u, v & 0xf));
     }
     pl.dropsPixels = (sph[0] >> 15 & 1) || (sph[19] & 1) || tests || strncmp(keyString, "samples=1 ", 10) ||
                      !strstr(keyString, " ds=0/0 ");
@@ -1413,12 +1439,74 @@ bool Device::createView(const Texture &of, uint32_t format, Texture &t)
     return true;
 }
 
-bool Device::createMemoryless(uint32_t width, uint32_t height, uint32_t format, Texture &t)
+bool Device::createPartView(const Texture &of, uint32_t format, uint32_t type, uint32_t baseLevel, uint32_t levels,
+                            uint32_t baseLayer, uint32_t layers, Texture &t)
+{
+    const FormatInfo *f = formatInfo(format);
+    const bool cube = type == fx::kTexCube || type == fx::kTexCubeArray;
+    if (of.converted() || !of.blockLinear || of.zeta || of.type == fx::kTexOneD || of.type == fx::kTexThreeD || !f ||
+        f->bpp != of.bpp || of.memoryless || of.sampled || xrForm(format) != XrForm::None ||
+        xrForm(of.format) != XrForm::None || !levels || !layers || (type == fx::kTexTwoD && layers != 1) ||
+        (cube && (layers % 6 || of.width != of.height)))
+        return false;
+    fx::MipChain c;
+    uint64_t va = of.va;
+    Texture image;
+    if (of.chain) {
+        if (baseLayer || layers != 1 || baseLevel + levels > of.chain->layout.levels ||
+            (baseLevel && !chainLevelImage(of, baseLevel, image)))
+            return false;
+        c = of.chain->layout;
+        va = of.chain->va;
+        if (!baseLevel)
+            image = of;
+        // (a later level's block height is the chain's clamp, not its own image's: the CPU goes by m2v)
+        image.cpu = nullptr;
+        image.layerBytes = c.arrayStride;
+    } else {
+        if (baseLevel || levels != 1 || baseLayer + layers > of.layers ||
+            !fx::arrayLayout(of.width, of.height, of.layers, 1, of.bpp, c))
+            return false;
+        va += baseLayer * c.arrayStride;
+        image = of;
+        image.va = va;
+        image.cpu = of.cpu ? of.cpu + baseLayer * c.arrayStride : nullptr;
+        image.layers = layers;
+        image.layerBytes = c.arrayStride;
+    }
+    c.layers = layers;
+    std::lock_guard<std::mutex> l(lock_);
+    t = image;
+    t.view = true;
+    t.format = format;
+    t.type = uint8_t(type);
+    t.renderable = f->rt != 0 && type == fx::kTexTwoD && levels == 1 && layers == 1;
+    t.shadowTarget = false;
+    t.import = nullptr;
+    t.span = {};
+    t.lease = nullptr;
+    t.chain = nullptr;
+    t.wc = false;
+    if (!(t.tic = allocTic()))
+        return false;
+    uint32_t w[8];
+    fx::mipChainTic(c, va, f->tic0, f->srgb, baseLevel, levels, w, type);
+    memcpy(tic_.cpu + 32 * t.tic, w, 32);
+    return true;
+}
+
+bool Device::createMemoryless(uint32_t width, uint32_t height, uint32_t format, Texture &t, uint32_t samples)
 {
     uint64_t bytes, align;
-    if (format == kZetaFormat ? !zetaShape(width, height, t, bytes, align) : !shape(width, height, format, t))
+    if (format == kZetaFormat ? samples > 1 || !zetaShape(width, height, t, bytes, align)
+                              : !shape(width, height, format, t))
+        return false;
+    fx::MipChain c;
+    if (samples > 1 &&
+        (!t.renderable || xrForm(format) != XrForm::None || !fx::msLayout(width, height, samples, t.bpp, c)))
         return false;
     t.memoryless = true;
+    t.samples = uint8_t(samples);
     return true;
 }
 
@@ -2001,9 +2089,11 @@ Texture *Device::backing(const Texture &m, uint32_t tag, bool blockLinear)
     blockLinear |= m.zeta;
     const uint32_t kind = compKind(m, tag, blockLinear);
     Backing *plain = nullptr;
+    blockLinear |= m.samples > 1;
     for (Backing *b : backings_)
         if (!b->retired && b->texture.width == m.width && b->texture.height == m.height &&
-            b->texture.format == m.format && b->tag == tag && b->texture.blockLinear == blockLinear) {
+            b->texture.format == m.format && b->tag == tag && b->texture.blockLinear == blockLinear &&
+            b->texture.samples == m.samples) {
             if (b->texture.comptags || !kind) {
                 b->lastCommit = commitCount_;
                 return &b->texture;
@@ -2034,7 +2124,7 @@ Texture *Device::backing(const Texture &m, uint32_t tag, bool blockLinear)
     } else if (blockLinear) {
         fx::MipChain c;
         const FormatInfo *f = formatInfo(m.format);
-        if (!f || !shape(m.width, m.height, m.format, t) || !fx::mipChainLayout(m.width, m.height, 1, t.bpp, c) ||
+        if (!f || !shape(m.width, m.height, m.format, t) || !fx::msLayout(m.width, m.height, m.samples, t.bpp, c) ||
             !blAlloc(c.bytes, c.align, t.span) || !(t.tic = allocTic())) {
             blFree(t.span);
             delete b;
@@ -2045,6 +2135,7 @@ Texture *Device::backing(const Texture &m, uint32_t tag, bool blockLinear)
         t.blockLinear = true;
         t.blockHeight = c.level[0].yLog2;
         t.layerBytes = uint64_t(c.level[0].rowBytes) * c.level[0].rows;
+        t.samples = m.samples;
         uint32_t w[8];
         fx::mipChainTic(c, t.va, f->tic0, f->srgb, 0, 1, w);
         memcpy(tic_.cpu + 32 * t.tic, w, 32);  // visible at the next submission's header invalidate
@@ -2415,6 +2506,17 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
     const Texture *zeta = pass.depthStencil.texture;
     if (zeta && (!zeta->zeta || !zeta->memoryless))
         return nullptr;
+    // every attachment of one sample count (Metal's rule); the raw path's zeta has one sample
+    uint8_t samples = 0;
+    for (uint32_t j = 0; j < pass.count && j < 8; j++)
+        if (const Texture *t = pass.color[j].texture) {
+            if (samples && t->samples != samples)
+                return nullptr;
+            samples = t->samples;
+        }
+    if (zeta && samples > 1)
+        return nullptr;
+    e.samples_ = std::max<uint8_t>(samples, 1);
     bool blockLinear = zeta != nullptr;
     for (uint32_t j = 0; j < pass.count && j < 8; j++)
         if (const Texture *t = pass.color[j].texture; t && !t->memoryless && (t->blockLinear || t->shadowTarget))
@@ -2475,6 +2577,16 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
         e.areaW_ = std::min(e.areaW_, pass.width);
     if (pass.height)
         e.areaH_ = std::min(e.areaH_, pass.height);
+    // a Clear load is a color write the prologue's CLEAR_SURFACE makes ahead of the draws: a draw that fetches the color
+    // takes the fetch barrier after it, as NVK's first fetch after its clears does, or it reads what was there before
+    for (uint32_t j = 0; j < pass.count && j < 8; j++)
+        if (e.pass_.color[j].texture && e.pass_.color[j].load == ColorAttachment::Clear)
+            e.writtenBits_ |= uint8_t(1u << j);
+    if (e.writtenBits_) {
+        DrawGeometry cleared;
+        cleared.limit = {0, 0, e.areaW_, e.areaH_};
+        e.written_.add(cleared);
+    }
     // the body goes straight into the push ring; the pass prologue (targets, clears) is written at end() and runs first
     e.reserve();
     e.setViewport(0, 0, e.areaW_, e.areaH_, 0, 1);
@@ -3006,6 +3118,11 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         cb_->refusal = {RefDepthStencil, pl->depthFormat, zeta ? kZetaFormat : 0, ds_.active()};
         return false;
     }
+    if (pl->samples != samples_ || pl->samplePasses > 1) {
+        *why = "a state whose samples a pixel or per-sample shading the pass's attachments do not take";
+        cb_->refusal = {RefSamples, pl->samples, samples_, pl->samplePasses};
+        return false;
+    }
     if (p_.room() < 1024 + pl->methods.size() + (cb_->extrasLive_ ? cb_->extrasLive_->restore.size() : 0))
         reserve();
     Device &d = *dev_;
@@ -3249,8 +3366,8 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     countRules(*pl);
 #endif
-    // framebuffer fetch reads a color attachment through the texture unit: a barrier where a draw since the last one wrote a
-    // color this draw fetches (m2v's barrier, 0106, follows any color write: the ROP writes only the colors SET_CT_WRITE opens).
+    // framebuffer fetch reads a color attachment through the texture unit: a barrier where a draw since the last one wrote
+    // any color, as m2v's barrier (0106) follows any color write, whichever colors this draw fetches.
     // The barrier holds this draw's pixel shading until the earlier pixels have left the ROP; vertex work and rasterization
     // go on (NVK's for a color-output to fragment-read dependency, as NVIDIA's drivers order one)
     // A storage access in the interlock is ordered after the earlier ones by the ticket, not after the ROP's writes; the
@@ -3268,7 +3385,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     }
     const bool storage =
         (pl->storageBits & writtenBits_) | (ropAccessed & storageWrittenBits_) | (texFetched & storageWrittenBits_);
-    if (storage || (texFetched & writtenBits_)) {
+    if (storage || (texFetched && writtenBits_)) {
         if (!storage && !written_.meets(g)) {
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
             dev_->stats.fetchBarriersElided++;
@@ -3474,12 +3591,18 @@ void copyRows(Push &p, uint64_t src, uint32_t srcPitch, uint64_t dst, uint32_t d
 }
 }  // namespace
 
+// The rows of a multisampled target's sample grid (NIL's px_extent_sa: two down for 4 and 8 samples), as NVK's HEIGHT counts
+static uint32_t sampleRows(const Texture &t)
+{
+    return t.samples >= 4 ? t.height * 2 : t.height;
+}
+
 static void targetWords(Push &p, uint32_t m, const Texture &t)
 {
     ColorTargetDesc d;
     d.va = t.va;
     d.pitch = t.pitch;
-    d.height = t.height;
+    d.height = sampleRows(t);
     d.bpp = t.bpp;
     d.rtFormat = formatInfo(t.format)->rt;
     d.blockLinear = t.blockLinear;
@@ -3600,7 +3723,7 @@ void RenderEncoder::writeRaster(Push &p, const Raster &want)
 void RenderEncoder::end()
 {
     Device &d = *dev_;
-    if (p_.room() < 64)
+    if (p_.room() < 64 + kSampleWords)
         reserve();
     writeRaster(p_, Raster());
     // the draw parameters the next encoder starts from: the root table's and the base registers, 0
@@ -3614,6 +3737,8 @@ void RenderEncoder::end()
         p_.m(GLOBAL_BASE_VERTEX_INDEX, 0);
         p_.m(VERTEX_ID_BASE, 0);
     }
+    if (samples_ > 1)
+        sampleWords(p_, 1, d.root_.va);
     if (drew_)
         tiledCacheDrain(p_, d.k_.info());
     checkRoom(p_, "a pass body");
@@ -3623,8 +3748,8 @@ void RenderEncoder::end()
     // pass prologue: the full barrier m2v puts between passes, the targets, then the clears
     const std::vector<Clear> cl = clears();
     const std::vector<uint32_t> &restore = extrasAtBegin_ ? extrasAtBegin_->restore : std::vector<uint32_t>();
-    const uint32_t room =
-        160 + 8 * 32 + uint32_t(cl.size()) * 48 + kZetaTargetWords + kZetaClearWords + 16 + uint32_t(restore.size());
+    const uint32_t room = 160 + 8 * 32 + uint32_t(cl.size()) * 48 + kZetaTargetWords + kZetaClearWords + 16 +
+                          kSampleWords + uint32_t(restore.size());
     uint64_t va;
     uint32_t *start = reinterpret_cast<uint32_t *>(d.alloc(d.push_, room * 4, 256, va));
     Push p{start, start + room};
@@ -3632,6 +3757,9 @@ void RenderEncoder::end()
     p.m(WAIT_FOR_IDLE, 0);
     p.m(INVALIDATE_SHADER_CACHES, kBetweenPasses);
     p.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
+    // ahead of the clears: a clear reaches every sample of its rectangle's pixels through it
+    if (samples_ > 1)
+        sampleWords(p, samples_, d.root_.va);
     // shadow targets' pool images: their texels over the render area first, as NVK's tiled shadow loads them (a load that
     // keeps them: Load, and a DontCare the clears leave; a Clear clears it all), then the barrier to the pass
     bool copied = false;

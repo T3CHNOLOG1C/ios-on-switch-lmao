@@ -11,6 +11,7 @@
 #include <stdint.h>
 
 #include "../../../../kits/SwitchPretranslated/switch_pretranslated.h"
+#include "../../../../kits/SwitchPretranslated/switch_pretranslated_originals.h"
 #include <sys/ioccom.h>
 
 struct fileglob;
@@ -27,6 +28,12 @@ void switch_pretranslated_capture(void);
 void switch_pretranslated_redirect(struct nameidata *ndp);
 bool switch_pretranslated_authentic(struct vnode *vp);
 int switch_pretranslated_mmap_check(struct fileglob *fg, int flags, int prot, int maxprot);
+/* The tree's translation of an image mapped from an installed copy of a staged system app (vp holds Apple's bytes and
+ * their signature at slice_offset): that file with an iocount and its own signature (signature_offset and
+ * signature_size from the image's LC_CODE_SIGNATURE, which translation keeps) loaded, once it is authentic; else
+ * NULLVP. */
+struct vnode *switch_pretranslated_translation(struct vnode *vp, int64_t slice_offset, int64_t signature_offset,
+                                               uint32_t signature_size);
 int switch_pretranslated_refuse(enum switch_pt_op op, struct vnode *v0, struct vnode *v1, struct vnode *v2,
                                 struct vnode *v3, uint32_t intent);
 

@@ -29,6 +29,7 @@
 #include <sys/sysctl.h>
 #include <sys/fcntl.h>
 #include <switch/a64x.h>
+#include <switch/pretranslated.h>
 #include <mach-o/loader.h>
 #include <mach/mach_vm.h>
 #include <kern/kalloc.h>
@@ -58,6 +59,7 @@
 /* statistics (sysctl kern.a64x.*) */
 static uint64_t a64x_images, a64x_pages, a64x_stub_words, a64x_mismatch, a64x_traps, a64x_traps_unhandled;
 static uint64_t a64x_cache_pages, a64x_images_native, a64x_images_marked, a64x_island_words;
+static uint64_t a64x_images_installed;
 
 LCK_GRP_DECLARE(a64x_lck_grp, "a64x");
 static LCK_MTX_DECLARE(a64x_plan_lock, &a64x_lck_grp);
@@ -199,6 +201,7 @@ struct a64x_layout {
     uint64_t text_vmaddr;                      /* __TEXT (function starts count from it) */
     uint32_t fs_off, fs_size;                  /* LC_FUNCTION_STARTS, slice-relative */
     uint32_t dic_off, dic_size;                /* LC_DATA_IN_CODE, slice-relative */
+    uint32_t cs_off, cs_size;                  /* LC_CODE_SIGNATURE, slice-relative */
     struct a64x_range sect[A64X_MAX_SECTIONS]; /* instruction sections, absolute file offsets, file order */
 };
 
@@ -216,15 +219,18 @@ static int a64x_parse(const void *lcmds, size_t size, off_t slice_off, struct a6
         if (p + sizeof(*lc) > end || lc->cmdsize < sizeof(*lc) || p + lc->cmdsize > end) {
             return EBADMACHO;
         }
-        if (lc->cmd == LC_FUNCTION_STARTS || lc->cmd == LC_DATA_IN_CODE) {
+        if (lc->cmd == LC_FUNCTION_STARTS || lc->cmd == LC_DATA_IN_CODE || lc->cmd == LC_CODE_SIGNATURE) {
             const struct linkedit_data_command *ld = (const void *)p;
             if (lc->cmdsize >= sizeof(*ld)) {
                 if (lc->cmd == LC_FUNCTION_STARTS) {
                     lay->fs_off = ld->dataoff;
                     lay->fs_size = ld->datasize;
-                } else {
+                } else if (lc->cmd == LC_DATA_IN_CODE) {
                     lay->dic_off = ld->dataoff;
                     lay->dic_size = ld->datasize;
+                } else {
+                    lay->cs_off = ld->dataoff;
+                    lay->cs_size = ld->datasize;
                 }
             }
         }
@@ -418,6 +424,35 @@ static int a64x_scan(struct a64x_image *im)
     return error;
 }
 
+/* An installed copy of a staged system app (switch_pretranslated_translation): its executable segment is the tree's
+ * translation's, laid out as the image is and validated against that file's own signature. ENOENT when there is none;
+ * a mapping that fails after the image's own was replaced fails the load. */
+static int a64x_map_translation(vm_map_t map, struct vnode *vp, off_t slice_off, const struct a64x_layout *lay,
+                                vm_map_offset_t exec_va)
+{
+    if (!lay->cs_size) {
+        return ENOENT;
+    }
+    struct vnode *copy = switch_pretranslated_translation(vp, slice_off, slice_off + lay->cs_off, lay->cs_size);
+    if (copy == NULLVP) {
+        return ENOENT;
+    }
+    vm_map_kernel_flags_t vmk_flags = VM_MAP_KERNEL_FLAGS_FIXED(.vmf_overwrite = true);
+    vmk_flags.vmkf_no_copy_on_read = 1;
+    vm_map_offset_t va = exec_va;
+    kern_return_t kr = vm_map_enter_mem_object_control(
+        map, &va, vm_map_round_page(lay->exec_filesize, vm_map_page_mask(map)), 0, vmk_flags,
+        ubc_getobject(copy, UBC_FLAGS_NONE), lay->exec_fileoff, TRUE, VM_PROT_READ | VM_PROT_EXECUTE,
+        VM_PROT_READ | VM_PROT_EXECUTE, VM_INHERIT_DEFAULT);
+    vnode_put(copy);
+    if (kr != KERN_SUCCESS) {
+        printf("a64x: %s: the translation's text not mapped (kr %d)\n", vp->v_name ? vp->v_name : "?", kr);
+        return EIO;
+    }
+    OSIncrementAtomic64((SInt64 *)&a64x_images_installed);
+    return 0;
+}
+
 static int a64x_map_image(vm_map_t map, struct vnode *vp, off_t slice_off, const struct mach_header_64 *mh,
                           const struct a64x_layout *lay, vm_map_offset_t exec_va)
 {
@@ -429,6 +464,12 @@ static int a64x_map_image(vm_map_t map, struct vnode *vp, off_t slice_off, const
         /* built for this core: mapped as is, like any binary (signature and trust cache checks unchanged) */
         OSIncrementAtomic64((SInt64 *)&a64x_images_marked);
         return 0;
+    }
+    if (kind == A64X_IMAGE_ARM64E) {
+        int error = a64x_map_translation(map, vp, slice_off, lay, exec_va);
+        if (error != ENOENT) {
+            return error;
+        }
     }
     struct a64x_image *im = kalloc_type(struct a64x_image, Z_WAITOK | Z_ZERO);
     im->map_flags = kind == A64X_IMAGE_ARM64 ? A64X_MAP_NO_PAC : 0;
@@ -899,6 +940,8 @@ SYSCTL_QUAD(_kern_a64x, OID_AUTO, traps_unhandled, CTLFLAG_RD | CTLFLAG_LOCKED, 
 /* arm64 images that needed nothing (mapped as is) and images marked as built for this core */
 SYSCTL_QUAD(_kern_a64x, OID_AUTO, images_native, CTLFLAG_RD | CTLFLAG_LOCKED, &a64x_images_native, "");
 SYSCTL_QUAD(_kern_a64x, OID_AUTO, images_marked, CTLFLAG_RD | CTLFLAG_LOCKED, &a64x_images_marked, "");
+/* images of installed staged system apps mapped from the pretranslated tree */
+SYSCTL_QUAD(_kern_a64x, OID_AUTO, images_installed, CTLFLAG_RD | CTLFLAG_LOCKED, &a64x_images_installed, "");
 /* words of __text found to be data (assembler tables) and left untranslated */
 SYSCTL_QUAD(_kern_a64x, OID_AUTO, island_words, CTLFLAG_RD | CTLFLAG_LOCKED, &a64x_island_words, "");
 

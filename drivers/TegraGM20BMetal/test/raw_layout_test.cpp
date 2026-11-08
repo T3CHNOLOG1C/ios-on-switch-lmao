@@ -387,6 +387,107 @@ TEST(Layout, OneThreeDimensionalArrayAndCubeImagesAreNils)
     }
 }
 
+// NIL's headers of views of part of a 2D image (nilimage view: an image of `levels` levels and `layers` layers at 0x100000, the
+// view's type, its first level and level count, its first layer and layer count)
+struct NilPartView {
+    uint32_t width, height, layers, levels, bpp, type, baseLevel, viewLevels, baseLayer, viewLayers;
+    uint32_t header[8];
+};
+
+// clang-format off
+const NilPartView kNilPartViews[] = {
+    {17, 17, 3, 1, 4, raw::fx::kTexTwoD, 0, 1, 1, 1,
+     {0x58d24908, 0x00101000, 0x00600000, 0x00070008, 0xe0800010, 0x80000010, 0x03000000, 0x00000000}},
+    {17, 17, 3, 1, 4, raw::fx::kTexTwoDArray, 0, 1, 1, 2,
+     {0x58d24908, 0x00101000, 0x00600000, 0x00070008, 0xe2800010, 0x80010010, 0x03000000, 0x00000000}},
+    {64, 64, 6, 1, 4, raw::fx::kTexTwoD, 0, 1, 2, 1,
+     {0x58d24908, 0x00108000, 0x00600000, 0x00070018, 0xe080003f, 0x8000003f, 0x03000000, 0x00000000}},
+    {64, 64, 6, 1, 4, raw::fx::kTexTwoDArray, 0, 1, 0, 6,
+     {0x58d24908, 0x00100000, 0x00600000, 0x00070018, 0xe280003f, 0x8005003f, 0x03000000, 0x00000000}},
+    {64, 64, 12, 1, 8, raw::fx::kTexCube, 0, 1, 6, 6,
+     {0x58d7ff83, 0x00130000, 0x00600000, 0x00070018, 0xe180003f, 0x8000003f, 0x03000000, 0x00000000}},
+    {64, 64, 12, 1, 8, raw::fx::kTexCubeArray, 0, 1, 0, 12,
+     {0x58d7ff83, 0x00100000, 0x00600000, 0x00070018, 0xe400003f, 0x8001003f, 0x03000000, 0x00000000}},
+    {128, 128, 1, 8, 4, raw::fx::kTexTwoD, 1, 7, 0, 1,
+     {0x58d24908, 0x00100000, 0x00600000, 0x70070020, 0xe080007f, 0x8000007f, 0x03000000, 0x00000071}},
+    {128, 128, 1, 8, 4, raw::fx::kTexTwoD, 3, 1, 0, 1,
+     {0x58d24908, 0x00100000, 0x00600000, 0x70070020, 0xe080007f, 0x8000007f, 0x03000000, 0x00000033}},
+    {300, 200, 1, 9, 4, raw::fx::kTexTwoDArray, 2, 3, 0, 1,
+     {0x58d24908, 0x00100000, 0x00600000, 0x80070020, 0xe280012b, 0x800000c7, 0x03000000, 0x00000042}},
+};
+// clang-format on
+
+// raw::Device::createPartView's header: the part's layout (a chain's levels, an array's layers from its first one's address)
+TEST(Layout, PartViewHeadersAreNils)
+{
+    for (const NilPartView &n : kNilPartViews) {
+        raw::fx::MipChain c;
+        ASSERT_TRUE(n.levels > 1 ? raw::fx::mipChainLayout(n.width, n.height, n.levels, n.bpp, c)
+                                 : raw::fx::arrayLayout(n.width, n.height, n.layers, 1, n.bpp, c));
+        c.layers = n.viewLayers;
+        uint32_t header[8];
+        raw::fx::mipChainTic(c, 0x100000 + n.baseLayer * c.arrayStride, n.header[0], false, n.baseLevel, n.viewLevels,
+                             header, n.type);
+        for (int w = 0; w < 8; w++)
+            EXPECT_EQ(header[w], n.header[w]) << n.width << "x" << n.height << "x" << n.layers << " levels " << n.levels
+                                              << " view type " << n.type << " word " << w;
+    }
+}
+
+// NIL's multisampled 2D images (nilimage ms): size, alignment, row stride (in samples), block height, the header of a view of
+// it at 0x100000 and the FNV-1a hash after nil_copy_linear_to_tiled of the pattern over its extent in samples
+struct NilMultisampled {
+    uint32_t width, height, bpp, samples;
+    uint64_t bytes, align;
+    uint32_t rowBytes, yLog2;
+    uint32_t header[8];
+    uint64_t hash;
+};
+
+// clang-format off
+const NilMultisampled kNilMultisampled[] = {
+    {720, 1280, 4, 4, 14745600, 8192, 5760, 4,
+     {0x58d24908, 0x00100000, 0x00600000, 0x00070020, 0xe08002cf, 0x800004ff, 0x03000000, 0x00000200}, 0x915559f6e8bb5d65},
+    {720, 1280, 2, 4, 7372800, 8192, 2880, 4,
+     {0x7012491b, 0x00100000, 0x00600000, 0x00070020, 0xe08002cf, 0x800004ff, 0x03000000, 0x00000200}, 0x585d28ea07b715d6},
+    {1280, 720, 4, 2, 7864320, 8192, 10240, 4,
+     {0x58d24908, 0x00100000, 0x00600000, 0x00070020, 0xe08004ff, 0x800002cf, 0x03000000, 0x00000500}, 0x304b7a0c46c0a706},
+    {64, 64, 8, 2, 65536, 4096, 1024, 3,
+     {0x58d7ff83, 0x00100000, 0x00600000, 0x00070018, 0xe080003f, 0x8000003f, 0x03000000, 0x00000500}, 0xf7657a78fe778072},
+    {33, 9, 4, 4, 8192, 4096, 320, 0,
+     {0x58d24908, 0x00100000, 0x00600000, 0x00070000, 0xe0800020, 0x80000008, 0x03000000, 0x00000200}, 0x8675d8eb1b7f81ee},
+    {100, 50, 16, 8, 819200, 4096, 6400, 3,
+     {0x58d7ff81, 0x00100000, 0x00600000, 0x00070018, 0xe0800063, 0x80000031, 0x03000000, 0x00000400}, 0x1f0f460a8643026e},
+    {720, 1280, 4, 1, 3686400, 8192, 2880, 4,
+     {0x58d24908, 0x00100000, 0x00600000, 0x00070020, 0xe08002cf, 0x800004ff, 0x03000000, 0x00000000}, 0x5694e54830c071ae},
+};
+// clang-format on
+
+TEST(Layout, MultisampledImagesAreNils)
+{
+    for (const NilMultisampled &n : kNilMultisampled) {
+        raw::fx::MipChain c;
+        ASSERT_TRUE(raw::fx::msLayout(n.width, n.height, n.samples, n.bpp, c)) << n.width << "x" << n.height;
+        EXPECT_EQ(c.bytes, n.bytes) << n.width << "x" << n.height << " x" << n.samples;
+        EXPECT_EQ(c.align, n.align) << n.width << "x" << n.height << " x" << n.samples;
+        EXPECT_EQ(c.level[0].rowBytes, n.rowBytes) << n.width << "x" << n.height << " x" << n.samples;
+        EXPECT_EQ(c.yLog2, n.yLog2) << n.width << "x" << n.height << " x" << n.samples;
+        uint32_t header[8];
+        raw::fx::mipChainTic(c, 0x100000, n.header[0], false, 0, 1, header);
+        for (int w = 0; w < 8; w++)
+            EXPECT_EQ(header[w], n.header[w]) << n.width << "x" << n.height << " x" << n.samples << " word " << w;
+        const uint32_t wSa = n.width << c.sxLog2, hSa = n.height << c.syLog2;
+        std::vector<uint8_t> linear(size_t(wSa) * n.bpp * hSa), tiled(c.bytes, 0);
+        for (size_t k = 0; k < linear.size(); k++)
+            linear[k] = uint8_t(k * 131 + k / 251 + 7);
+        raw::fx::writeLevel(c, tiled.data(), 0, 0, 0, wSa, hSa, linear.data(), size_t(wSa) * n.bpp);
+        uint64_t hash = 0xcbf29ce484222325ull;
+        for (uint8_t b : tiled)
+            hash = (hash ^ b) * 0x100000001b3ull;
+        EXPECT_EQ(hash, n.hash) << n.width << "x" << n.height << " x" << n.samples;
+    }
+}
+
 // A 1D image is NIL's 2D layout of one row (Tiling::choose leaves a 1D image one GOB tall, where a 2D image of height 1 clamps
 // to), under a header of TEXTURE_TYPE ONE_D (nvb097_fill_image_view_desc for ViewType::_1D); nothing else in the header moves
 TEST(Layout, OneDHeaderDiffersFromTwoDInItsTypeAlone)

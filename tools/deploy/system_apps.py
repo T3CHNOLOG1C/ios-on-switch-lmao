@@ -15,8 +15,8 @@ read as a migration that never ended, which it deletes unrun. So a requested mig
 
 The same migration installs the removable apps a restore leaves in /private/var/staged_system_apps (MISystemAppMigrator)
 and consumes each staged copy whether installd accepts it or not. An app MobileInstallation still wants installed that
-Data holds neither staged nor installed is copied back from the System volume (restage), so the next migration
-installs it.
+Data does not hold installed is copied back from the System volume when its staged copy is gone too (restage), and the
+next boot migrates again.
 """
 
 import os
@@ -100,14 +100,14 @@ def _installed(data_root: Path) -> set[str]:
 
 
 def missing(system_root: Path, data_root: Path) -> list[str]:
-    """Return the System volume's staged apps MobileInstallation wants that Data holds neither staged nor installed."""
+    """Return the System volume's staged apps MobileInstallation wants that Data does not hold installed."""
     system_root, data_root = Path(system_root), Path(data_root)
     wanted = _wanted(data_root)
     if not wanted:
         return []
-    held = _installed(data_root) | {app.name for app in (data_root / STAGED).glob('*.app')}
+    installed = _installed(data_root)
     staged = sorted((system_root / 'private/var' / STAGED).glob('*.app'))
-    return [app.name for app in staged if app.name not in held and _info(app).get('CFBundleIdentifier') in wanted]
+    return [app.name for app in staged if app.name not in installed and _info(app).get('CFBundleIdentifier') in wanted]
 
 
 def _copy_bundle(source: Path, target: Path) -> None:
@@ -127,10 +127,15 @@ def _copy_bundle(source: Path, target: Path) -> None:
 
 
 def restage(system_root: Path, data_root: Path, log: host.Log) -> bool:
-    """Copy missing() back into Data's staged_system_apps, each bundle whole or not at all; True when any was."""
+    """Copy the missing() apps Data's staged_system_apps lacks back into it, each whole or not at all.
+
+    True when any app is missing, staged already or not: a migration cut short leaves them staged and uninstalled, and
+    the kernel's one-try marker keeps it from running again by itself.
+    """
     names = missing(system_root, data_root)
     staged = Path(data_root) / STAGED
-    for name in names:
+    copied = [name for name in names if not (staged / name).is_dir()]
+    for name in copied:
         partial = staged / f'.{name}.partial'
         if partial.exists():
             shutil.rmtree(partial)
@@ -138,5 +143,5 @@ def restage(system_root: Path, data_root: Path, log: host.Log) -> bool:
         _copy_bundle(Path(system_root) / 'private/var' / STAGED / name, partial)
         partial.rename(staged / name)
     if names:
-        log(f'system apps: restaged {len(names)} the last migration did not install: {", ".join(names)}')
+        log(f'system apps: {len(names)} not installed, {len(copied)} restaged: {", ".join(names)}')
     return bool(names)

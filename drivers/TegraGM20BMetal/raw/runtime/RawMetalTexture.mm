@@ -100,7 +100,11 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
             }
             break;
         case RMTextureView:
-            made = [(id<MTLTexture>)[_parent rmTwin] newTextureViewWithPixelFormat:_descriptor.pixelFormat];
+            made = _viewPart ? [(id<MTLTexture>)[_parent rmTwin] newTextureViewWithPixelFormat:_descriptor.pixelFormat
+                                                                                   textureType:_descriptor.textureType
+                                                                                        levels:_viewLevels
+                                                                                        slices:_viewSlices]
+                             : [(id<MTLTexture>)[_parent rmTwin] newTextureViewWithPixelFormat:_descriptor.pixelFormat];
             break;
         case RMTextureMemoryless:
             made = [m2v newTextureWithDescriptor:_descriptor];
@@ -416,9 +420,26 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
     [self getBytes:bytes bytesPerRow:row bytesPerImage:0 fromRegion:r mipmapLevel:level slice:0];
 }
 
+// The header type of a view of `type` (0: one the raw path makes none of)
+static uint32_t viewHeaderType(MTLTextureType type)
+{
+    switch (type) {
+    case MTLTextureType2D:
+        return raw::fx::kTexTwoD;
+    case MTLTextureType2DArray:
+        return raw::fx::kTexTwoDArray;
+    case MTLTextureTypeCube:
+        return raw::fx::kTexCube;
+    case MTLTextureTypeCubeArray:
+        return raw::fx::kTexCubeArray;
+    default:
+        return 0;
+    }
+}
+
 // A view: the same memory under another format's header (raw), or m2v's view of the twin
-// A view of all of it, as its own type: the format view. Of a part of it, or another type: m2v's view of the twin, which raw
-// command buffers refuse (tex.view, b 3)
+// A view of all of it, as its own type: the format view. Of a part of it, or another type: a header over that part
+// (raw::Device::createPartView), else m2v's view of the twin, which raw command buffers refuse (tex.view, b 3)
 - (id<MTLTexture>)newTextureViewWithPixelFormat:(MTLPixelFormat)format
                                     textureType:(MTLTextureType)type
                                          levels:(NSRange)levels
@@ -430,23 +451,32 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
     if (type == _descriptor.textureType && !levels.location && levels.length == _descriptor.mipmapLevelCount &&
         !slices.location && slices.length == allSlices)
         return [self newTextureViewWithPixelFormat:format];
-    id twin = [(id<MTLTexture>)[self rmTwin] newTextureViewWithPixelFormat:format
-                                                               textureType:type
-                                                                    levels:levels
-                                                                    slices:slices];
-    if (!twin)
-        return nil;
     RMTexture *v = [RMTexture new];
     v->_device = _device;
     v->_descriptor = [_descriptor copy];
     v->_descriptor.pixelFormat = format;
     v->_descriptor.textureType = type;
     v->_descriptor.mipmapLevelCount = levels.length;
+    v->_descriptor.width = std::max<NSUInteger>(_descriptor.width >> levels.location, 1);
+    v->_descriptor.height = std::max<NSUInteger>(_descriptor.height >> levels.location, 1);
+    if (type == MTLTextureType3D)
+        v->_descriptor.depth = std::max<NSUInteger>(_descriptor.depth >> levels.location, 1);
     const bool viewCube = type == MTLTextureTypeCube || type == MTLTextureTypeCubeArray;
     v->_descriptor.arrayLength = std::max<NSUInteger>(viewCube ? slices.length / 6 : slices.length, 1);
     v->_kind = RMTextureView;
     v->_parent = self;
-    v->_twin = twin;
+    v->_viewPart = true;
+    v->_viewLevels = levels;
+    v->_viewSlices = slices;
+    const uint32_t header = viewHeaderType(type);
+    if (_rawOk && header && raw::formatInfo(uint32_t(format)))
+        v->_rawOk =
+            gRM->raw->createPartView(_raw, uint32_t(format), header, uint32_t(levels.location), uint32_t(levels.length),
+                                     uint32_t(slices.location), uint32_t(slices.length), v->_raw);
+    if (v->_rawOk)
+        return (id<MTLTexture>)v;
+    if (![v rmTwin])
+        return nil;
     refuseTexture(v, PredTexView, format, 3, @"view of a part",
                   [NSString stringWithFormat:@"type %lu levels %lu+%lu slices %lu+%lu", (unsigned long)type,
                                              (unsigned long)levels.location, (unsigned long)levels.length,

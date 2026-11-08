@@ -172,6 +172,7 @@ static bool rawDepthStencil(MTLRenderPassDescriptor *pass)
     e->_pass = pass;
     e->_passAt = uint32_t(_passes.size());
     RMPass &facts = _passes.emplace_back();
+    e->_samples = 1;
     for (unsigned c = 0; c < 8; c++) {
         MTLRenderPassColorAttachmentDescriptor *a = pass.colorAttachments[c];
         id<MTLTexture> t = a.texture;
@@ -216,6 +217,7 @@ static bool rawDepthStencil(MTLRenderPassDescriptor *pass)
         } else {
             e->_formats[c] = x->_raw.planarStandIn ? x->_raw.planarStandIn->format : x->_raw.format;
             e->_count = c + 1;
+            e->_samples = x->_raw.samples;
         }
     }
     facts.depth = pass.depthAttachment.texture;
@@ -240,9 +242,11 @@ static bool rawDepthStencil(MTLRenderPassDescriptor *pass)
     // A visibility result buffer is written only by draws under a counting mode (setVisibilityResultMode:offset:, refused there),
     // as m2v copies results only where a query was taken (visibility.rs plan)
     [self retain:pass.visibilityResultBuffer];
-    if (pass.renderTargetArrayLength > 1 || pass.rasterizationRateMap) {
-        [self takeReason:WhyPass why:@"layers or a rate map"];
-        hit(self, PredPassOther, pass.renderTargetArrayLength, pass.rasterizationRateMap != nil);
+    // the raw path draws at the standard sample positions (raw_samples.h)
+    const NSUInteger positions = [pass getSamplePositions:nullptr count:0];
+    if (pass.renderTargetArrayLength > 1 || pass.rasterizationRateMap || positions) {
+        [self takeReason:WhyPass why:@"layers, a rate map or sample positions of its own"];
+        hit(self, PredPassOther, pass.renderTargetArrayLength | positions << 32, pass.rasterizationRateMap != nil);
     }
     Cmd m = cmd(OpRender);
     m.obj = (__bridge void *)pass;

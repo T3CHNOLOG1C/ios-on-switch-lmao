@@ -2,9 +2,10 @@
 
 System's /private/var holds root's, mobile's and a daemon's files, given offline as Apple's are. Populate must copy them
 to Data with those owners, put the os role's translated files on Data (under /private/var in place, except the staged
-system apps, which keep Apple's bytes; the rest in Switch/pretranslated, root's and system-immutable), stage a cryptex
-root's in Preboot, and give the boot package's overlay, the GPU stager's files and the shader seed root's, except what
-the stager writes into mobile's home. hdiutil and diskutil: macOS, outside the sandbox (--strategy=TestRunner=local).
+system apps, which keep Apple's bytes there; the rest, those included, in Switch/pretranslated, root's and
+system-immutable, with the staged apps' .originals), stage a cryptex root's in Preboot, and give the boot package's
+overlay, the GPU stager's files and the shader seed root's, except what the stager writes into mobile's home. hdiutil
+and diskutil: macOS, outside the sandbox (--strategy=TestRunner=local).
 """
 
 import hashlib
@@ -120,6 +121,8 @@ class Fill(unittest.TestCase):
         )):  # fmt: skip
             (delta / f'files/{i}').write_bytes(after)
             files.append({'path': path, 'file': f'files/{i}', 'sha256_in': sha(before), 'sha256_out': sha(after)})
+        files[1]['cdhash'] = ['22' * 20]
+        (delta / 'os.cdhash-pairs').write_text(f'{"11" * 20} {"22" * 20}\n')
         (delta / 'os.manifest.json').write_text(json.dumps({'files': files}))
         (delta / 'os.trustcache').write_bytes(b'trust')
         deltas = pretranslate.Deltas({'os': delta}, self.dir / 'kept', LOG)
@@ -163,6 +166,10 @@ class Fill(unittest.TestCase):
                 self.assertEqual(owner(data, 'mobile/Library')[:2], (501, 501))
                 self.assertEqual((data / 'db/tool').read_bytes(), b'arm64 var')
                 self.assertEqual((data / 'staged_system_apps/App.app/App').read_bytes(), b'arm64e app')
+                staged = Path(pretranslate.OVERLAY) / 'private/var/staged_system_apps/App.app/App'
+                self.assertEqual((data / staged).read_bytes(), b'arm64 app')
+                self.assertEqual(owner(data, str(staged))[:2], (0, 0))
+                self.assertEqual(owner(data, pretranslate.OVERLAY_ORIGINALS), (0, 0, 0o644))
                 placed = Path(pretranslate.OVERLAY) / 'usr/libexec/tool'
                 self.assertEqual(owner(data, str(placed)), (0, 0, 0o755))
                 self.assertTrue(os.lstat(data / placed).st_flags & stat.SF_IMMUTABLE)

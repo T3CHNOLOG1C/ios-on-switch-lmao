@@ -15,6 +15,11 @@
  * switch_pretranslated_refuse() before any policy, and it refuses with EPERM (one rate-limited log line) whatever
  * switch_pt_denied() says touches a vnode of the tree, the tree's root and its index among them. Only a vnode on the
  * Data mount costs a file id lookup; the hot paths of every other volume compare one pointer.
+ *
+ * The staged system apps are System files no lookup reaches: installd verifies Apple's bytes against their detached
+ * signatures and copies them into app containers. Their translations are in the tree all the same, and the tree's
+ * .originals pairs each original CDHash with its translation's, so an image mapped from such a copy takes its code
+ * from the translation instead (switch_pretranslated_translation).
  */
 #if CONFIG_A64X
 #include <sys/param.h>
@@ -41,6 +46,7 @@
 #define SWITCH_PT_INDEX          ".index"
 #define SWITCH_PT_LOOKUP         (VNODE_LOOKUP_NOFOLLOW_ANY | VNODE_LOOKUP_NOCROSSMOUNT)
 #define SWITCH_PT_TRUST_PROPERTY "switch-pretranslated-cdhashes"
+#define SWITCH_PT_MAX_SIGNATURE  (40u << 20)
 
 bool switch_pretranslated_on = false;
 
@@ -54,6 +60,10 @@ static struct {
     size_t storage_size;
     struct switch_pt_tables tables;
     struct switch_cdhash_list trusted;
+    uint8_t *originals_raw;
+    size_t originals_size;
+    struct switch_pt_originals originals;
+    uint32_t *original_files;
 } switch_pt;
 
 unsigned int hash_string(const char *cp, int len);
@@ -101,32 +111,85 @@ static int switch_pt_owned_by_root(vnode_t vp, enum vtype type, vfs_context_t ct
     return 0;
 }
 
-static int switch_pt_read_index(vnode_t tree, vfs_context_t ctx, uint64_t *index_id)
+/* A root-owned regular file of the tree, read whole into *raw (kalloc_data, *size bytes, the caller's to free). */
+static int switch_pt_read_tree_file(vnode_t tree, const char *name, size_t min, size_t max, vfs_context_t ctx,
+                                    uint8_t **raw, size_t *size, uint64_t *id)
 {
-    vnode_t index = NULLVP;
-    off_t size = 0;
-    int error = vnode_lookupat(SWITCH_PT_INDEX, SWITCH_PT_LOOKUP, &index, ctx, tree);
-    if (!error && vnode_mount(index) != switch_pt.data) {
+    vnode_t file = NULLVP;
+    off_t length = 0;
+    int error = vnode_lookupat(name, SWITCH_PT_LOOKUP, &file, ctx, tree);
+    if (!error && vnode_mount(file) != switch_pt.data) {
         error = EXDEV;
     }
     if (!error) {
-        error = switch_pt_owned_by_root(index, VREG, ctx, index_id, &size);
+        error = switch_pt_owned_by_root(file, VREG, ctx, id, &length);
     }
-    if (!error && (size < SWITCH_PT_HEADER || (uint64_t)size > SWITCH_PT_MAX_INDEX)) {
+    if (!error && (length < (off_t)min || (uint64_t)length > max)) {
         error = EFBIG;
     }
     if (!error) {
         int resid = 0;
-        switch_pt.raw = kalloc_data((vm_size_t)size, Z_WAITOK);
-        switch_pt.raw_size = (size_t)size;
-        error = vn_rdwr(UIO_READ, index, (caddr_t)switch_pt.raw, (int)size, 0, UIO_SYSSPACE, IO_NODELOCKED,
+        *raw = kalloc_data((vm_size_t)length, Z_WAITOK);
+        *size = (size_t)length;
+        error = vn_rdwr(UIO_READ, file, (caddr_t)*raw, (int)length, 0, UIO_SYSSPACE, IO_NODELOCKED,
                         vfs_context_ucred(ctx), &resid, current_proc());
         if (!error && resid) {
             error = EIO;
         }
     }
-    if (index) {
-        vnode_put(index);
+    if (file) {
+        vnode_put(file);
+    }
+    return error;
+}
+
+static int switch_pt_read_index(vnode_t tree, vfs_context_t ctx, uint64_t *index_id)
+{
+    return switch_pt_read_tree_file(tree, SWITCH_PT_INDEX, SWITCH_PT_HEADER, SWITCH_PT_MAX_INDEX, ctx, &switch_pt.raw,
+                                    &switch_pt.raw_size, index_id);
+}
+
+static void switch_pt_release_originals(void)
+{
+    if (switch_pt.original_files) {
+        kfree_data(switch_pt.original_files, (size_t)switch_pt.originals.count * sizeof(uint32_t));
+    }
+    if (switch_pt.originals_raw) {
+        kfree_data(switch_pt.originals_raw, switch_pt.originals_size);
+    }
+    switch_pt.original_files = NULL;
+    switch_pt.originals_raw = NULL;
+    switch_pt.originals_size = 0;
+    bzero(&switch_pt.originals, sizeof(switch_pt.originals));
+}
+
+/* The tree's .originals, protected as its index is; a tree made before there was one has none. */
+static int switch_pt_read_originals(vnode_t tree, vfs_context_t ctx)
+{
+    uint64_t id = 0;
+    int error = switch_pt_read_tree_file(tree, SWITCH_PT_ORIGINALS_NAME, SWITCH_PT_ORIGINALS_HEADER,
+                                         SWITCH_PT_MAX_ORIGINALS_BYTES, ctx, &switch_pt.originals_raw,
+                                         &switch_pt.originals_size, &id);
+    if (error == ENOENT) {
+        return 0;
+    }
+    enum switch_pt_error parsed = SWITCH_PT_OK;
+    if (!error) {
+        parsed = switch_pt_originals_parse(switch_pt.originals_raw, switch_pt.originals_size, &switch_pt.originals);
+    }
+    if (!error && parsed == SWITCH_PT_OK && switch_pt.originals.count) {
+        switch_pt.original_files =
+            kalloc_data((size_t)switch_pt.originals.count * sizeof(uint32_t), Z_WAITOK | Z_ZERO | Z_NOFAIL);
+        parsed = switch_pt_originals_link(&switch_pt.tables.index, &switch_pt.originals, switch_pt.original_files);
+    }
+    if (!error && parsed == SWITCH_PT_OK && !switch_pt_map_put(&switch_pt.tables.data, id, SWITCH_PT_PROTECTED)) {
+        parsed = SWITCH_PT_DUPLICATE_ID;
+    }
+    if (!error && parsed != SWITCH_PT_OK) {
+        error = EINVAL;
+    }
+    if (error) {
+        switch_pt_release_originals();
     }
     return error;
 }
@@ -152,9 +215,10 @@ static const char *switch_pt_build(vnode_t tree, vfs_context_t ctx, int *error)
         *error = (int)parsed;
         return "index contents";
     }
-    switch_pt.storage_size = switch_pt_tables_bytes(&index, 1);
+    /* the index and .originals: protected files no record lists */
+    switch_pt.storage_size = switch_pt_tables_bytes(&index, 2);
     switch_pt.storage = kalloc_data(switch_pt.storage_size, Z_WAITOK | Z_ZERO);
-    parsed = switch_pt_tables_build(&switch_pt.tables, &index, 1, switch_pt.storage, switch_pt.storage_size,
+    parsed = switch_pt_tables_build(&switch_pt.tables, &index, 2, switch_pt.storage, switch_pt.storage_size,
                                     switch_pt_name_hash);
     if (parsed == SWITCH_PT_OK && !switch_pt_map_put(&switch_pt.tables.data, index_id, SWITCH_PT_PROTECTED)) {
         parsed = SWITCH_PT_DUPLICATE_ID;
@@ -173,6 +237,7 @@ static const char *switch_pt_build(vnode_t tree, vfs_context_t ctx, int *error)
 
 static void switch_pt_release(void)
 {
+    switch_pt_release_originals();
     if (switch_pt.storage) {
         kfree_data(switch_pt.storage, switch_pt.storage_size);
     }
@@ -211,6 +276,10 @@ void switch_pretranslated_capture(void)
     }
     if (!failed && (error = vnode_ref(tree))) {
         failed = "tree reference";
+    }
+    if (!failed && (error = switch_pt_read_originals(tree, ctx))) {
+        printf("SwitchPretranslated: installed system apps run translated at load time (%s: %d)\n",
+               SWITCH_PT_ORIGINALS_NAME, error);
     }
     if (!failed) {
         switch_pt.root = tree;
@@ -422,6 +491,71 @@ bool switch_pretranslated_authentic(vnode_t vp)
                facts.cdhash_matches);
     }
     return authentic;
+}
+
+/* The file's embedded signature, as exec and F_ADDFILESIGS load one: AMFI admits it by its trust-cached CDHash. */
+static int switch_pt_load_signature(vnode_t vp, off_t slice_offset, off_t signature_offset, uint32_t signature_size)
+{
+    if (ubc_cs_blob_get(vp, CPU_TYPE_ANY, CPU_SUBTYPE_ANY, slice_offset)) {
+        return 0;
+    }
+    if (signature_size == 0 || signature_size > SWITCH_PT_MAX_SIGNATURE) {
+        return EBADMACHO;
+    }
+    vm_offset_t addr = 0;
+    vm_size_t size = signature_size;
+    if (ubc_cs_blob_allocate(&addr, &size) != KERN_SUCCESS) {
+        return ENOMEM;
+    }
+    int resid = 0;
+    int error = vn_rdwr(UIO_READ, vp, (caddr_t)addr, (int)signature_size, signature_offset, UIO_SYSSPACE, 0,
+                        vfs_context_ucred(vfs_context_kernel()), &resid, current_proc());
+    if (!error && resid) {
+        error = EBADMACHO;
+    }
+    struct cs_blob *blob = NULL;
+    if (!error) {
+        error = ubc_cs_blob_add(vp, proc_platform(current_proc()), CPU_TYPE_ANY, CPU_SUBTYPE_ANY, slice_offset, &addr,
+                                signature_size, NULL, 0, &blob, CS_BLOB_ADD_ALLOW_MAIN_BINARY);
+    }
+    if (addr) {
+        ubc_cs_blob_deallocate(addr, size);
+    }
+    return error;
+}
+
+vnode_t switch_pretranslated_translation(vnode_t vp, off_t slice_offset, off_t signature_offset,
+                                         uint32_t signature_size)
+{
+    if (!os_atomic_load(&switch_pretranslated_on, acquire) || !switch_pt.originals.count || vp == NULLVP ||
+        vp->v_mount != switch_pt.data) {
+        return NULLVP;
+    }
+    const struct cs_blob *blob = ubc_cs_blob_get(vp, CPU_TYPE_ANY, CPU_SUBTYPE_ANY, slice_offset);
+    const int64_t file =
+        blob ? switch_pt_original_file(&switch_pt.originals, switch_pt.original_files, blob->csb_cdhash) : -1;
+    if (file < 0) {
+        return NULLVP;
+    }
+    const struct switch_pt_file listed = switch_pt_file_at(&switch_pt.tables.index, (uint32_t)file);
+    vnode_t copy = NULLVP;
+    int error = switch_pt_copy(listed.data_id, vfs_context_kernel(), &copy);
+    if (!error) {
+        error = switch_pt_load_signature(copy, slice_offset, signature_offset, signature_size);
+    }
+    if (!error && !switch_pretranslated_authentic(copy)) {
+        error = EPERM;
+    }
+    if (error) {
+        if (switch_pt_log_allowed()) {
+            printf("SwitchPretranslated: %s stays translated at load time: %d\n", listed.path, error);
+        }
+        if (copy) {
+            vnode_put(copy);
+        }
+        return NULLVP;
+    }
+    return copy;
 }
 
 int switch_pretranslated_mmap_check(struct fileglob *fg, int flags, int prot, int maxprot)

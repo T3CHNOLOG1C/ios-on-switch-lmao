@@ -58,6 +58,9 @@ struct MipChain {
     // An array's (or a cube's: six a cube) layers, each `arrayStride` bytes from the one before (fx_image.h)
     uint32_t layers = 1;
     uint64_t arrayStride = 0;
+    // A multisampled image's (fx_image.h msLayout): its samples a pixel, laid out 1 << sxLog2 across and 1 << syLog2 down
+    // (rowBytes and rows count samples), and the header's MULTI_SAMPLE_COUNT
+    uint8_t samples = 1, sxLog2 = 0, syLog2 = 0, sampleMode = 0;
 };
 
 // The number of levels of a full chain (Metal's mipmapLevelCount for a full chain): floor(log2(max(w, h))) + 1

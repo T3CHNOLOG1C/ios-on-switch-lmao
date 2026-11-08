@@ -255,7 +255,7 @@ void mipChainTic(const MipChain &c, uint64_t va, uint32_t tic0, bool srgb, uint3
     setField(out, 218, 217, 1);                           // ANISO_COARSE_SPREAD_FUNC ONE
     setField(out, 227, 224, baseLevel);                   // RES_VIEW_MIN_MIP_LEVEL
     setField(out, 231, 228, baseLevel + levelCount - 1);  // RES_VIEW_MAX_MIP_LEVEL
-    setField(out, 235, 232, 0);                           // MULTI_SAMPLE_COUNT 1x1
+    setField(out, 235, 232, c.sampleMode);                // MULTI_SAMPLE_COUNT
     setField(out, 247, 236, 0);  // MIN_LOD_CLAMP: min_lod_clamp 0 - base level, clamped at 0 (ufixed 4.8)
 }
 
