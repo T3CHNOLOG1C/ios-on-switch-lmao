@@ -18,9 +18,9 @@ def capture(monitor: Monitor, run: Path, kernel: Path | None) -> None:
     monitor.command('stop')
     registers = monitor.human('info registers -a')
     (run / 'registers.txt').write_text(registers)
-    live = msgbuf.read(monitor, kernel, registers) if kernel else None
-    if live:
-        (run / 'msgbuf.raw').write_bytes(live)
+    ring = msgbuf.read(monitor, kernel, registers)
+    if ring:
+        (run / 'msgbuf.raw').write_bytes(ring.data)
     monitor.command('pmemsave', val=RAMOOPS[0], size=RAMOOPS[1], filename=str(run / 'ramoops.raw'))
     monitor.command('pmemsave', val=FRAMEBUFFER[0], size=FRAMEBUFFER[1], filename=str(run / 'framebuffer.raw'))
     try:
