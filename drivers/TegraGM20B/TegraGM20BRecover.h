@@ -2,6 +2,7 @@
 /* What the GPU is stuck on (recover.c), for gpu.c's client fault isolation. */
 #pragma once
 #include <stdint.h>
+#include "TegraGM20BHost.h"
 
 struct nvkm_device;
 struct nvkm_fifo;
@@ -71,6 +72,40 @@ static inline const char *tgm_sched_error_name(uint32_t code)
 	default:
 		return "unknown";
 	}
+}
+
+/* NV_PFIFO_INTR_BIND_ERROR_CODE as nouveau's gk104_fifo_intr_bind_reason names it */
+static inline const char *tgm_bind_error_name(uint32_t code)
+{
+	switch (code) {
+	case 0x01:
+		return "BIND_NOT_UNBOUND";
+	case 0x02:
+		return "SNOOP_WITHOUT_BAR1";
+	case 0x03:
+		return "UNBIND_WHILE_RUNNING";
+	case 0x05:
+		return "INVALID_RUNLIST";
+	case 0x06:
+		return "INVALID_CTX_TGT";
+	case 0x0b:
+		return "UNBIND_WHILE_PARKED";
+	default:
+		return "unknown";
+	}
+}
+
+/* 1 if a busy engine (its PFIFO_ENG_STATUS) holds hardware channel chid's context: resident, saving it out (ID), or
+ * loading it (NEXT_ID); CTX_STATUS 1 valid, 5 load, 6 save, 7 switch (nvgpu hw_fifo_gm20b.h, gk20a_fifo_engines_on_id). */
+static inline int tgm_engine_holds(uint32_t status, int chid)
+{
+	uint32_t ctx = PFIFO_ENG_CTX_STATUS(status);
+	int id = (ctx == 1 || ctx == 6 || ctx == 7) && !(status & PFIFO_ENG_ID_TSG) &&
+		 (int)PFIFO_ENG_ID(status) == chid;
+	int next = (ctx == 5 || ctx == 7) && !(status & PFIFO_ENG_NEXT_ID_TSG) &&
+		   (int)PFIFO_ENG_NEXT_ID(status) == chid;
+
+	return (status & PFIFO_ENG_BUSY) && (id || next);
 }
 
 /* PBDMA_INTR_0 ENG_RESET (gv100 dev_pbdma.ref): an engine of the PBDMA's runlist was reset while the PBDMA served a

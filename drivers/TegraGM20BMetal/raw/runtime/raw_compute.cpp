@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // See raw_compute.h. Method numbers are NVIDIA's (Mesa src/nouveau/headers/nvidia/classes/clb1c0.h, cla1c0qmd.h, MIT).
 #include "raw_compute.h"
+#include "raw_slm.h"
 
 #include <algorithm>
 #include <cstring>
@@ -71,7 +72,7 @@ const ComputeState *computeState(Device &dev, uint64_t keyHash)
     c.rec = k;
     {
         std::lock_guard<std::mutex> l(dev.lock_);
-        if (!dev.place(k->program, c.program, c.data)) {
+        if (!dev.place(k->program, c.program, c.data) || !dev.slmNeed(slmPerWarpOfQmd(k->qmd))) {
             dev.stats.heapFull++;
             return nullptr;
         }
@@ -95,7 +96,7 @@ const ComputeState *placeCompute(Device &dev, const ComputeRecord &r)
     uint64_t at = 0;
     {
         std::lock_guard<std::mutex> l(dev.lock_);
-        if (!dev.heapPlace(slot.data(), uint32_t(slot.size()), at)) {
+        if (!dev.heapPlace(slot.data(), uint32_t(slot.size()), at) || !dev.slmNeed(slmPerWarpOfQmd(r.kernel.qmd))) {
             dev.stats.heapFull++;
             return nullptr;
         }
