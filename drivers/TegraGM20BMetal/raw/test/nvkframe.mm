@@ -426,6 +426,11 @@ int main(int argc, char **argv)
             [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
             [e endEncoding];
         };
+        id<MTLBuffer> fills = nil;  // FRAME_FILL (frame.h)
+        if (frame::fillUniforms()) {
+            fills = [dev newBufferWithLength:frame::kFillBytes options:MTLResourceStorageModeShared];
+            memset(fills.contents, 0, frame::kFillBytes);
+        }
         // FRAME_MIP: IMAGE1's level 0 from a buffer of a pattern, then its levels (each frame, before its passes)
         id<MTLBuffer> mipSource = nil;
         if (frame::mipImage()) {
@@ -453,6 +458,13 @@ int main(int argc, char **argv)
                 const uint64_t c0 = threadNs();
                 id<MTLCommandBuffer> cb = [queue commandBuffer];
                 caCommandBuffer(cb);
+                if (fills) {
+                    id<MTLBlitCommandEncoder> b = [cb blitCommandEncoder];
+                    [b fillBuffer:fills
+                            range:NSMakeRange(frame::kFillFrom, frame::kFillBytes - frame::kFillFrom)
+                            value:frame::fillValue(f)];
+                    [b endEncoding];
+                }
                 if (mipSource) {
                     const frame::TexDesc td = frame::texture(frame::IMAGE1);
                     id<MTLBlitCommandEncoder> b = [cb blitCommandEncoder];
@@ -573,6 +585,10 @@ int main(int argc, char **argv)
                                 [e setVertexBytes:bytes.data() length:b.length atIndex:b.slot];
                             else
                                 [e setFragmentBytes:bytes.data() length:b.length atIndex:b.slot];
+                        }
+                        if (const int slot = fills ? frame::fillSlot(d) : -1; slot >= 0) {
+                            [e setFragmentBuffer:fills offset:0 atIndex:NSUInteger(slot)];
+                            bound[2][slot] = false;
                         }
                         for (int t = 0; t < 16; t++)
                             if (d.textures[t] >= 0)
