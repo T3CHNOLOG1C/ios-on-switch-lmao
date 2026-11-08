@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // Tegra210 NVDEC (video decoder 2.0, a falcon behind host1x): bring-up, the job engine and sleep. tegra_nvdec_probe()
 // runs the whole bring-up (boot-arg switch-no-nvdec turns it off) on its own thread:
-//   N0  host1x up (drivers/TegraHost1x: clock adopted, syncpoint interrupt, channel 0, self-test)
+//   N0  host1x up (drivers/TegraHost1x: clock adopted, syncpoint interrupt, channel 0)
 //   N1  NVDEC's SMMU address space (TegraNVDECMemory.cpp), power partition, clock, reset, falcon firmware loaded and
 //       started
 //   N2  proof of life through host1x channel 0 in NVDEC's class: an IMMEDIATE syncpoint increment (the engine's host
