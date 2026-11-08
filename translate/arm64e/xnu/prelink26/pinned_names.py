@@ -271,14 +271,16 @@ NAMES = {
     0xFFFFFFF00A68F344: '_csblob_get_der_entitlements',
     0xFFFFFFF00A68F4EC: '_csblob_register_profile',
     # One function of ours each under two names, so the GOT count cannot place them. kalloc.c's frees in lifs's GOT
-    # order between kernel_thread_start and lck_grp_alloc_init: the data pair (tail calls into kfree_ext), then the
-    # typed pair (the zone view check, then kfree_ext); the _external twins bound by the name our KPI exports. memcpy before memmove in IOGPUFamily's GOT: the 56-byte
-    # front and the 432-byte body. IOLib.cpp's IOLockSleep and IOLockSleepDeadline, each only a branch to
-    # lck_mtx_sleep / lck_mtx_sleep_deadline.
+    # order between kernel_thread_start and lck_grp_alloc_init, four signatures: kfree_data (KHEAP_DATA, ptr and size
+    # into kfree_ext), kfree_data_addr (KHEAP_DATA and ptr into kfree_addr_ext), kfree_type_impl (the zone view check,
+    # then kfree_ext) and kfree_type_var_impl (the view with bit 0 set into kfree_ext). Our kfree_type_impl handed a
+    # var view reads its version and sizes as a zone and panics in zone_invalid_panic. memcpy before memmove in
+    # IOGPUFamily's GOT: the 56-byte front and the 432-byte body. IOLib.cpp's IOLockSleep and IOLockSleepDeadline,
+    # each only a branch to lck_mtx_sleep / lck_mtx_sleep_deadline.
     0xFFFFFFF00A13041C: '_kfree_data',
-    0xFFFFFFF00A130430: '_kfree_data',
+    0xFFFFFFF00A130430: '_kfree_data_addr',
     0xFFFFFFF00A1303D4: '_kfree_type_impl',
-    0xFFFFFFF00A130414: '_kfree_type_impl',
+    0xFFFFFFF00A130414: '_kfree_type_var_impl',
     0xFFFFFFF00A227074: '_memcpy',
     0xFFFFFFF00A972EB0: '_memmove',
     0xFFFFFFF00A80E4D0: '_IOLockSleep',
