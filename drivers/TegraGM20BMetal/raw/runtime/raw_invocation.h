@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// A Metal call the raw facade records as an invocation and replays on m2v at commit (RawMetal.mm forwardInvocation:): what its
+// A Metal call the raw facade records as an invocation and replays on m2v at commit (RawMetalEncoder.mm forwardInvocation:): what its
 // pointer arguments point to, and the copy of it the invocation keeps.
 #pragma once
 #import <Foundation/Foundation.h>

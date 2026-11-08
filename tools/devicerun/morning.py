@@ -21,7 +21,7 @@ MORNING = [
         'p50(m2v) == 0',
         subsystem=RAW,
         regex=RAW_5S,
-        source='drivers/TegraGM20BMetal/raw/runtime/RawMetal.mm',
+        source='drivers/TegraGM20BMetal/raw/runtime/RawMetalRates.mm',
         note='m2v=0 in steady App Library scroll',
     ),
     Check('raw.m2v-xr', 'r31-rawrt', 'raw ', subsystem=RAW, regex=r'm2v=\d+\([^)]*XR', source=DOC),

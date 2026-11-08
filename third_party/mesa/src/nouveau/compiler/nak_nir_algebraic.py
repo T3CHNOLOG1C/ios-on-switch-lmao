@@ -77,6 +77,21 @@ algebraic_lowering += [
         '!nir_is_denorm_flush_to_zero(info->float_controls_execution_mode, 16)'),
 ]
 
+# ios-on-switch-lmao: two halves added or multiplied in f32 and rounded back to
+# half are their half sum or product (24 >= 2 x 11 + 2 bits make the double
+# rounding innocuous; checked exhaustively against native f16 arithmetic), so
+# metal2vulkan's f32 emulation of half arithmetic runs as SM53's HADD2/HMUL2.
+half_exact = 'nak->sm >= 53 && !nir_is_denorm_flush_to_zero(info->float_controls_execution_mode, 16)'
+for op in ['fadd', 'fmul']:
+    for na in [False, True]:
+        for nb in [False, True]:
+            x = ('fneg', ('f2f32', 'a@16')) if na else ('f2f32', 'a@16')
+            y = ('fneg', ('f2f32', 'b@16')) if nb else ('f2f32', 'b@16')
+            algebraic_lowering += [
+                (('f2f16_rtne', (op, x, y)),
+                    (op, ('fneg', a) if na else a, ('fneg', b) if nb else b), half_exact),
+            ]
+
 # ios-on-switch-lmao: metal2vulkan flushes a float's denormal to a signed zero
 # with integer ops wherever Metal does. An FTZ instruction (fp32 unless the
 # shader keeps denormals) flushes its float sources itself: those take the float
