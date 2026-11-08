@@ -38,11 +38,9 @@ public:
     // The state's pipeline handed to `ready` once made (on the compile queue; at once if it was before), or null once the raw
     // path will not draw it (refused, its compile failed past its retries, or no room for it)
     void ask(Ask a, std::function<void(Pipeline *)> ready);
-    // The state's pipeline now, on the caller's thread, if this process or the disk has its record: a state made in an earlier
-    // boot is raw from its first draw. Null: not made yet, or refused
-    Pipeline *made(Ask a);
-    // The state's pipeline made now on the caller's thread (one state at a time), as Metal makes a state at its creation.
-    // Null: refused, or its compile could not run (*retry: ask() may make it later)
+    // The state's pipeline now, on the caller's thread: its record from this process or the disk (a state made in an earlier
+    // boot is raw from its first draw), else made, as Metal makes a state at its creation. Null: refused, or its compile could
+    // not run (*retry: ask() may make it later)
     Pipeline *makeNow(Ask a, bool *retry);
 
     Compiler::Stats stats() const;
@@ -52,6 +50,7 @@ private:
     RecordCache cache_;
     std::unique_ptr<Compiler> compiler_;
     std::unique_ptr<Direct> direct_;
+    std::once_flag directMade_;  // make() runs on the compile queue and on creating threads at once
     uint64_t stack_;
     dispatch_queue_t queue_;
     std::mutex lock_;

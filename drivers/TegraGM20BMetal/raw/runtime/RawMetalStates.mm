@@ -222,18 +222,30 @@ static bool linksFunctions(MTLRenderPipelineDescriptor *d)
            d.fragmentLinkedFunctions.functions.count || d.fragmentLinkedFunctions.privateFunctions.count;
 }
 
-// A state the pack lacks whose record this process or an earlier boot made (RawComplete.h made()): raw from its first draw, and
-// its twin made lazily like a pack state's
-static raw::Pipeline *madeBefore(RMPipeline *p, MTLRenderPipelineDescriptor *d)
+// A state the pack lacks, of any library's functions: its record from this process or an earlier boot, else made at its
+// creation, as Metal makes a state (RawComplete.h), and the raw path draws it from its first draw. A compile that could not
+// run is asked again off this thread; m2v draws the state until then.
+static void makeRecord(RMPipeline *p, MTLRenderPipelineDescriptor *d)
 {
-    if (!p->_completable || !gRM->completion)
-        return nullptr;
+    if (p->_raw || !p->_completable || !gRM->completion)
+        return;
     raw::Completion::Ask a;
     a.descriptor = twinDescriptor(d);
     a.key = p->_key;
     a.caTransform = p->_caTransform;
     a.own = !p->_packable;
-    return gRM->completion->made(std::move(a));
+    bool retry = false;
+    if ((p->_raw = gRM->completion->makeNow(a, &retry)) || !retry)
+        return;
+    p->_asked = true;
+    __weak RMPipeline *weak = p;
+    gRM->completion->ask(std::move(a), [weak](raw::Pipeline *pl) {
+        RMPipeline *strong = weak;
+        if (strong && pl)
+            __atomic_store_n(&strong->_raw, pl, __ATOMIC_RELEASE);
+        else if (strong)
+            strong->_asked = false;
+    });
 }
 
 - (RMPipeline *)pipelineFor:(MTLRenderPipelineDescriptor *)d twin:(id<MTLRenderPipelineState>)twin
@@ -255,45 +267,18 @@ static raw::Pipeline *madeBefore(RMPipeline *p, MTLRenderPipelineDescriptor *d)
         p->_raw =
             gRM->raw->pipeline(raw::Pack::fnv(p->_key.data(), p->_key.size()), raw::PackForm::Default, p->_caTransform);
     }
-    if (!p->_raw)
-        p->_raw = madeBefore(p, d);
+    makeRecord(p, d);
     if (!p->_raw) {
         const char *label = d.label.UTF8String ?: "-";
         SWITCH_REFUSE_DETAIL("raw", "state.unpacked", raw::Pack::fnv(label, strlen(label)),
-                             "state not in the pack (m2v draws it until the runtime makes its record)%s: %s",
+                             "state neither in the pack nor made at its creation: m2v draws it%s: %s",
                              !p->_completable           ? " (a function not this device's: never made)"
-                             : !p->_packable            ? " (not a framework library's: never in the pack)"
+                             : p->_asked                ? " until its compile, asked again, makes it"
                              : gRM->raw->stats.heapFull ? " (or the shader heap is full)"
-                                                        : "",
+                                                        : " (the raw log names why it was refused)",
                              label);
     }
     return p;
-}
-
-// A state the pack lacks, of any library's functions: the runtime makes its record at its creation, as Metal makes a state
-// (RawComplete.h), and the raw path draws it from its first draw. A compile that could not run is asked again off this
-// thread; m2v draws the state until then.
-static void completeLater(RMPipeline *p, MTLRenderPipelineDescriptor *d)
-{
-    if (p->_raw || !p->_completable || !gRM->completion)
-        return;
-    raw::Completion::Ask a;
-    a.descriptor = twinDescriptor(d);
-    a.key = p->_key;
-    a.caTransform = p->_caTransform;
-    a.own = !p->_packable;
-    bool retry = false;
-    if ((p->_raw = gRM->completion->makeNow(a, &retry)) || !retry)
-        return;
-    p->_asked = true;
-    __weak RMPipeline *weak = p;
-    gRM->completion->ask(std::move(a), [weak](raw::Pipeline *pl) {
-        RMPipeline *strong = weak;
-        if (strong && pl)
-            __atomic_store_n(&strong->_raw, pl, __ATOMIC_RELEASE);
-        else if (strong)
-            strong->_asked = false;
-    });
 }
 
 // m2v's state over the twins, for a command buffer that has to go to m2v (made asynchronously in the render server:
@@ -334,7 +319,6 @@ static id<MTLRenderPipelineState> pipelineTwin(MTLRenderPipelineDescriptor *d, M
 {
     SWITCH_API(ApiObject);
     RMPipeline *p = [self pipelineFor:d twin:nil];
-    completeLater(p, d);
     p->_twin = pipelineTwin(d, MTLPipelineOptionNone, p->_raw, error);
     if (!p->_twin && !p->_raw)
         return nil;
@@ -351,7 +335,6 @@ static id<MTLRenderPipelineState> pipelineTwin(MTLRenderPipelineDescriptor *d, M
     SWITCH_API(ApiObject);
     if (reflection) {
         RMPipeline *p = [self pipelineFor:d twin:nil];
-        completeLater(p, d);
         const bool packed = p->_raw != nullptr;
         p->_twin = [gRM->fallback newRenderPipelineStateWithDescriptor:packedTwinDescriptor(d, packed)
                                                                options:packedTwinOptions(o, packed)
@@ -362,7 +345,6 @@ static id<MTLRenderPipelineState> pipelineTwin(MTLRenderPipelineDescriptor *d, M
         return !p->_twin && !p->_raw ? nil : (id<MTLRenderPipelineState>)p;
     }
     RMPipeline *p = [self pipelineFor:d twin:nil];
-    completeLater(p, d);
     p->_twin = pipelineTwin(d, o, p->_raw, error);
     if (error && p->_raw)
         *error = nil;

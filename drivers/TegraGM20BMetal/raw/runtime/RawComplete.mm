@@ -5,6 +5,7 @@
 #include <cstring>
 #include "NativeBridgeMetalFrontend.h"
 #include "RawDirect.h"
+#include "RawMetalInternal.h"
 #include "raw_gpu.h"
 
 namespace raw {
@@ -128,16 +129,6 @@ void Completion::ask(Ask asked, std::function<void(Pipeline *)> ready)
     });
 }
 
-Pipeline *Completion::made(Ask a)
-{
-    CacheKey k;
-    RuntimeRecord record;
-    std::string why;
-    if (!keyOf(a, k) || compiler_->lookup(k, record, why) != RecordCache::Found::Record)
-        return nullptr;
-    return device_.addRecord(record, a.caTransform, why);
-}
-
 Pipeline *Completion::makeNow(Ask a, bool *retry)
 {
     *retry = false;
@@ -167,9 +158,15 @@ Compiler::Outcome Completion::make(const CacheKey &k, RuntimeRecord &record, std
         }
         a = it->second;
     }
-    if (!direct_)
+    std::call_once(directMade_, [this] {
         direct_ = std::make_unique<Direct>(device_.pack());
-    return direct_->make(a.descriptor, a.key, record, why);
+    });
+    const Compiler::Outcome outcome = direct_->make(a.descriptor, a.key, record, why);
+    if (outcome != Compiler::Outcome::Made)
+        once([NSString stringWithFormat:@"a state the pack lacks %s: %s | %.600s",
+                                        outcome == Compiler::Outcome::Refused ? "is refused" : "was not made",
+                                        why.c_str(), a.key.c_str()]);
+    return outcome;
 }
 
 Compiler::Stats Completion::stats() const
