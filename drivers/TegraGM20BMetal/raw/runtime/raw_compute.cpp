@@ -228,6 +228,11 @@ bool ComputeEncoder::dispatch(const uint32_t groups[3], const uint32_t threads[3
                 *why = "a texture the raw path cannot sample";
                 return false;
             }
+            const FormatInfo *f = t ? formatInfo(t->format) : nullptr;
+            if (f && e.window && f->tic0 != e.window) {
+                *why = "a kernel m2v binds a view of another format at a texture slot";
+                return false;
+            }
             at[0] |= t ? t->tic : 0;
         } else if (e.slot & kConstexprSampler) {
             const uint32_t index = e.slot & ~kConstexprSampler;

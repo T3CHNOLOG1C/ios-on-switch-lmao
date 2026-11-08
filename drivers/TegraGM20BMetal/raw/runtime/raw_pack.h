@@ -147,7 +147,7 @@ struct PackKernelEntry {
     uint16_t offset;
     uint8_t kind;  // PackKernelEntryKind
     uint8_t slot;
-    uint32_t window;  // buffers: 0 the whole buffer
+    uint32_t window;  // buffers: 0 the whole buffer; textures: the header's word 0 m2v bound (format, swizzle)
 };
 
 struct PackKernel {

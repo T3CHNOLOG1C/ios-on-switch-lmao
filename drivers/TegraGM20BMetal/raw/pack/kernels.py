@@ -63,7 +63,9 @@ def entry(f: list[str], constexpr_tsc: list[list[int]], problems: list[str]) -> 
         w, h = int(f[4]), int(f[5])
         if w < TEXTURE_TAG[0] or h != w - TEXTURE_TAG[0] + TEXTURE_TAG[1]:
             problems.append(f'a texture of no tag ({w}x{h}) at {f[2]}')
-        return {'off': int(f[2]), 'kind': TEXTURE, 'slot': w - TEXTURE_TAG[0], 'window': 0}
+        # the header's word 0 (format and swizzle): m2v may bind a view of another format (a half texture's raw bits),
+        # which the raw path, binding the texture's own header, refuses (raw_compute.cpp)
+        return {'off': int(f[2]), 'kind': TEXTURE, 'slot': w - TEXTURE_TAG[0], 'window': int(f[6], 16)}
     slot = sampler_slot([int(x, 16) for x in f[4:12]], constexpr_tsc, problems)
     return {'off': int(f[2]), 'kind': SAMPLER, 'slot': slot, 'window': 0}
 

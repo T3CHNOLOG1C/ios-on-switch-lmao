@@ -247,7 +247,7 @@ void Decoder::probeKernel(const uint32_t *q, const std::string &prog)
         const uint32_t tic = w[k] & 0xfffff, tsc = w[k] >> 20;
         uint32_t t[8] = {}, s[8] = {};
         if (tic && read(ticPool + uint64_t(tic) * 32, t, sizeof t))
-            fprintf(out_, "K entry %u texture %u %u\n", k * 4, (t[4] & 0xffff) + 1, (t[5] & 0xffff) + 1);
+            fprintf(out_, "K entry %u texture %u %u %x\n", k * 4, (t[4] & 0xffff) + 1, (t[5] & 0xffff) + 1, t[0]);
         if (tsc && read(tscPool + uint64_t(tsc) * 32, s, sizeof s))
             fprintf(out_, "K entry %u sampler %x %x %x %x %x %x %x %x\n", k * 4, s[0], s[1], s[2], s[3], s[4], s[5],
                     s[6], s[7]);

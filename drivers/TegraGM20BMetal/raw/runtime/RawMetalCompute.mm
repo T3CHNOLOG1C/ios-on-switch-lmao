@@ -307,6 +307,14 @@ static bool plainTexture(RMTexture *t)
             [self refuse:x.slot why:@"a kernel's texture the raw path samples through an image of its own"];
             k = nullptr;
         }
+        // m2v binds its own view of another format there (a half texture's raw bits), which the raw path does not make
+        const raw::FormatInfo *f = x.kind == raw::KernelTexture && x.slot < 31 && _textures[x.slot]
+                                       ? raw::formatInfo(_textures[x.slot]->_raw.format)
+                                       : nullptr;
+        if (f && x.window && f->tic0 != x.window) {
+            [self refuse:x.slot why:@"a kernel m2v binds a view of another format at a texture slot"];
+            k = nullptr;
+        }
         // m2v's descriptor starts at the bind offset rounded down to 16, the rest a push word no record names
         if (x.kind == raw::KernelBuffer && x.slot < 31 && _buffers[x.slot] &&
             ((_buffers[x.slot]->_raw.va + _offsets[x.slot]) & 15)) {
