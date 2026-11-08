@@ -375,11 +375,10 @@ void RecordCache::evict(uint64_t room)
 struct Compiler::Job {
     Compiler *compiler;
     CacheKey key;
-    Done done;
 };
 
-Compiler::Compiler(RecordCache *cache, Make make)
-    : cache_(cache), make_(std::move(make)),
+Compiler::Compiler(RecordCache *cache, Make make, uint64_t retryUs)
+    : cache_(cache), make_(std::move(make)), retryUs_(retryUs),
       queue_(dispatch_queue_create(
           "com.brunostjohn.switch.raw.compile",
           dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_BACKGROUND, 0)))
@@ -395,14 +394,44 @@ Compiler::State Compiler::ask(const CacheKey &k, Done done, const RuntimeRecord 
 {
     std::lock_guard<std::mutex> l(lock_);
     const auto [it, first] = entries_.try_emplace(k.name());
-    if (!first) {
-        if (record)
-            *record = it->second.record.get();
-        return it->second.state;
+    Entry &e = it->second;
+    uint64_t wait = 0;
+    if (first || (retryable(e, wait) && wait == 0)) {
+        e.state = State::Pending;
+        if (done)
+            e.waiters.push_back(std::move(done));
+        queue(k);
+        return State::Pending;
     }
+    if (e.state == State::Pending && done)
+        e.waiters.push_back(std::move(done));
+    if (record)
+        *record = e.record.get();
+    return e.state;
+}
+
+// lock_ held: whether `e` failed and may be tried again, and in `wait` how long until then
+bool Compiler::retryable(const Entry &e, uint64_t &wait) const
+{
+    if (e.state != State::Failed || e.failures > kRetries)
+        return false;
+    const uint64_t due = e.failedUs + (retryUs_ << (2 * (e.failures - 1))), now = nowUs();
+    wait = due > now ? due - now : 0;
+    return true;
+}
+
+bool Compiler::retryAfter(const CacheKey &k, uint64_t &us) const
+{
+    std::lock_guard<std::mutex> l(lock_);
+    const auto it = entries_.find(k.name());
+    return it != entries_.end() && retryable(it->second, us);
+}
+
+// lock_ held
+void Compiler::queue(const CacheKey &k)
+{
     queued_++;
-    dispatch_async_f(static_cast<dispatch_queue_t>(queue_), new Job{this, k, std::move(done)}, run);
-    return State::Pending;
+    dispatch_async_f(static_cast<dispatch_queue_t>(queue_), new Job{this, k}, run);
 }
 
 void Compiler::run(void *context)
@@ -419,9 +448,11 @@ void Compiler::run(void *context)
     if (found == RecordCache::Found::None && outcome != Outcome::Failed && c.cache_)
         c.cache_->store(job->key, outcome == Outcome::Made ? record.get() : nullptr, why);
     const RuntimeRecord *made = nullptr;
+    std::vector<Done> waiters;
     {
         std::lock_guard<std::mutex> l(c.lock_);
         Entry &e = c.entries_[job->key.name()];
+        waiters.swap(e.waiters);
         e.why = why;
         if (outcome == Outcome::Made) {
             e.record = std::move(record);
@@ -431,10 +462,16 @@ void Compiler::run(void *context)
         c.stats_.refusals += outcome == Outcome::Refused;
         c.stats_.failures += outcome == Outcome::Failed;
         c.stats_.makeUs += nowUs() - began;
-        e.state = outcome == Outcome::Made ? State::Ready : State::Refused;
+        if (outcome == Outcome::Failed) {
+            e.failures++;
+            e.failedUs = nowUs();
+        }
+        e.state = outcome == Outcome::Made      ? State::Ready
+                  : outcome == Outcome::Refused ? State::Refused
+                                                : State::Failed;
     }
-    if (job->done)
-        job->done(made, why);
+    for (const Done &done : waiters)
+        done(made, why);
     std::lock_guard<std::mutex> l(c.lock_);
     c.queued_--;
     c.idle_.notify_all();

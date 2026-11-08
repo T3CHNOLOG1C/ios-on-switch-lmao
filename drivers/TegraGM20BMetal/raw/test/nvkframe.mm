@@ -29,6 +29,16 @@ static void caCommandBuffer(id<MTLCommandBuffer> cb)
         ((void (*)(id, SEL, uint64_t))objc_msgSend)(cb, protection, 0);
 }
 
+// FRAME_STATES_OUT=<file>: the frame's states' corpus lines appended to it (the corpus of a pack of just them)
+static void statesOut(const frame::State &s)
+{
+    if (const char *out = getenv("FRAME_STATES_OUT"))
+        if (FILE *f = fopen(out, "a")) {
+            fprintf(f, "%s\n", s.line.c_str());
+            fclose(f);
+        }
+}
+
 static void missing(const char *cls, const char *sel)
 {
     fprintf(stderr, "MISSING -[%s %s]\n", cls, sel);
@@ -168,6 +178,10 @@ int main(int argc, char **argv)
             fprintf(stderr, "NO DEVICE: %s\n", why.UTF8String);
             return 1;
         }
+        // FRAME_COMPLETE=<dir>|memory: the runtime makes the records of the states the pack lacks (RawComplete.h), kept in <dir>;
+        // FRAME_COMPLETE_SETTLE=<frame>: two seconds before that frame, so the frames after draw the states it made
+        if (const char *complete = getenv("FRAME_COMPLETE"))
+            raw_metal_complete_states(strcmp(complete, "memory") ? complete : nullptr);
 #else
         setenv("NMB_DEVICE_BASE_NSOBJECT", "1", 1);
         id<MTLDevice> dev = native_bridge_metal_open(argv[1], argv[2], 0, missing);
@@ -177,7 +191,17 @@ int main(int argc, char **argv)
         }
 #endif
         NSError *error = nil;
-        id<MTLLibrary> qc = [dev newLibraryWithURL:[NSURL fileURLWithPath:@(argv[3])] error:&error];
+        // FRAME_LIBRARY_BYTES=1: the library made from its bytes, as an app's own (no framework's: no state looked up in the
+        // pack, every one the runtime's to make)
+        id<MTLLibrary> qc = nil;
+        if (getenv("FRAME_LIBRARY_BYTES")) {
+            NSData *bytes = [NSData dataWithContentsOfFile:@(argv[3])];
+            qc = [dev newLibraryWithData:dispatch_data_create(bytes.bytes, bytes.length, nil,
+                                                              DISPATCH_DATA_DESTRUCTOR_DEFAULT)
+                                   error:&error];
+        } else {
+            qc = [dev newLibraryWithURL:[NSURL fileURLWithPath:@(argv[3])] error:&error];
+        }
         std::vector<frame::State> all = frame::states(argv[4]);
         std::vector<id<MTLRenderPipelineState>> uber, blur, extra;
         for (auto &s : all) {
@@ -186,6 +210,7 @@ int main(int argc, char **argv)
                                                                                        error:&error]) {
                     extra.push_back(p);
                     printf("STATE extra %s\n", s.key.c_str());
+                    statesOut(s);
                 }
                 continue;
             }
@@ -206,6 +231,7 @@ int main(int argc, char **argv)
             }
             (s.uber ? uber : blur).push_back(p);
             printf("STATE %s %s\n", s.uber ? "uber" : "blur", s.key.c_str());
+            statesOut(s);
         }
         id<MTLCommandQueue> queue = [dev newCommandQueue];
         id<MTLTexture> tex[frame::TEX_COUNT];
@@ -469,7 +495,10 @@ int main(int argc, char **argv)
         // FRAME_YCBCR_WRITE=k: every k-th frame from the k-th, the 4:2:0 surface written under a write lock (its seed moves:
         // a decoder's next frame), so the raw path converts its image again then and only then (RMTexture _imageSeed)
         const unsigned ycbcrWrite = getenv("FRAME_YCBCR_WRITE") ? unsigned(atoi(getenv("FRAME_YCBCR_WRITE"))) : 0;
+        const int settle = getenv("FRAME_COMPLETE_SETTLE") ? atoi(getenv("FRAME_COMPLETE_SETTLE")) : -1;
         for (unsigned f = 0; f < frames; f++) {
+            if (int(f) == settle)
+                usleep(2000000);
             if (ycbcrWrite && f && f % ycbcrWrite == 0 && surfaces[frame::IMAGE2] && getenv("FRAME_YCBCR")) {
                 IOSurfaceLock(surfaces[frame::IMAGE2], 0, nullptr);
                 uint8_t *base = (uint8_t *)IOSurfaceGetBaseAddress(surfaces[frame::IMAGE2]);

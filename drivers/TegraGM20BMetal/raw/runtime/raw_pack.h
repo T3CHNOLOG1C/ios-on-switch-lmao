@@ -136,6 +136,15 @@ enum PackReloc : uint32_t {
 };
 
 #pragma pack(pop)
+
+// What a context init's marked methods take in this process (PackReloc): the shader heap, the zero page, the root table (NVK's
+// cb0), the texture and sampler header pools and their highest indices
+struct InitAddresses {
+    uint64_t heap, zero, root, tic, tsc;
+    uint32_t ticMax, tscMax;
+};
+
+uint32_t relocated(const PackInitMethod &m, const InitAddresses &a);
 static_assert(sizeof(PackPipeline) == 36 + 16 * 8 + 4 + 32 * 4, "pack layout");
 static_assert(sizeof(PackProgram) == 32, "pack layout");
 

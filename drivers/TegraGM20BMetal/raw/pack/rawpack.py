@@ -152,10 +152,6 @@ def build(work: Path, bridge: Path) -> None:
     run(['xcrun', 'clang', *cflags, '-c', HERE / 'mock_iokit.c', '-o', work / 'mock_iokit.o'])
     run(['xcrun', 'clang++', *cflags, '-std=c++17', '-c', HERE / 'cap.cpp', '-o', work / 'cap.o'])
     run(['xcrun', 'clang++', *cflags, '-std=c++17', '-c', HERE / 'nvdec.cpp', '-o', work / 'nvdec.o'])
-    for src in ('raw_capture.cpp', 'raw_pack.cpp'):  # the mock's RAWCAP_CAPTURE (cap.cpp)
-        obj = work / Path(src).with_suffix('.o')
-        run(['xcrun', 'clang++', *cflags, '-std=c++17', '-c', RAW / 'runtime' / src, '-o', obj])
-        objs.append(obj)
     run(
         [
             'xcrun',

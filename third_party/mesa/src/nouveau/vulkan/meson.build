@@ -83,6 +83,8 @@ nvk_files = files(
   'nvk_sampler.c',
   'nvk_sampler.h',
   'nvk_shader.c',
+  'nvk_switch_capture.c',
+  'nvk_switch_capture.h',
   'nvk_shader.h',
   'nvk_upload_queue.c',
   'nvk_upload_queue.h',
