@@ -7,10 +7,12 @@ Tiers, each name in the first that has it:
              Apple compiles ahead for its GPUs; warmup_shaders makes the ones of the device's GPU family at boot), but
              its generic states: CA makes those only out of a binary archive (create_pipeline_state refuses a generic
              spec without one), and this device has none
-  blend      every fragment state of the two above under every blend CA puts in the pipeline (those
+  variants   QuartzCore 27's: every member of the texture function families of the two above that a filter picks among
+             at draw time (glass variants, blur passes: caspec27.VARIANT_FAMILIES), on the same pipeline
+  blend      every fragment state of the tiers above under every blend CA puts in the pipeline (those
              Pipeline::Spec::lift_blend_function lifts out of the fragment: the hardware's) and none, on BGRA8 and on
              the state's own format where m2v draws it once (not the extended-range formats, which mkpack.py leaves out)
-  fetch      every fixed-function fragment state of the two above with no blend of its own under every blend CA leaves
+  fetch      every fixed-function fragment state of the tiers above with no blend of its own under every blend CA leaves
              in the fragment (framebuffer fetch: the separable and non-separable modes a compositing filter asks for)
 A state is made from its name alone (caspec.state_fields): its descriptor is what QuartzCore makes of the name.
 
@@ -21,7 +23,7 @@ import sys
 
 import caspec
 
-TIERS = ('corpus', 'manifest', 'blend', 'fetch')
+TIERS = ('corpus', 'manifest', 'variants', 'blend', 'fetch')
 LIFTABLE = range(1, 26)  # lift_blend_function: the blend functions above 25 stay in the fragment
 CLOSURE_FORMATS = ('BGRA',)
 SINGLE_DRAW_FORMATS = ('BGRA', 'RGBA', 'RGhA', 'RGfA')
@@ -114,10 +116,12 @@ def _fetch_tier(tables: caspec.Tables, fragments: list[tuple[str, str]]) -> list
 def labels(tables: caspec.Tables, corpus: list[str], tiers: tuple[str, ...] = TIERS) -> dict[str, list[str]]:
     """Give every tier's names, in order, each name in the first tier that has it."""
     manifest = [m[0] for m in tables.t['manifest'] if m[0][0] == 'P' and not caspec.decode(tables, m[0]).flag('g')]
-    fragments = _fragments(tables, list(corpus) + manifest)
+    variants = _variant_tier(tables, list(corpus) + manifest)
+    fragments = _fragments(tables, list(corpus) + manifest + variants)
     made = {
         'corpus': lambda: list(corpus),
         'manifest': lambda: manifest,
+        'variants': lambda: variants,
         'blend': lambda: _blend_tier(tables, fragments),
         'fetch': lambda: _fetch_tier(tables, fragments),
     }
@@ -127,6 +131,14 @@ def labels(tables: caspec.Tables, corpus: list[str], tiers: tuple[str, ...] = TI
         if tier in tiers:
             out[tier] = [n for n in made[tier]() if not (n in seen or seen.add(n))]
     return out
+
+
+def _variant_tier(tables: caspec.Tables, seeds: list[str]) -> list[str]:
+    if not tables.v27:
+        return []
+    import caspec27  # noqa: PLC0415  (only a QuartzCore 27's tables have variant families)
+
+    return [v for name in seeds for v in caspec27.variants(tables.v27, name)]
 
 
 def corpus_names(path: str, tables: caspec.Tables | None = None) -> list[str]:
