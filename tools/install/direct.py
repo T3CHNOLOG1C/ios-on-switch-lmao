@@ -28,6 +28,7 @@ from typing import NoReturn
 
 if __package__ in (None, ''):
     sys.path.insert(0, str(Path(os.path.abspath(__file__)).parents[2]))
+from tools.common import paths
 from tools.install import (
     card as cards,
     compose,
@@ -350,16 +351,10 @@ def give_back(path: Path) -> None:
 
 def resolve_tool(value: str | None) -> str:
     """Return apfs_tool's absolute path from its runfiles path (`bazel run`) or a path, so a sudo rerun finds it."""
-    if value and not os.path.isabs(value):
-        try:
-            from python.runfiles import runfiles  # noqa: PLC0415  only under `bazel run`
-
-            value = runfiles.Create().Rlocation(value) or value
-        except ImportError:
-            pass
+    value = paths.located(value)
     if not value or not os.access(value, os.X_OK):
         raise host.HostError(f'no apfs_tool at {value!r}: run through `bazel run //:image_to_card`')
-    return os.path.abspath(value)
+    return value
 
 
 def confirm(args: argparse.Namespace, disk: str) -> None:
@@ -399,11 +394,8 @@ def parse(argv: list[str]) -> argparse.Namespace:
     parser.add_argument('--no-eject', action='store_true')
     parser.add_argument('--log')
     args = parser.parse_args(argv)
-    workspace = os.environ.get('BUILD_WORKSPACE_DIRECTORY') or os.getcwd()
-    args.out = os.path.abspath(args.out or os.path.join(workspace, 'out/sd'))
-    args.log = os.path.abspath(
-        args.log or Path.home() / 'Library/Logs/switch-ios/direct-{}.log'.format(time.strftime('%Y%m%d-%H%M%S'))
-    )
+    args.out = os.path.abspath(args.out or paths.workspace() / 'out/sd')
+    args.log = os.path.abspath(args.log or paths.run_log('direct'))
     return args
 
 

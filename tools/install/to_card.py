@@ -15,11 +15,11 @@ import argparse
 import os
 import shutil
 import sys
-import time
 from pathlib import Path
 
 if __package__ in (None, ''):
     sys.path.insert(0, str(Path(os.path.abspath(__file__)).parents[2]))
+from tools.common import paths
 from tools.install import card as cards, direct, folder, host, progress
 
 
@@ -62,11 +62,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--no-eject', action='store_true')
     parser.add_argument('--log')
     args = parser.parse_args(argv)
-    workspace = os.environ.get('BUILD_WORKSPACE_DIRECTORY') or os.getcwd()
-    out = Path(os.path.abspath(args.out or os.path.join(workspace, 'out/sd')))
-    log = host.Log(
-        args.log or Path.home() / 'Library/Logs/switch-ios/to-card-{}.log'.format(time.strftime('%Y%m%d-%H%M%S'))
-    )
+    out = Path(os.path.abspath(args.out or paths.workspace() / 'out/sd'))
+    log = host.Log(args.log or paths.run_log('to-card'))
     try:
         found = folder.images(out)
         names = args.image or sorted(found)

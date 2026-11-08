@@ -44,7 +44,10 @@ py_library(
         "to_card.py",
     ],
     imports = ["../.."],
-    deps = ["//tools/common:hashing"],
+    deps = [
+        "//tools/common:hashing",
+        "//tools/common:paths",
+    ],
 )
 
 py_binary(

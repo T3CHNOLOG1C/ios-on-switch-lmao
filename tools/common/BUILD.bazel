@@ -18,3 +18,16 @@ py_test(
     srcs = ["hashing_test.py"],
     deps = [":hashing"],
 )
+
+py_library(
+    name = "paths",
+    srcs = ["paths.py"],
+    imports = ["../.."],
+    deps = ["@rules_python//python/runfiles"],
+)
+
+py_test(
+    name = "paths_test",
+    srcs = ["paths_test.py"],
+    deps = [":paths"],
+)

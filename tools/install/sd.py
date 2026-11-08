@@ -32,6 +32,7 @@ from typing import NoReturn
 
 if __package__ in (None, ''):
     sys.path.insert(0, str(Path(os.path.abspath(__file__)).parents[2]))
+from tools.common import paths
 from tools.install import (
     apfs,
     card as cards,
@@ -43,32 +44,14 @@ from tools.install import (
     target as targets,
 )
 
-try:
-    from python.runfiles import runfiles
-except ImportError:
-    runfiles = None
-
 COPY_CHUNK = composer.COPY_CHUNK
 SEEK_HOLE, SEEK_DATA = getattr(os, 'SEEK_HOLE', 3), getattr(os, 'SEEK_DATA', 4)
 
 
-def default_log() -> Path:
-    stamp = time.strftime('%Y%m%d-%H%M%S')
-    return Path.home() / f'Library/Logs/switch-ios-install/install-{stamp}.log'
-
-
 def resolve_inputs(args: argparse.Namespace) -> None:
     """Runfiles paths (from `bazel run`) to absolute paths, so a sudo re-exec needs no Bazel environment."""
-    locate = runfiles.Create() if runfiles else None
     for name in ('spec', 'ipsw', 'os_dmg', 'system_cryptex', 'app_cryptex', 'boot_package'):
-        value = getattr(args, name)
-        if value and not os.path.isabs(value) and locate:
-            located = locate.Rlocation(value)
-            if located:
-                value = located
-        if value:
-            value = os.path.abspath(value)
-        setattr(args, name, value)
+        setattr(args, name, paths.located(getattr(args, name)))
 
 
 class Installer:
@@ -449,7 +432,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--boot-package')
     args = parser.parse_args(argv)
     resolve_inputs(args)
-    args.log = args.log or str(default_log())
+    args.log = args.log or str(paths.run_log('install', 'switch-ios-install'))
     log = host.Log(args.log)
     try:
         host.check_tools(log)
