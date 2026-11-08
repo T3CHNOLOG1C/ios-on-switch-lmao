@@ -3,8 +3,8 @@ import HWTestCore
 import Metal
 
 /// The device's answers NAK needs before it emits SM53's half ALU with an f32 result, or leaves metal2vulkan's unorm8
-/// rounding to the store. The app runs with NAK_DEBUG=sm53_probe (debug builds; kit/sm53_probe_env.c), under which NAK
-/// lowers each sm53_probe form to HADD2/HFMA2 .F32 (nak/opt_sm53_half_probe.rs). <form>=pass|fail and <form>_first=
+/// rounding to the store. In debug builds NAK lowers the probe kernels (those holding Scenes.metal's SM53_PROBE_MARKER,
+/// and no other shader) to HADD2/HFMA2 .F32 (nak/opt_sm53_half_probe.rs). <form>=pass|fail and <form>_first=
 /// (its first wrong input) say which reading holds: half_* if the ops round to half before widening, float_* if they
 /// round the exact result once to f32. unorm8= compares the device's float-to-unorm8 store of every half with Metal's
 /// rule (NaN 0, clamped to [0, 1], the exact product with 255 rounded to nearest). f32_narrow=, f32_round_trip= and
@@ -17,8 +17,6 @@ struct SM53ProbeScene: GPUScene {
 
     func run(_ gpu: GPU) async throws -> SceneResult {
         var result = SceneResult()
-        result.metrics.set(
-            "probe_on", ProcessInfo.processInfo.environment["NAK_DEBUG"]?.contains("sm53_probe") ?? false)
         try await alu(gpu, &result)
         try await f32Source(gpu, &result)
         try await unorm8(gpu, &result)
