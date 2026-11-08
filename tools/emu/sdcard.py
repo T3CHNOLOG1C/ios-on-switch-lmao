@@ -118,9 +118,28 @@ def _mtools(fat: Path, *args: str) -> None:
     subprocess.run([args[0], '-i', str(fat), *args[1:]], check=True, capture_output=True)
 
 
+def raw_container(image: Path) -> tuple[int, int]:
+    """Return a raw stage image's container (tools/install compose/populate) as its first sector and sector count."""
+    offset = json.loads(image.with_name('state.json').read_text())['offset']
+    with image.open('rb') as f:
+        f.seek(offset + 32)
+        magic, block_size, block_count = struct.unpack('<4sIQ', f.read(16))
+    if magic != b'NXSB':
+        raise SystemExit(f'{image}: no APFS container at {offset}')
+    return offset // SECTOR, block_size * block_count // SECTOR
+
+
+def is_install_image(source: Path) -> bool:
+    return source.name.endswith('.SII.001')
+
+
 def _make_base(tmp: Path, first_part: Path | None) -> None:
     if first_part is None:
         runs, ios_sectors = [[NO_IMAGE_SECTORS, None, 0]], NO_IMAGE_SECTORS
+    elif not is_install_image(first_part):
+        start, ios_sectors = raw_container(first_part)
+        subprocess.run(['/bin/cp', '-c', str(first_part), str(tmp / first_part.name)], check=True)
+        runs = [[ios_sectors, first_part.name, start]]
     else:
         image = image_manifest(first_part)
         parts = [Path(part.path).name for part in image.parts]
@@ -142,11 +161,15 @@ def _make_base(tmp: Path, first_part: Path | None) -> None:
 
 
 def base(first_part: Path | None) -> Path:
-    """Return the shared card base for an install image's first part (or for no image), made once (cache.py)."""
+    """Return the shared card base for an install image (first part), a raw stage image or none; made once."""
     identity = {}
-    if first_part is not None:
+    if first_part is not None and is_install_image(first_part):
         with first_part.open('rb') as f:
             identity = {'manifest': hashlib.sha256(f.read(manifest.BOOT_OFFSET)).hexdigest()}
+    elif first_part is not None:
+        stat = first_part.stat()
+        state = json.loads(first_part.with_name('state.json').read_text())
+        identity = {'image': first_part.name, 'state': state, 'size': stat.st_size, 'mtime': stat.st_mtime_ns}
     key = cache.digest({'image': identity, 'revision': LAYOUT_REVISION})
     return cache.entry('sd-base', key, lambda tmp, _: _make_base(tmp, first_part))
 

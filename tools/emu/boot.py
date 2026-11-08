@@ -19,6 +19,7 @@ from pathlib import Path
 
 from tools.emu import machine, qemu, report, sdcard
 from tools.emu.monitor import Monitor, socket_path
+from tools.install import stages
 
 KINDS = {'ios17': '21H461', 'ios27': '24B119'}
 
@@ -53,7 +54,7 @@ def build_package(kind: str, flags: list[str]) -> tuple[Path, Path]:
 
 
 def default_image(kind: str) -> Path | None:
-    """Return the first part of the kind's install image: in this checkout's or the main one's out/sd, or shared."""
+    """Return the kind's install image (its first part) from out/sd here or in the main checkout, or a shared one."""
     common = subprocess.run(
         ['git', 'rev-parse', '--path-format=absolute', '--git-common-dir'],
         cwd=workspace(),
@@ -67,6 +68,10 @@ def default_image(kind: str) -> Path | None:
     for root in roots:
         if root and (root / name).exists():
             return root / name
+    scratch = stages.default_scratch(KINDS[kind])
+    for stage in (stages.POPULATED, stages.COMPOSED):
+        if (scratch / stage).exists() and (scratch / 'state.json').exists():
+            return scratch / stage
     return None
 
 
@@ -116,7 +121,7 @@ def parse() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--kind', choices=sorted(KINDS), required=True)
     parser.add_argument('--seconds', type=float, default=120)
-    parser.add_argument('--sd', help="an install image's first part (IOS27.SII.001), or none (default: //:image's)")
+    parser.add_argument('--sd', help="IOS27.SII.001, a raw stage image (populated.img) or none (default: //:image's)")
     parser.add_argument('--bootargs', help='switchroot/ios/bootargs.txt for this run, e.g. -v')
     parser.add_argument('--out', type=Path, help='the run directory (default out/emu/<kind>-<time>)')
     parser.add_argument('--package', type=Path, help='a //:boot output to boot instead of building one')
