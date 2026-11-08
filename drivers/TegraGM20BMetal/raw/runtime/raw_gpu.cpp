@@ -1834,7 +1834,7 @@ bool Device::createYcbcrTexture(uint64_t surfaceId, void *base, uint64_t allocBy
     if (c && !createSurfaceTexture(surfaceId, base, allocBytes, surface, plan.chroma, plan.chromaWidth,
                                    plan.chromaHeight, plan.chromaPitch, plan.chromaFormat, *c))
         return undo();
-    if (!createTexture(width, height, plan.image, t))
+    if (!createTexture(width, height, plan.image, t, false, true))  // block-linear, as NVK makes m2v's converted image
         return undo();
     t.luma = y;
     t.chroma = c;
@@ -3767,26 +3767,6 @@ void BlitEncoder::generate(Texture &t)
     room(uint32_t(fx::generateWords(c->layout, 0, last)));
     fx::emitGenerate(p_, c->layout, c->va, nullptr, c->fmt2d, 0, last);
     dev_->stats.chainGenerates++;
-}
-
-void BlitEncoder::copyFromLevel(const Texture &t, uint32_t level, uint32_t sx, uint32_t sy, const Texture &dst,
-                                uint32_t dx, uint32_t dy, uint32_t w, uint32_t h)
-{
-    const Texture::Chain *c = t.chain;
-    if (!c)
-        return;
-    if (dst.blockLinear ||
-        !c->fmt2d) {  // the copy engine (the 2D engine's destination here is pitch, of a format it takes)
-        Texture from;
-        if (chainLevelImage(t, level, from))
-            copyTexels(from, sx, sy, dst, dx, dy, w, h);
-        dev_->stats.chainCopies++;
-        return;
-    }
-    room(uint32_t(fx::copyWords()));
-    const fx::Pitch d{dst.va, dst.pitch, dst.width, dst.height};
-    fx::emitCopyFromLevel(p_, c->layout, c->va, level, d, c->fmt2d, sx, sy, dx, dy, w, h);
-    dev_->stats.chainCopies++;
 }
 
 void BlitEncoder::end()

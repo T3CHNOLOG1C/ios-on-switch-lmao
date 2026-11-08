@@ -328,6 +328,43 @@ static void formatLevels(Run &run, MTLPixelFormat format, unsigned bpp, const ch
     run.failed += !counted;
 }
 
+// A later level into rows 192 bytes apart (a texture over a buffer): the copy engine's copy, so the command buffer stays raw
+static void unalignedRows(Run &run)
+{
+    Chain t = makeChain(run.dev, 96, 40, 5);
+    upload(run, t, 21);
+    generated(t);
+    run.blit("generate", [&](id<MTLBlitCommandEncoder> b) {
+        [b generateMipmapsForTexture:t.tex];
+    });
+    const unsigned w = t.w[1], h = t.h[1], row = w * 4;
+    id<MTLBuffer> backing = [run.dev newBufferWithLength:size_t(row) * h options:MTLResourceStorageModeShared];
+    MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                                                 width:w
+                                                                                height:h
+                                                                             mipmapped:NO];
+    d.storageMode = MTLStorageModeShared;
+    id<MTLTexture> rows = [backing newTextureWithDescriptor:d offset:0 bytesPerRow:row];
+    char rates[1024];
+    raw_metal_rates(rates, sizeof rates);
+    run.blit("level 1 into rows", [&](id<MTLBlitCommandEncoder> b) {
+        [b copyFromTexture:t.tex
+                  sourceSlice:0
+                  sourceLevel:1
+                 sourceOrigin:MTLOriginMake(0, 0, 0)
+                   sourceSize:MTLSizeMake(w, h, 1)
+                    toTexture:rows
+             destinationSlice:0
+             destinationLevel:0
+            destinationOrigin:MTLOriginMake(0, 0, 0)];
+    });
+    const bool raw = raw_metal_rates(rates, sizeof rates) && strstr(rates, " m2v=0 ");
+    run.check("96x40 level 1 into rows 192 bytes apart",
+              Bytes((uint8_t *)backing.contents, (uint8_t *)backing.contents + size_t(row) * h), t.model[1]);
+    printf("%s 96x40 level 1 into rows 192 bytes apart: %s\n", raw ? "OK  " : "FAIL", raw ? "raw" : "m2v");
+    run.failed += !raw;
+}
+
 int main(int argc, char **argv)
 {
     @autoreleasepool {
@@ -350,6 +387,7 @@ int main(int argc, char **argv)
         Run run{dev, [dev newCommandQueue]};
         levels(run, 96, 40, 5);
         levels(run, 33, 17, 4);
+        unalignedRows(run);
         formatLevels(run, MTLPixelFormat(43), 2, "96x40 BGR5A1Unorm");
         formatLevels(run, MTLPixelFormatBGRA8Unorm_sRGB, 4, "96x40 BGRA8Unorm_sRGB");
         char rates[1024];
