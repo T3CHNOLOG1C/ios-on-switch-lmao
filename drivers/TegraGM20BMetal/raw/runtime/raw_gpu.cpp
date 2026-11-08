@@ -1797,7 +1797,7 @@ bool Device::createYcbcrTexture(uint64_t surfaceId, void *base, uint64_t allocBy
     if (c && !createSurfaceTexture(surfaceId, base, allocBytes, surface, plan.chroma, plan.chromaWidth,
                                    plan.chromaHeight, plan.chromaPitch, plan.chromaFormat, *c))
         return undo();
-    if (!createTexture(width, height, plan.image, t))
+    if (!createTexture(width, height, plan.image, t, false, true))  // block-linear, as NVK makes m2v's converted image
         return undo();
     t.luma = y;
     t.chroma = c;
