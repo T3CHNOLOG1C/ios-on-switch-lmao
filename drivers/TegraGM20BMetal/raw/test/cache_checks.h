@@ -14,6 +14,7 @@
 #include <sys/time.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
@@ -163,8 +164,10 @@ inline void run(const std::vector<std::pair<std::string, raw::RuntimeRecord>> &r
         const std::string capped = scratch + "/cachecheck-cap";
         system(("rm -rf '" + capped + "'").c_str());
         mkdir(capped.c_str(), 0700);
-        const uint64_t one = raw::encodeEntry(keyOf(stack, records[0].first, 7), &records[0].second, "").size();
-        const uint64_t cap = one * 3;
+        uint64_t largest = 0;
+        for (const auto &[key, rec] : records)
+            largest = std::max<uint64_t>(largest, raw::encodeEntry(keyOf(stack, key, 7), &rec, "").size());
+        const uint64_t cap = largest * 3;
         raw::RecordCache cache;
         cache.open(capped, stack, cap);
         for (const auto &[key, rec] : records)
