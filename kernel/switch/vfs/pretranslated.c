@@ -7,9 +7,9 @@
  *
  * The tree is captured once, before launchd: its root vnode is kept and its index is read through it, so renaming or
  * replacing /private/var/Switch later changes nothing. The copy is found by its file id, never by a path, and only if
- * it is a regular file whose parent is one of the tree's directories. The trust module the boot package carries for
- * the tree's executables (its UUID in /chosen/switch-pretranslated-trust) must be loaded too. Anything wrong turns the
- * redirect off with one log line: the original files then run translated at load time, as without it.
+ * it is a regular file whose parent is one of the tree's directories. The boot package lists the CDHashes of the tree's
+ * executables in /chosen/switch-pretranslated-cdhashes (and carries them in its static trust cache). Anything wrong
+ * turns the redirect off with one log line: the original files then run translated at load time, as without it.
  *
  * Nothing on the device changes the tree, root included: the MAC check wrappers (security/mac_vfs.c, mac_file.c) ask
  * switch_pretranslated_refuse() before any policy, and it refuses with EPERM (one rate-limited log line) whatever
@@ -27,7 +27,6 @@
 #include <sys/namei.h>
 #include <sys/proc.h>
 #include <sys/vnode_internal.h>
-#include <sys/trust_caches.h>
 #include <sys/ubc_internal.h>
 #include <kern/clock.h>
 #include <kern/kalloc.h>
@@ -38,11 +37,10 @@
 #include <switch/auth_fs.h>
 #include <switch/pretranslated.h>
 
-#define SWITCH_PT_TREE   "Switch/pretranslated"
-#define SWITCH_PT_INDEX  ".index"
-#define SWITCH_PT_LOOKUP (VNODE_LOOKUP_NOFOLLOW_ANY | VNODE_LOOKUP_NOCROSSMOUNT)
-/* The UUID of the trust module the boot package carries for this tree's executables (the os role's). */
-#define SWITCH_PT_TRUST_PROPERTY "switch-pretranslated-trust"
+#define SWITCH_PT_TREE           "Switch/pretranslated"
+#define SWITCH_PT_INDEX          ".index"
+#define SWITCH_PT_LOOKUP         (VNODE_LOOKUP_NOFOLLOW_ANY | VNODE_LOOKUP_NOCROSSMOUNT)
+#define SWITCH_PT_TRUST_PROPERTY "switch-pretranslated-cdhashes"
 
 bool switch_pretranslated_on = false;
 
@@ -55,7 +53,7 @@ static struct {
     void *storage;
     size_t storage_size;
     struct switch_pt_tables tables;
-    uint8_t trust[kUUIDSize];
+    struct switch_cdhash_list trusted;
 } switch_pt;
 
 unsigned int hash_string(const char *cp, int len);
@@ -135,18 +133,8 @@ static int switch_pt_read_index(vnode_t tree, vfs_context_t ctx, uint64_t *index
 
 static int switch_pt_read_trust(void)
 {
-    DTEntry chosen;
-    const void *uuid = NULL;
-    unsigned int size = 0;
-    if (SecureDTLookupEntry(NULL, "/chosen", &chosen) != kSuccess ||
-        SecureDTGetProperty(chosen, SWITCH_PT_TRUST_PROPERTY, &uuid, &size) != kSuccess) {
-        return ENOENT;
-    }
-    if (size != sizeof(switch_pt.trust)) {
-        return EINVAL;
-    }
-    memcpy(switch_pt.trust, uuid, sizeof(switch_pt.trust));
-    return check_trust_cache_runtime_for_uuid(switch_pt.trust) == KERN_SUCCESS ? 0 : ESRCH;
+    switch_pt.trusted = switch_chosen_cdhashes(SWITCH_PT_TRUST_PROPERTY);
+    return switch_pt.trusted.count ? 0 : ENOENT;
 }
 
 static const char *switch_pt_build(vnode_t tree, vfs_context_t ctx, int *error)
@@ -210,7 +198,7 @@ void switch_pretranslated_capture(void)
         error = error ? error : EINVAL;
     }
     if (!failed && (error = switch_pt_read_trust())) {
-        failed = "trust module";
+        failed = "CDHash list";
     }
     if (!failed) {
         switch_pt.system = rootvnode->v_mount;
@@ -382,12 +370,6 @@ int switch_pretranslated_refuse(enum switch_pt_op op, vnode_t v0, vnode_t v1, vn
     return EPERM;
 }
 
-static bool switch_pt_cdhash_pinned(const uint8_t *cdhash)
-{
-    uint8_t uuid[kUUIDSize];
-    return switch_trust_module_uuid(cdhash, uuid) && memcmp(uuid, switch_pt.trust, sizeof(uuid)) == 0;
-}
-
 static bool switch_pt_signed_as(vnode_t vp, const uint8_t *cdhash)
 {
     bool found = false;
@@ -401,7 +383,8 @@ static bool switch_pt_signed_as(vnode_t vp, const uint8_t *cdhash)
 
 /*
  * The System files the tree stands in for are on the sealed System volume; their Data copies are authenticated by
- * their trust module instead (auth_fs.c). Decided from the vnode alone, never from the path it was found by.
+ * the boot package's CDHash list instead (auth_fs.c). Decided from the vnode alone, never from the path it was found
+ * by.
  */
 bool switch_pretranslated_authentic(vnode_t vp)
 {
@@ -429,7 +412,7 @@ bool switch_pretranslated_authentic(vnode_t vp)
         .uid = va.va_uid,
         .gid = va.va_gid,
         .mode = va.va_mode,
-        .cdhash_pinned = switch_pt_cdhash_pinned(cdhash),
+        .cdhash_pinned = switch_cdhash_listed(&switch_pt.trusted, cdhash),
         .cdhash_matches = switch_pt_signed_as(vp, cdhash),
     };
     const bool authentic = switch_pt_trusted(&facts);
