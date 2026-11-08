@@ -34,6 +34,7 @@
 #include "../../kits/SwitchMMIO/SwitchMMIO.h"
 // kernel/switch/diag/threads.c
 extern "C" void switch_print_thread(const void *thread, const char *who);
+extern "C" void switch_print_processors(const char *who);
 #endif
 
 extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
@@ -444,6 +445,7 @@ int sleepForAction(unsigned bus, Bus &b, uint64_t us)
             // The line fired and its source masked it, but the shared work loop never ran the action: say where its
             // thread is (state, wait, stack) before the panic.
             switch_print_thread(gLoop->getThread(), "TegraI2C: work loop");
+            switch_print_processors("TegraI2C");
             for (unsigned other = 1; other <= kBuses; ++other)
                 IOLog("TegraI2C: I2C%u irqLock %p\n", other, gBus[other - 1].irqLock);
 #endif

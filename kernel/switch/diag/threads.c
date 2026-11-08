@@ -103,9 +103,19 @@ void switch_print_blocked_kext_threads(const char *(*name_of)(const void *), uns
     printf("blocked threads with a stack: %u, shown: %u\n", blocked, printed);
 }
 
+static void switch_print_sched(const char *who, const char *role, thread_t thread)
+{
+    printf("%s: %sT%llu state %#x h%d pri %d/%d cpu %d runq %d chosen %d event %#llx", who, role, thread->thread_id,
+           (unsigned)thread->state, thread->block_hint, thread->base_pri, thread->sched_pri,
+           thread->last_processor ? thread->last_processor->cpu_id : -1,
+           thread->__runq.runq ? thread->__runq.runq->cpu_id : -1,
+           thread->chosen_processor ? thread->chosen_processor->cpu_id : -1, (unsigned long long)thread->wait_event);
+}
+
 /*
- * One thread's scheduling state, what it waits on and, when it is not on a core, its saved return addresses: for a
- * driver about to panic because its work loop never ran an action it was sent (an interrupt's, say).
+ * One thread's scheduling state (including the run queue it waits on), what it waits on and, when it is not on a core,
+ * its saved return addresses; for a kernel-mutex wait the owner's too: for a driver about to panic because its work
+ * loop never ran an action it was sent (an interrupt's, say).
  */
 void switch_print_thread(const void *ref, const char *who)
 {
@@ -114,9 +124,7 @@ void switch_print_thread(const void *ref, const char *who)
         printf("%s: no thread\n", who);
         return;
     }
-    printf("%s: T%llu state %#x h%d pri %d/%d cpu %d event %#llx", who, thread->thread_id, (unsigned)thread->state,
-           thread->block_hint, thread->base_pri, thread->sched_pri,
-           thread->last_processor ? thread->last_processor->cpu_id : -1, (unsigned long long)thread->wait_event);
+    switch_print_sched(who, "", thread);
     uint64_t owner = 0;
     if (thread->block_hint == kThreadWaitKernelMutex) {
         thread_waitinfo_t info = {};
@@ -138,13 +146,23 @@ void switch_print_thread(const void *ref, const char *who)
         if (thread->thread_id != owner) {
             continue;
         }
-        printf("%s: owner T%llu state %#x h%d pri %d/%d cpu %d event %#llx\n", who, thread->thread_id,
-               (unsigned)thread->state, thread->block_hint, thread->base_pri, thread->sched_pri,
-               thread->last_processor ? thread->last_processor->cpu_id : -1, (unsigned long long)thread->wait_event);
+        switch_print_sched(who, "owner ", thread);
+        printf("\n");
         if (thread->kernel_stack && thread != current_thread() && !((unsigned int)thread->state & TH_RUN)) {
             uint64_t frames[32];
             switch_print_frames(frames, switch_thread_frames(thread, frames, 32));
         }
     }
     lck_mtx_unlock(&tasks_threads_lock);
+}
+
+/* Every processor's scheduler state, what it runs and the IPIs pending at it, beside switch_print_thread's lines. */
+void switch_print_processors(const char *who)
+{
+    for (processor_t processor = processor_list; processor != NULL; processor = processor->processor_list) {
+        const cpu_data_t *cdp = cpu_datap(processor->cpu_id);
+        thread_t active = processor->active_thread;
+        printf("%s: cpu %d state %d active T%llu pri %d signal %#x\n", who, processor->cpu_id, (int)processor->state,
+               active ? active->thread_id : 0, active ? active->sched_pri : -1, cdp ? cdp->cpu_signal : 0);
+    }
 }
