@@ -37,13 +37,13 @@ struct switch_vm_statistics64_newer {
     uint64_t phantom_ghosts_added;
 };
 
-#define SWITCH_HOST_VM_INFO64_AT(field)                                                                                \
-    ((mach_msg_type_number_t)(HOST_VM_INFO64_REV3_COUNT +                                                              \
+#define SWITCH_HOST_VM_INFO64_AT(field)                   \
+    ((mach_msg_type_number_t)(HOST_VM_INFO64_REV3_COUNT + \
                               offsetof(struct switch_vm_statistics64_newer, field) / sizeof(integer_t)))
 #define SWITCH_HOST_VM_INFO64_REV4_COUNT SWITCH_HOST_VM_INFO64_AT(swap_count)
 #define SWITCH_HOST_VM_INFO64_REV5_COUNT SWITCH_HOST_VM_INFO64_AT(executable_count)
-#define SWITCH_HOST_VM_INFO64_COUNT                                                                                    \
-    ((mach_msg_type_number_t)(HOST_VM_INFO64_REV3_COUNT +                                                              \
+#define SWITCH_HOST_VM_INFO64_COUNT                       \
+    ((mach_msg_type_number_t)(HOST_VM_INFO64_REV3_COUNT + \
                               sizeof(struct switch_vm_statistics64_newer) / sizeof(integer_t)))
 
 /* Fills the newer fields the caller's count has room for after rev3's; returns the count filled (rev3's at least). */

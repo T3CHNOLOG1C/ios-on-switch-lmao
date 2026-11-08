@@ -48,7 +48,6 @@ mach_msg_type_number_t switch_vm_stats_newer(void *info, mach_msg_type_number_t 
     } else if (count < SWITCH_HOST_VM_INFO64_COUNT) {
         filled = SWITCH_HOST_VM_INFO64_REV5_COUNT;
     }
-    memcpy((integer_t *)info + HOST_VM_INFO64_REV3_COUNT, &s,
-           (filled - HOST_VM_INFO64_REV3_COUNT) * sizeof(integer_t));
+    memcpy((integer_t *)info + HOST_VM_INFO64_REV3_COUNT, &s, (filled - HOST_VM_INFO64_REV3_COUNT) * sizeof(integer_t));
     return filled;
 }
