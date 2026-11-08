@@ -82,7 +82,20 @@ py_binary(
     deps = [":emu_lib"],
 )
 
+# bazel run //tools/emu:check -- --kind=ios17|ios27 [--until launchd]: boot to a milestone, nonzero on a panic or timeout.
+py_binary(
+    name = "check",
+    srcs = ["check.py"],
+    deps = [":boot_lib"],
+)
+
 # bazel run //tools/emu:boot -- --kind=ios17|ios27 [--sd IMAGE] [--seconds N] (README.md).
+py_library(
+    name = "boot_lib",
+    srcs = ["boot.py"],
+    deps = [":emu_lib"],
+)
+
 py_binary(
     name = "boot",
     srcs = ["boot.py"],

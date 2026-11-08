@@ -8,8 +8,13 @@ device's.
 ```sh
 bazel run //tools/emu:boot -- --kind=ios27                   # build //:boot for iOS 27, boot it for 120 s
 bazel run //tools/emu:boot -- --kind=ios17 --sd none --seconds 60 --bootargs -v
+bazel run //tools/emu:check -- --kind=ios17 --until launchd  # a gate: 0 at the milestone, 1 on a panic, 2 on timeout
 bazel run //tools/emu:build                                  # only the emulator: prints its path
 ```
+
+`check` watches the live kernel log and the panic record every 3 s and stops at the first of the milestone
+(`cores`, `display`, `sd`, `root`, `launchd`), a panic or `--timeout`. It prints the panic line or the last kernel
+lines, and keeps the run directory. iOS 17 reaches `launchd` in about 10 s of wall time.
 
 `--kind` builds `//:boot` with `--//ipsw:kind` in the output base `bazel run` itself uses. `--bazel-flag` passes flags
 to that build (for example `--bazel-flag=--config=agent`). `--package DIR` boots an existing `//:boot` output instead,
