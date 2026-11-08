@@ -92,7 +92,7 @@ bool Kernel::bindCompressed(Bo &bo, uint32_t kind, bool &noLines)
 
 uint32_t Device::compKind(const Texture &m, uint32_t tag, bool blockLinear) const
 {
-    if (!(k_.info().flags & TegraGM20BInfoCompression) || !blockLinear)
+    if (!(k_.info().flags & TegraGM20BInfoCompression) || !blockLinear || m.samples > 1)
         return 0;
     if (m.zeta)
         return kCompKindZeta;

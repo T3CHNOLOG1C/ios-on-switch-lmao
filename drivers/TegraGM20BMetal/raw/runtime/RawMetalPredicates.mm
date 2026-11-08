@@ -209,6 +209,18 @@ bool zetaDescriptor(MTLTextureDescriptor *d)
            d.storageMode == MTLStorageModeMemoryless;
 }
 
+// A memoryless multisampled color texture, 2D, one level, 2 or 4 samples (the counts the device answers yes for), no rotation, of a
+// format the raw path has a header for (raw::Device::createMemoryless with its samples)
+bool multisampleShape(MTLTextureDescriptor *d)
+{
+    static const SEL rotation = NSSelectorFromString(@"rotation");
+    const NSUInteger turned =
+        [d respondsToSelector:rotation] ? ((NSUInteger (*)(id, SEL))objc_msgSend)(d, rotation) : 0;
+    return d.textureType == MTLTextureType2DMultisample && d.mipmapLevelCount <= 1 && d.arrayLength <= 1 &&
+           d.depth <= 1 && (d.sampleCount == 2 || d.sampleCount == 4) && !turned &&
+           d.storageMode == MTLStorageModeMemoryless && keptFormat(d);
+}
+
 // Diagnostics: which rawShape term fails (1 type, 2 levels, 3 samples, 4 array/depth, 5 rotation, 6 format; 0 none)
 uint32_t rawShapeTerm(MTLTextureDescriptor *d)
 {

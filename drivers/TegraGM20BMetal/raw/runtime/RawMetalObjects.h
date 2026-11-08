@@ -355,6 +355,7 @@ static inline void hit(RMCommandBuffer *cb, RMPred p, uint64_t a = 0, uint64_t b
     uint32_t _formats[8];  // the pass's color attachments' formats as the raw path holds them (0: none)
     uint32_t _count;       // its attachment count (the last attachment's index + 1)
     uint32_t _zeta;        // its depth/stencil attachment's format as the raw path holds it (0: none)
+    uint32_t _samples;     // its color attachments' samples a pixel
     uint32_t _passAt;      // its pass's RMPass (the command buffer's _passes)
     raw::DepthStencilDesc _ds;
     MTLRenderPassDescriptor *_pass;  // the command buffer's copy, which the raw encode and m2v's replay read

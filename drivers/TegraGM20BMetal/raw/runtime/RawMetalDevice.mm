@@ -181,9 +181,9 @@
             return (id<MTLTexture>)t;
         }
     }
-    const bool line = lineShape(d), volume = volumeShape(d);
+    const bool line = lineShape(d), volume = volumeShape(d), multisampled = multisampleShape(d);
     const uint32_t array = arrayType(d);
-    if (!rawShape(d) && !zetaDescriptor(d) && !line && !volume && !array) {
+    if (!rawShape(d) && !zetaDescriptor(d) && !line && !volume && !array && !multisampled) {
         RMTexture *w = (RMTexture *)[self wrapTwin:[gRM->fallback newTextureWithDescriptor:d] descriptor:d];
         if (w)
             refuseTexture(w, PredTexShape, rawShapeTerm(d), d.pixelFormat, @"twin-only", nil);
@@ -207,7 +207,8 @@
                                           uint32_t(d.pixelFormat), array, t->_raw);
     } else if (d.storageMode == MTLStorageModeMemoryless) {
         t->_kind = RMTextureMemoryless;
-        t->_rawOk = gRM->raw->createMemoryless(uint32_t(d.width), uint32_t(d.height), uint32_t(d.pixelFormat), t->_raw);
+        t->_rawOk = gRM->raw->createMemoryless(uint32_t(d.width), uint32_t(d.height), uint32_t(d.pixelFormat), t->_raw,
+                                               multisampled ? uint32_t(d.sampleCount) : 1);
     } else {
         t->_kind = RMTexturePool;
         // a shared texture (the CPU writes it: replaceRegion) in write-combined memory: its rows need no clean after

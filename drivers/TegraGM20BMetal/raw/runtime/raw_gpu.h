@@ -203,6 +203,8 @@ struct Texture {
     uint8_t blockDepth = 0;
     // An array's or a cube's layers (six a cube), layerBytes apart
     uint32_t layers = 1;
+    // A multisampled texture's samples a pixel (fx::msLayout): its memory the sample grid, height and width in pixels
+    uint8_t samples = 1;
 
     // Depth32Float_Stencil8 (raw_zeta.h): block-linear zeta memory, bound with its own PTE kind; never sampled, copied or a
     // colour target
@@ -271,6 +273,9 @@ struct Pipeline {
     // its draws may leave a pixel of their triangles unwritten: the fragment program discards (SPH KILLS_PIXELS) or writes
     // the sample mask, or the state tests depth, stencil or alpha to coverage, or rasterizes more than one sample
     bool dropsPixels = true;
+    uint8_t samples = 1;  // its key's rasterSampleCount: a pass of attachments of that many samples draws it
+    // SET_HYBRID_ANTI_ALIAS_CONTROL's passes: more than one where it shades per sample, whose sample masks differ (raw_samples.h)
+    uint8_t samplePasses = 1;
     uint8_t readBits = 0;      // colors its draws read as they were: blended into, or written through a partial mask
     uint8_t fetchBits = 0;     // colors it reads by framebuffer fetch
     uint32_t depthFormat = 0;  // its key's depth and stencil attachment format (ds=<format>/<format>; 0: none)
@@ -442,6 +447,7 @@ private:
     // call and one that draws, the colors its draws read, and the pixels they may write (scissor within viewport, each draw)
     bool called_ = false, drew_ = false, whole_ = false;
     uint32_t readBits_ = 0, areaW_ = 0, areaH_ = 0;
+    uint8_t samples_ = 1;  // its attachments' samples a pixel
     double vp_[4] = {};
     uint32_t sc_[4] = {};
     std::vector<std::array<uint32_t, 4>> rects_;
@@ -520,7 +526,8 @@ enum RefusalId : uint8_t {
     RefColorFormats,
     RefUboOffset,
     RefNoTic,
-    RefDepthStencil  // a: the state's depth format, b: the pass's
+    RefDepthStencil,  // a: the state's depth format, b: the pass's
+    RefSamples        // a: the state's samples, b: the pass's, c: the state's shading passes
 };
 
 struct Refusal {
@@ -686,7 +693,7 @@ public:
     bool createPartView(const Texture &of, uint32_t format, uint32_t type, uint32_t baseLevel, uint32_t levels,
                         uint32_t baseLayer, uint32_t layers, Texture &t);
     // Memoryless (a pass gives it a backing); Depth32Float_Stencil8 among them, as zeta (Texture::zeta)
-    bool createMemoryless(uint32_t width, uint32_t height, uint32_t format, Texture &t);
+    bool createMemoryless(uint32_t width, uint32_t height, uint32_t format, Texture &t, uint32_t samples = 1);
     // A 1D texture: NIL's 1D image, one block-linear row (y_log2 0) under a ONE_D header, in block-linear memory the CPU
     // writes through its tiled view (a 1D header takes no pitch layout)
     bool createLine(uint32_t width, uint32_t format, Texture &t);

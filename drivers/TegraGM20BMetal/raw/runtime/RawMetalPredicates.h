@@ -31,7 +31,7 @@ enum RMPred : uint8_t {
     PredPassAttLevel,   // slice, depth plane or resolve, or a level of a texture with no chain
     PredPassRTSize,     // a = renderTargetWidth << 16 | renderTargetHeight, b = attachment width << 16 | height
     PredPassDepthStencil,  // a = depth format, b = stencil format
-    PredPassOther,         // a = renderTargetArrayLength (layered), b = a rasterization rate map
+    PredPassOther,  // a = renderTargetArrayLength (layered) | its own sample positions << 32, b = a rasterization rate map
     // states and calls
     PredStateForeign,
     PredStateNotPackable,  // a state whose functions are not this device's (neither in the pack nor made by the runtime)
@@ -66,6 +66,7 @@ enum RMPred : uint8_t {
     PredEncUboOffset,     // a = stage << 8 | slot, b = va & 255
     PredEncNoTic,
     PredEncDepthStencil,  // a = the state's depth format, b = the pass's | a state that tests without the attachment << 32
+    PredEncSamples,       // a = the state's samples, b = the pass's | the state's shading passes << 32
     PredEncNoChannel,     // the kernel refused the channel or its context (logged with its answer)
     PredCount
 };
@@ -122,6 +123,7 @@ static constexpr const char *kPredNames[] = {"-",
                                              "enc.ubo",
                                              "enc.notic",
                                              "enc.ds",
+                                             "enc.samples",
                                              "enc.nochannel"};
 static_assert(sizeof kPredNames / sizeof *kPredNames == PredCount, "a name for each predicate");
 

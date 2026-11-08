@@ -569,6 +569,92 @@ int main(int argc, char **argv)
             md.storageMode = MTLStorageModePrivate;
             mipTarget = [dev newTextureWithDescriptor:md];
         }
+        // FRAME_MSAA=<text>: every frame ends with a pass drawing the first corpus state whose line holds <text> (a multisampled
+        // one: iOS 17's Pride poster lightsMesh, samples=2 RG11B10Float; FRAME_MSAA_CORPUS: the corpus, else the frame's) from the
+        // library at FRAME_MSAA_LIB, three times, into
+        // memoryless multisampled targets of its count (FRAME_MSAA_SAMPLES: of that many instead) and formats, neither loaded
+        // nor stored (FRAME_MSAA_STORE: its first target resolved into a texture of its size, MSAA_RESOLVED)
+        id<MTLRenderPipelineState> msaa = nil;
+        id<MTLTexture> msaaTargets[8] = {}, msaaResolved = nil;
+        if (const char *pick = getenv("FRAME_MSAA")) {
+            NSError *libError = nil;
+            id<MTLLibrary> lib = [dev newLibraryWithURL:[NSURL fileURLWithPath:@(getenv("FRAME_MSAA_LIB") ?: "")]
+                                                  error:&libError];
+            std::string found;
+            if (FILE *cf = fopen(getenv("FRAME_MSAA_CORPUS") ?: argv[4], "r")) {
+                char buf[16384];
+                while (found.empty() && fgets(buf, sizeof buf, cf)) {
+                    std::string l(buf);
+                    if (l.rfind("R ok=1 ", 0) || l.find(pick) == std::string::npos)
+                        continue;
+                    while (!l.empty() && l.back() == '\n')
+                        l.pop_back();
+                    for (size_t at; (at = l.find(" lib=")) != std::string::npos;)
+                        l.erase(at, l.find(' ', at + 1) - at);
+                    found = l;
+                }
+                fclose(cf);
+            }
+            MTLRenderPipelineDescriptor *md = lib && !found.empty() ? descriptor(lib, found) : nil;
+            if (const char *n = getenv("FRAME_MSAA_SAMPLES"); n && md)
+                md.rasterSampleCount = NSUInteger(atoi(n));
+            msaa = md ? [dev newRenderPipelineStateWithDescriptor:md error:&libError] : nil;
+            if (!msaa) {
+                fprintf(stderr, "FRAME_MSAA %s: no state (%s)\n", pick,
+                        libError ? libError.localizedDescription.UTF8String : "no line or library");
+                return 1;
+            }
+            for (int c = 0; c < 8; c++) {
+                const MTLPixelFormat f = md.colorAttachments[c].pixelFormat;
+                if (f == MTLPixelFormatInvalid)
+                    continue;
+                MTLTextureDescriptor *td = [MTLTextureDescriptor new];
+                td.textureType = MTLTextureType2DMultisample;
+                td.sampleCount = md.rasterSampleCount;
+                td.pixelFormat = f;
+                td.width = 640;
+                td.height = 360;
+                td.usage = MTLTextureUsageRenderTarget;
+                td.storageMode = MTLStorageModeMemoryless;
+                msaaTargets[c] = [dev newTextureWithDescriptor:td];
+            }
+            if (getenv("FRAME_MSAA_STORE") && msaaTargets[0]) {
+                MTLTextureDescriptor *rd =
+                    [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:msaaTargets[0].pixelFormat
+                                                                       width:640
+                                                                      height:360
+                                                                   mipmapped:NO];
+                rd.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+                rd.storageMode = MTLStorageModePrivate;
+                msaaResolved = [dev newTextureWithDescriptor:rd];
+            }
+            printf("MSAA %s samples %lu\n", found.substr(0, 120).c_str(), (unsigned long)md.rasterSampleCount);
+        }
+        auto encodeMsaa = [&](id<MTLCommandBuffer> cb, unsigned f) {
+            MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
+            for (int c = 0; c < 8; c++) {
+                if (!msaaTargets[c])
+                    continue;
+                rp.colorAttachments[c].texture = msaaTargets[c];
+                rp.colorAttachments[c].loadAction = MTLLoadActionClear;
+                rp.colorAttachments[c].storeAction = MTLStoreActionDontCare;
+            }
+            if (msaaResolved) {
+                rp.colorAttachments[0].resolveTexture = msaaResolved;
+                rp.colorAttachments[0].storeAction = MTLStoreActionMultisampleResolve;
+            }
+            id<MTLRenderCommandEncoder> e = [cb renderCommandEncoderWithDescriptor:rp];
+            [e setRenderPipelineState:msaa];
+            for (int slot = 0; slot < 8; slot++) {
+                frame::Bytes u = {2, slot, shape.uniformBytes};
+                frame::fill(bytes, u, f, slot);
+                [e setVertexBytes:bytes.data() length:u.length atIndex:slot];
+                [e setFragmentBytes:bytes.data() length:u.length atIndex:slot];
+            }
+            for (int k = 0; k < 3; k++)
+                [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4 + k];
+            [e endEncoding];
+        };
         auto encodeExtra = [&](id<MTLCommandBuffer> cb, unsigned f) {
             MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
             rp.colorAttachments[0].texture = mipTarget ? mipTarget : tex[frame::BLUR0];
@@ -825,6 +911,8 @@ int main(int argc, char **argv)
                     caCommandBuffer(cb);
                     encodeExtra(cb, f);
                 }
+                if (msaa)
+                    encodeMsaa(cb, f);
                 [cb commit];
                 cpu.push_back((threadNs() - c0) / 1e6);
                 [cb waitUntilCompleted];
