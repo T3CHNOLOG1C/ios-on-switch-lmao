@@ -498,6 +498,31 @@ TEST_F(Coherency, TheLastImportGivesTheSurfaceItsRowsBack)
 	tgm_coherency_put(again);
 }
 
+// The display scanning a surface in place holds its layout: its client's last import going (the client died) moves
+// nothing; the display letting go does.
+TEST_F(Coherency, TheDisplaysHoldKeepsTheLayoutPastTheLastImport)
+{
+	const auto p = pages(0x85300000, 5);
+	int tiled = -1;
+	EXPECT_EQ(tegra_gm20b_surface_hold(p[0], &tiled), nullptr);
+	EXPECT_EQ(tiled, 0);
+	tgm_coh *c = add(p[0], 34, p.data(), 5, 1);
+	EXPECT_EQ(tegra_gm20b_surface_hold(p[0], &tiled),
+		  nullptr);  // undecided: nothing to hold yet
+	ASSERT_EQ(tgm_coherency_layout(c, kW, kH, kBpp, kRow, 1), 1);
+	void *hold = tegra_gm20b_surface_hold(p[0], &tiled);
+	ASSERT_NE(hold, nullptr);
+	EXPECT_EQ(tiled, 1);
+	const size_t moves = gMoves.size();
+	tgm_coherency_put(c);
+	EXPECT_TRUE(tegra_gm20b_surface_tiled(p[0]));
+	EXPECT_EQ(gMoves.size(), moves);
+	tegra_gm20b_surface_unhold(hold);
+	ASSERT_EQ(gMoves.size(), moves + 1);
+	EXPECT_EQ(gMoves.back().op, TGM_RELAYOUT_UNTILE_IN_PLACE);
+	EXPECT_FALSE(tegra_gm20b_surface_tiled(p[0]));
+}
+
 TEST_F(Coherency, TilingFollowsTheSurfacesWritersOnTheGpu)
 {
 	const auto p = pages(0x85100000, 5);
