@@ -51,6 +51,10 @@ void forEachWritten(RMCommandBuffer *cb, size_t from, size_t to, void (*written)
             if (compute)
                 written(c.obj);
             break;
+        case OpKernelBuffer:
+        case OpKernelTexture:
+            written(c.obj);
+            break;
         case OpInvocation:  // compute and other recorded calls: every buffer and texture they name
             raw::forEachObject((__bridge NSInvocation *)c.obj, [written](id o) {
                 written((__bridge void *)o);
@@ -108,7 +112,7 @@ void finish(RMCommandBuffer *cb, NSError *error)
     gRM->stats.finished.fetch_add(1, std::memory_order_relaxed);
     unhold(cb);
     forEachWritten(cb, 0, cb->_tape.size(), markDirty);
-    if (!cb->_m2v)
+    if (!cb->_signalsOnM2v)
         for (const Cmd &c : cb->_tape)
             if (c.op == OpSignalEvent)
                 [(id<MTLSharedEvent>)(__bridge id)c.obj setSignaledValue:c.c];

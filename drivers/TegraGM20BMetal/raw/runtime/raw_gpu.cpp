@@ -2890,9 +2890,20 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
             const Bound &b = bufs_[e.stage][e.slot];
             const bool storage = bufferStorage(e);
             const uint32_t window = (uint32_t(e.sampler) | uint32_t(e.pad) << 8) * 16;
-            uint32_t range = std::min<uint32_t>((b.size + 15) & ~15u, 0x10000u);  // a uniform range is at most 64 KiB
+            // a uniform range is at most 64 KiB (NVK_MAX_CBUF_SIZE); a storage buffer's is the bound bytes, read through its
+            // global address
+            uint32_t range = (b.size + 15) & ~15u;
+            if (!storage)
+                range = std::min(range, 0x10000u);
             if (window && window < range)
                 range = window;
+            // m2v's storage descriptor starts at the bind offset rounded down to 16 (its residual a push word no record names)
+            if (storage && (b.va & 15)) {
+                *why = "a storage buffer bound at an offset that is not a multiple of 16";
+                cb_->refusal = {RefUboOffset, uint32_t(e.stage) << 8 | e.slot, uint32_t(b.va & 15),
+                                uint32_t(std::min<uint64_t>(b.offset, ~0u))};
+                return false;
+            }
             // A uniform buffer at an offset that is not a multiple of NVK's 256-byte alignment: its descriptor starts at the
             // offset rounded down, from there to the window's end in the padded allocation, and the function reads the rest
             // of the offset, m2v's SlotBindOffset residual, from its push word

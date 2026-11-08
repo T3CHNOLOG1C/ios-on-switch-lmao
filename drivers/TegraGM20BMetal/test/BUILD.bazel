@@ -180,6 +180,12 @@ py_test(
     data = ["//drivers/TegraGM20BMetal:stage-tegra-gm20b-metal.py"],
 )
 
+py_test(
+    name = "rawpack_split_test",
+    srcs = ["rawpack_split_test.py"],
+    deps = ["//drivers/TegraGM20BMetal:raw_pack"],
+)
+
 host_test(
     name = "raw_ycbcr_test",
     srcs = [
