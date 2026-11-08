@@ -191,9 +191,8 @@ NAMES = {
     # 0xdc), kern_proc.c's syscall-filter and sandbox-info setters (nsysent 558, mach_trap_count 128, mach_kobj_count),
     # proc_is_translated (P_TRANSLATED), proc_is_rsr, proc_ucred (p_proc_ro checked in the RO zone), file_socket
     # (DTYPE_SOCKET, ENOTSOCK) and file_drop, vnode_authorize (kauth_authorize_action), psignal's SIGKILL try-thread form,
-    # PE_parse_boot_arg_str (force-string parse of the boot args), task_is_app_suspended (pidsuspended),
+    # PE_parse_boot_arg_str (force-string parse of the boot args),
     # ptrauth_utils_sign_blob_generic (what ptrauth_utils_auth_blob_generic compares against).
-    0xFFFFFFF00A16FB0C: '_task_is_app_suspended',
     0xFFFFFFF00A1F7998: '_vm_map_page_mask',
     0xFFFFFFF00A27CB20: '_read_frandom',
     0xFFFFFFF00A2F0524: '_vn_revoke',
@@ -373,6 +372,14 @@ NAMES = {
     # slot each calls: 0x440 is mpo_mount_check_snapshot_mount (six arguments), 0x8a8 mpo_vnode_check_setflags.
     0xFFFFFFF00A939C98: '_mac_mount_check_snapshot_mount',
     0xFFFFFFF00A937794: '_mac_vnode_check_setflags',
+    # task.c's exported references, one function of ours under two names each, in the GOT order of the IOKit
+    # families that imported them in 21H461 (between sysctlbyname and thread_block): task_deallocate (os_ref release,
+    # then task_deallocate_internal), task_id_token_port_name_to_task (flavor 3 into the port lookup),
+    # task_is_app_suspended (one bit, as ours), task_reference (zone_id_require, then os_ref retain).
+    0xFFFFFFF00A17E60C: '_task_deallocate',
+    0xFFFFFFF00A1AD270: '_task_id_token_port_name_to_task',
+    0xFFFFFFF00A1AA9A8: '_task_is_app_suspended',
+    0xFFFFFFF00A17E580: '_task_reference',
 }
 
 
