@@ -15,6 +15,7 @@
 #include <machine/machine_routines.h>
 #include <pexpert/pexpert.h>
 #include <pexpert/arm64/boot.h>
+#include "../../kits/SwitchDT/SwitchDTProperty.h"
 #include "SparseDisk.h"
 #include <NativeDataSeed.h>
 
@@ -220,14 +221,11 @@ OSDefineMetaClassAndStructors(NativeRamBlock, IOBlockStorageDevice)
         return failStart(2);
     // Legacy control RAMDisk/PackedRAMDisk properties may coexist, but are never
     // read by this driver and cannot substitute for NativeDataSeed.
-    const OSData *range = OSDynamicCast(OSData, map->getProperty("NativeDataSeed"));
-    uint64_t physical = 0;
-    uint64_t encoded = 0;
-    if (range && range->getLength() == 16) {
-        memcpy(&physical, range->getBytesNoCopy(), 8);
-        memcpy(&encoded, static_cast<const uint8_t *>(range->getBytesNoCopy()) + 8, 8);
-    }
+    uint64_t range[2] = {};
+    switch_dt_value(map, "NativeDataSeed", &range);
     map->release();
+    const uint64_t physical = range[0];
+    const uint64_t encoded = range[1];
     const uint64_t reserved = (kNativeDataSeedEncodedBytes + 4095) & ~4095ULL;
     const boot_args *boot = static_cast<const boot_args *>(PE_state.bootArgs);
     if (encoded != kNativeDataSeedEncodedBytes || (physical & 4095) || !boot || physical < gPhysBase ||

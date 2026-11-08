@@ -11,6 +11,7 @@
 #include <libkern/c++/OSSymbol.h>
 #include <string.h>
 #include "../ArmGIC/SwitchInterrupts.h"
+#include "../../kits/SwitchDT/SwitchDTProperty.h"
 
 namespace xhost {
 namespace {
@@ -112,11 +113,8 @@ void describePorts(const IOService *controller, char *buffer, size_t size)
         if (child == nullptr)
             break;
         const OSObject *value = child->copyProperty(kPortNumber);
-        const auto *data = OSDynamicCast(OSData, value);
         uint32_t number = 0;
-        const bool known = data != nullptr && data->getLength() >= sizeof(number);
-        if (known)
-            memcpy(&number, data->getBytesNoCopy(), sizeof(number));
+        const bool known = switch_osdata_read_prefix(value, &number, sizeof(number));
         const unsigned power = child->getPowerState();
         const int n = known ? snprintf(buffer + used, size - used, "%s%s port %u power %u", used != 0 ? ", " : "",
                                        child->getMetaClass()->getClassName(), number, power)

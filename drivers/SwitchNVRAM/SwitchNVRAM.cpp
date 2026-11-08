@@ -36,6 +36,7 @@
 #include <sys/fcntl.h>
 #include <sys/mount.h>
 #include <sys/vnode.h>
+#include "../../kits/SwitchDT/SwitchDTProperty.h"
 #include "SwitchNVRAM.h"
 #include "SwitchNVRAMStore.h"
 
@@ -59,12 +60,8 @@ const char *const kNotRestored[] = {"darkboot", nullptr};
 
 uint32_t chosenU32(const IORegistryEntry *chosen, const char *key, uint32_t fallback)
 {
-    const OSData *data = OSDynamicCast(OSData, chosen->getProperty(key));
-    if (!data || data->getLength() != sizeof(uint32_t))
-        return fallback;
     uint32_t value = 0;
-    memcpy(&value, data->getBytesNoCopy(), sizeof(value));
-    return value;
+    return switch_dt_value(chosen, key, &value) ? value : fallback;
 }
 }  // namespace
 
@@ -128,11 +125,8 @@ OSDefineMetaClassAndStructors(SwitchNVRAM, IONVRAMController)
     if (ok)
         banks = IONewZeroData(uint8_t, static_cast<vm_size_t>(bankSize) * bankCount);
     ok = ok && (banks != nullptr);
-    if (ok) {
-        const OSData *proxy = OSDynamicCast(OSData, chosen->getProperty("nvram-proxy-data"));
-        if (proxy && proxy->getLength() == bankSize)
-            memcpy(banks + static_cast<size_t>(current) * bankSize, proxy->getBytesNoCopy(), bankSize);
-    }
+    if (ok)
+        switch_dt_read(chosen, "nvram-proxy-data", banks + static_cast<size_t>(current) * bankSize, bankSize);
     chosen->release();
     return ok;
 }

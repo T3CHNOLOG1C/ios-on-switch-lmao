@@ -19,6 +19,7 @@
 #include <mach/kmod.h>
 #include <machine/machine_routines.h>
 #include "OriginalLegacyFramebufferABI.h"
+#include "../SwitchDT/SwitchDTProperty.h"
 extern "C" kmod_info_t g_kernel_kmod_info;
 extern "C" void native_legacy_display_static_init(void) __asm__("__GLOBAL__sub_I_NativeLegacyDisplay.cpp");
 extern "C" IOService *native_legacy_display_allocate(void);
@@ -60,12 +61,8 @@ static bool publishOrMatchWord(IORegistryEntry *entry, const char *key, uint32_t
 {
     const OSObject *previous = entry->getProperty(key);
     if (previous) {
-        const OSData *data = OSDynamicCast(OSData, previous);
         uint32_t word = 0;
-        if (!data || data->getLength() != sizeof(word))
-            return false;
-        memcpy(&word, data->getBytesNoCopy(), sizeof(word));
-        return word == value;
+        return switch_osdata_value(previous, &word) && word == value;
     }
     OSData *data = OSData::withBytes(&value, sizeof(value));
     const bool result = (data != nullptr) && entry->setProperty(key, data);
@@ -818,16 +815,13 @@ __attribute__((noinline)) bool native_legacy_gop_mapping_observed(const IOServic
         finishUnitScalePolicy(false);
         return false;
     }
-    const OSData *scale = OSDynamicCast(OSData, unitScaleChosen->getProperty("display-scale"));
-    const OSData *rotation = OSDynamicCast(OSData, unitScaleChosen->getProperty("display-rotation"));
     uint32_t actualScale = 0;
     uint32_t actualRotation = 0;
-    if (!scale || !rotation || scale->getLength() != 4 || rotation->getLength() != 4) {
+    if (!switch_dt_value(unitScaleChosen, "display-scale", &actualScale) ||
+        !switch_dt_value(unitScaleChosen, "display-rotation", &actualRotation)) {
         finishUnitScalePolicy(false);
         return false;
     }
-    memcpy(&actualScale, scale->getBytesNoCopy(), 4);
-    memcpy(&actualRotation, rotation->getBytesNoCopy(), 4);
     native_legacy_chosen_scale = actualScale;
     native_legacy_chosen_rotation = actualRotation;
     native_legacy_unit_scale_status = actualScale == enabled && actualRotation == 0 ? 0 : 2;
