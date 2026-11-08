@@ -13,6 +13,7 @@
 // usage: contractcheck <pack> <cache dir> [<nvk dylib>]
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
+#import <objc/message.h>
 #import <objc/runtime.h>
 #include <IOKit/IOReturn.h>
 #include <unistd.h>
@@ -163,6 +164,46 @@ static void bytesWithoutRoom(id<MTLDevice> dev)
     expect(b && b.contents && !memcmp(b.contents, bytes.data(), bytes.size()), "m2v's buffer, holding the bytes");
 }
 
+// newBufferWithBytesNoCopy: over memory 4 KiB-aligned but not 16 KiB, and from inside a page (iconservicesagent's on 27): raw
+// buffers at the caller's bytes, a raw fill lands exactly in their range, and their m2v twins are over the same bytes
+static void noCopyInsidePages(id<MTLDevice> dev)
+{
+    void *pages = nullptr;
+    posix_memalign(&pages, 16384, 65536);
+    memset(pages, 0xee, 65536);
+    uint8_t *base = static_cast<uint8_t *>(pages);
+
+    struct {
+        size_t offset, length;
+    } cases[] = {{4096, 21760}, {0x4a00, 3584}};
+
+    id<MTLCommandQueue> q = [dev newCommandQueue];
+    for (const auto &c : cases) {
+        id<MTLBuffer> b = [dev newBufferWithBytesNoCopy:base + c.offset
+                                                 length:c.length
+                                                options:MTLResourceStorageModeShared
+                                            deallocator:nil];
+        const bool raw = b && !strcmp(object_getClassName(b), "RMBuffer");
+        printf("no-copy buffer at +0x%zx, %zu bytes: %s\n", c.offset, c.length, b ? object_getClassName(b) : "nil");
+        expect(raw && b.contents == base + c.offset, "a raw buffer at the caller's bytes");
+        if (!raw)
+            continue;
+        id<MTLCommandBuffer> cb = [q commandBuffer];
+        id<MTLBlitCommandEncoder> e = [cb blitCommandEncoder];
+        [e fillBuffer:b range:NSMakeRange(0, c.length) value:0x5a];
+        [e endEncoding];
+        [cb commit];
+        [cb waitUntilCompleted];
+        unsigned wrong = 0;
+        for (size_t i = 0; i < 65536; i++)
+            wrong += base[i] != (i >= c.offset && i < c.offset + c.length ? 0x5a : 0xee);
+        expect(cb.status == MTLCommandBufferStatusCompleted && !wrong, "a fill of it writes its bytes and no others");
+        memset(base + c.offset, 0xee, c.length);
+        id<MTLBuffer> twin = ((id (*)(id, SEL))objc_msgSend)(b, sel_registerName("rmTwin"));
+        expect(twin && twin.contents == base + c.offset && twin.length == c.length, "its twin is over the same bytes");
+    }
+}
+
 // RMBuffer's _gpuDirty (std::atomic<bool>), read through the runtime: the facade has no accessor for it
 static bool gpuDirty(id<MTLBuffer> b)
 {
@@ -251,6 +292,7 @@ int main(int argc, char **argv)
         }
         queuePriorities(dev);
         if (fallback) {
+            noCopyInsidePages(dev);
             bytesWithoutRoom(dev);
             computeWrites(dev);
             partialNotReplayed(dev);

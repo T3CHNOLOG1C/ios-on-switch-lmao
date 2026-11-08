@@ -3,10 +3,15 @@
 // (libvulkan_nouveau.dylib exports NIL's C entry points): nil_image_init's layout, nil_image_view_descriptor's texture header
 // for a view of the whole image, and where nil_copy_linear_to_tiled puts a pattern (an FNV-1a hash of the image's bytes).
 // test/raw_layout_test.cpp holds its lines and checks fx's layout, header and writes against them.
-// usage: nilimage <libvulkan_nouveau.dylib> <dim 1|2|3> WxHxD <bytes a texel 1|2|4|8|16> <2d-view 0|1>...
-// prints per image: "dim W H D bpp view2d | size align | level offset row_stride y_log2 z_log2 ... | header words | hash"
-// build: xcrun clang -O1 -I <nil.h's directory (bazel build //third_party/mesa/src/nouveau/nil:nil_h)>
-//        -I third_party/mesa/include -I third_party/mesa/src -I third_party/mesa/src/nouveau/headers nilimage.c -o nilimage
+// usage: nilimage <libvulkan_nouveau.dylib> <dim 1|2|3> WxHxDxL <bytes a texel 1|2|4|8|16> <2d-view 0|1> <view: plain|cube>...
+// prints per image: "dim W H D L bpp view2d view | size align array_stride | level offset row_stride y_log2 z_log2 ... |
+// header words | hash"
+// build: nil.h from cbindgen (bazel build //third_party/mesa/src/nouveau/nil:nil_h), util/format/u_format_gen.h generated beside
+// it (uv run --with pyyaml python3 third_party/mesa/src/util/format/u_format_table.py <its u_format.yaml> --enums), then
+//   xcrun clang -O1 -DHAVE_FUNC_ATTRIBUTE_PACKED -I <that directory> -I third_party/mesa/include -I third_party/mesa/src
+//       -I third_party/mesa/src/nouveau/headers nilimage.c -o nilimage
+// (-DHAVE_FUNC_ATTRIBUTE_PACKED: NVK's build packs nv_device_info's enum; without it every field after `type` moves and NIL
+// reads another engine class)
 #include <dlfcn.h>
 #include <inttypes.h>
 #include <stdio.h>
@@ -35,8 +40,9 @@ static enum pipe_format formatOf(uint32_t bpp)
 
 int main(int argc, char **argv)
 {
-    if (argc < 2 || (argc - 2) % 4) {
-        fprintf(stderr, "usage: %s <libvulkan_nouveau.dylib> (<dim> WxHxD <bpp> <view2d>)...\n", argv[0]);
+    if (argc < 2 || (argc - 2) % 5) {
+        fprintf(stderr, "usage: %s <libvulkan_nouveau.dylib> (<dim> WxHxDxL <bpp> <view2d> <plain|cube>)...\n",
+                argv[0]);
         return 2;
     }
     void *lib = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
@@ -61,11 +67,11 @@ int main(int argc, char **argv)
     dev.cls_eng2d = 0x902d;
     dev.cls_eng3d = 0xb197;
     dev.cls_compute = 0xb1c0;
-    for (int a = 2; a + 3 < argc; a += 4) {
+    for (int a = 2; a + 4 < argc; a += 5) {
         const uint32_t dim = (uint32_t)atoi(argv[a]), bpp = (uint32_t)atoi(argv[a + 2]),
-                       view2d = (uint32_t)atoi(argv[a + 3]);
-        uint32_t w = 0, h = 0, d = 0;
-        if (sscanf(argv[a + 1], "%ux%ux%u", &w, &h, &d) != 3)
+                       view2d = (uint32_t)atoi(argv[a + 3]), cube = !strcmp(argv[a + 4], "cube");
+        uint32_t w = 0, h = 0, d = 0, layers = 1;
+        if (sscanf(argv[a + 1], "%ux%ux%ux%u", &w, &h, &d, &layers) < 3)
             return 2;
         const struct nil_format f = p_nil_format(formatOf(bpp));
         struct nil_image_init_info info;
@@ -75,27 +81,33 @@ int main(int argc, char **argv)
         info.extent_px.width = w;
         info.extent_px.height = h;
         info.extent_px.depth = dim == 3 ? d : 1;
-        info.extent_px.array_len = 1;
+        info.extent_px.array_len = layers;
         info.levels = 1;
         info.samples = 1;
         info.usage = view2d ? NIL_IMAGE_USAGE_2D_VIEW_BIT : 0;
         info.modifier = DRM_FORMAT_MOD_INVALID;
         struct nil_image img;
         if (!p_nil_image_init(&dev, &img, &info)) {
-            printf("%u %u %u %u %u %u refused\n", dim, w, h, d, bpp, view2d);
+            printf("%u %u %u %u %u %u %u %s refused\n", dim, w, h, d, layers, bpp, view2d, argv[a + 4]);
             continue;
         }
-        printf("%u %u %u %u %u %u | %" PRIu64 " %u |", dim, w, h, d, bpp, view2d, img.size_B, img.align_B);
+        printf("%u %u %u %u %u %u %u %s | %" PRIu64 " %u %" PRIu64 " |", dim, w, h, d, layers, bpp, view2d, argv[a + 4],
+               img.size_B, img.align_B, img.array_stride_B);
         for (uint32_t l = 0; l < img.num_levels; l++)
             printf(" %" PRIu64 " %u %u %u", img.levels[l].offset_B, img.levels[l].row_stride_B,
                    img.levels[l].tiling.y_log2, img.levels[l].tiling.z_log2);
         struct nil_view view;
         memset(&view, 0, sizeof view);
-        view.view_type = dim == 1 ? NIL_VIEW_TYPE_1D : dim == 2 ? NIL_VIEW_TYPE_2D : NIL_VIEW_TYPE_3D;
+        view.view_type = dim == 1             ? NIL_VIEW_TYPE_1D
+                         : dim == 3           ? NIL_VIEW_TYPE_3D
+                         : cube && layers > 6 ? NIL_VIEW_TYPE_CUBE_ARRAY
+                         : cube               ? NIL_VIEW_TYPE_CUBE
+                         : layers > 1         ? NIL_VIEW_TYPE_2D_ARRAY
+                                              : NIL_VIEW_TYPE_2D;
         view.access = NIL_VIEW_ACCESS_TEXTURE;
         view.format = f;
         view.num_levels = 1;
-        view.array_len = 1;
+        view.array_len = layers;
         view.swizzle[0] = PIPE_SWIZZLE_X;
         view.swizzle[1] = PIPE_SWIZZLE_Y;
         view.swizzle[2] = PIPE_SWIZZLE_Z;
@@ -105,12 +117,14 @@ int main(int argc, char **argv)
         for (int k = 0; k < 8; k++)
             printf(" %08x", desc.bits[k]);
         const size_t row = (size_t)w * bpp, plane = row * h, planes = dim == 3 ? d : 1;
-        uint8_t *linear = malloc(plane * planes), *tiled = calloc(1, img.size_B);
-        for (size_t k = 0; k < plane * planes; k++)
+        uint8_t *linear = malloc(plane * planes * layers), *tiled = calloc(1, img.size_B);
+        for (size_t k = 0; k < plane * planes * layers; k++)
             linear[k] = (uint8_t)(k * 131 + k / 251 + 7);
         const struct nil_Extent4D_Bytes level = {w * bpp, h, (uint32_t)planes, 1};
         const struct nil_Offset4D_Bytes at = {0, 0, 0, 0};
-        p_nil_copy_linear_to_tiled(tiled, level, linear, row, plane, at, level, &img.levels[0].tiling);
+        for (uint32_t l = 0; l < layers; l++)
+            p_nil_copy_linear_to_tiled(tiled + l * img.array_stride_B, level, linear + l * plane * planes, row, plane,
+                                       at, level, &img.levels[0].tiling);
         uint64_t hash = 0xcbf29ce484222325ull;
         for (uint64_t k = 0; k < img.size_B; k++)
             hash = (hash ^ tiled[k]) * 0x100000001b3ull;

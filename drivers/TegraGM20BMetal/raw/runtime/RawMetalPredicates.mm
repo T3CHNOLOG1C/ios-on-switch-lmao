@@ -175,6 +175,27 @@ bool volumeShape(MTLTextureDescriptor *d)
            f && (f->rt || !volumeRendered(d));
 }
 
+// A 2D array, cube or cube array the raw path keeps (raw::Device::createArray): one level, one sample, of a format it has a
+// header for, not extended range, memory of its own; its header's type (fx::kTexTwoDArray, kTexCube, kTexCubeArray), 0: none
+uint32_t arrayType(MTLTextureDescriptor *d)
+{
+    const bool kept =
+        d.mipmapLevelCount <= 1 && d.sampleCount <= 1 && d.depth <= 1 && d.storageMode != MTLStorageModeMemoryless &&
+        raw::xrForm(uint32_t(d.pixelFormat)) == raw::XrForm::None && raw::formatInfo(uint32_t(d.pixelFormat));
+    if (!kept)
+        return 0;
+    switch (d.textureType) {
+    case MTLTextureType2DArray:
+        return raw::fx::kTexTwoDArray;
+    case MTLTextureTypeCube:
+        return d.width == d.height && d.arrayLength <= 1 ? raw::fx::kTexCube : 0;
+    case MTLTextureTypeCubeArray:
+        return d.width == d.height ? raw::fx::kTexCubeArray : 0;
+    default:
+        return 0;
+    }
+}
+
 // A memoryless Depth32Float_Stencil8 texture, 2D, one level, one sample, no rotation: the raw path's zeta (raw_zeta.h). A stored
 // one stays m2v's: its twin could not hold the raw path's texels (NVK's image is its own memory), and a command buffer m2v
 // replays would read another depth than the one the raw path left.

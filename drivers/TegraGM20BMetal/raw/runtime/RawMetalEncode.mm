@@ -18,6 +18,12 @@ static void copyRows(raw::BlitEncoder *be, uint64_t bufferVa, const BufferRows &
                              intoTexture);
 }
 
+// A copy side's z (raw::BlitEncoder): an array's or cube's layer, else a 3D texture's plane
+static uint32_t layerOrPlane(const raw::Texture &t, uint32_t slice, uint32_t z)
+{
+    return t.layers > 1 ? slice : z;
+}
+
 // A buffer<->texture copy of `planes` planes from plane z, `image` bytes apart in the buffer (each plane's rows decided at
 // record: bufferPlanes); the buffer's lines cleaned before, or invalidated for the CPU after where the copy writes it
 static void copyPlanes(raw::BlitEncoder *be, raw::CommandBuffer *rc, const raw::Buffer &b, uint64_t offset,
@@ -509,14 +515,16 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
             const uint32_t sx = uint32_t(extra(cb, x + 2)), sy = uint32_t(extra(cb, x + 3)),
                            sz = uint32_t(extra(cb, x + 4)), w = uint32_t(extra(cb, x + 5)),
                            h = uint32_t(extra(cb, x + 6)), d = uint32_t(extra(cb, x + 7)), dx = uint32_t(o),
-                           dy = uint32_t(o >> 32), dz = uint32_t(extra(cb, x + 11));
+                           dy = uint32_t(o >> 32), dz = uint32_t(extra(cb, x + 11)), ss = uint32_t(extra(cb, x)),
+                           ds = uint32_t(extra(cb, x + 8));
             raw::Texture fromLevel, toLevel;
             if (sl)
                 raw::chainLevelImage(s->_raw, uint32_t(sl), fromLevel);
             if (dl)
                 raw::chainLevelImage(t->_raw, uint32_t(dl), toLevel);
             for (uint32_t k = 0; k < std::max(d, 1u); k++)
-                be->copyTexels(sl ? fromLevel : s->_raw, sx, sy, sz + k, dl ? toLevel : t->_raw, dx, dy, dz + k, w, h);
+                be->copyTexels(sl ? fromLevel : s->_raw, sx, sy, layerOrPlane(s->_raw, ss, sz + k),
+                               dl ? toLevel : t->_raw, dx, dy, layerOrPlane(t->_raw, ds, dz + k), w, h);
             break;
         }
         case OpMipmaps: {  // a chain's levels from level 0 (decided at record)
@@ -554,7 +562,7 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
             const uint64_t x = c.x, o = extra(cb, x + 8), so = extra(cb, x), row = extra(cb, x + 1),
                            image = extra(cb, x + 2);
             const uint64_t w = extra(cb, x + 3), h = extra(cb, x + 4), d = extra(cb, x + 5), dl = extra(cb, x + 7),
-                           dz = extra(cb, x + 9);
+                           dz = layerOrPlane(t->_raw, uint32_t(extra(cb, x + 6)), uint32_t(extra(cb, x + 9)));
             if (!fresh.empty())
                 fresh.erase(t);
             standInFresh.erase(t);
@@ -570,9 +578,10 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
             RMBuffer *t = (__bridge RMBuffer *)c.obj2;
             useTexture(rc, s, false);
             useBuffer(rc, t, true);
-            const uint64_t x = c.x, o = extra(cb, x + 2), sz = extra(cb, x + 3), w = extra(cb, x + 4),
-                           h = extra(cb, x + 5), d = extra(cb, x + 6), dof = extra(cb, x + 7), row = extra(cb, x + 8),
-                           image = extra(cb, x + 9), sl = extra(cb, x + 1);
+            const uint64_t x = c.x, o = extra(cb, x + 2),
+                           sz = layerOrPlane(s->_raw, uint32_t(extra(cb, x)), uint32_t(extra(cb, x + 3))),
+                           w = extra(cb, x + 4), h = extra(cb, x + 5), d = extra(cb, x + 6), dof = extra(cb, x + 7),
+                           row = extra(cb, x + 8), image = extra(cb, x + 9), sl = extra(cb, x + 1);
             raw::Texture level;
             if (sl)
                 raw::chainLevelImage(s->_raw, uint32_t(sl), level);

@@ -41,9 +41,10 @@ static bool blitOptionsMoot(id<MTLTexture> t, MTLBlitOption options)
     return x && x->_rawOk && !x->_raw.zeta && !x->_raw.converted();
 }
 
-// A w x h x d box at (x, y, z) of level `level` of `t` as one side of a raw copy: level 0 the texture's memory, a later level
-// its chain's (raw::chainLevelImage); a box deeper than one plane only in a 3D texture
-static bool copySideOk(RMTexture *t, NSUInteger level, MTLOrigin o, MTLSize size)
+// A w x h x d box at (x, y, z) of layer `slice` and level `level` of `t` as one side of a raw copy: level 0 the texture's
+// memory, a later level its chain's (raw::chainLevelImage); a box deeper than one plane only in a 3D texture, a layer past
+// the first only of an array or cube
+static bool copySideOk(RMTexture *t, NSUInteger slice, NSUInteger level, MTLOrigin o, MTLSize size)
 {
     if (!t->_rawOk || t->_raw.memoryless)
         return false;
@@ -51,7 +52,8 @@ static bool copySideOk(RMTexture *t, NSUInteger level, MTLOrigin o, MTLSize size
     if (level && (level >= raw::fx::kMaxLevels || !raw::chainLevelImage(t->_raw, uint32_t(level), view)))
         return false;
     const raw::Texture &side = level ? view : t->_raw;
-    return o.x + size.width <= side.width && o.y + size.height <= side.height && o.z + size.depth <= side.depth;
+    return slice < side.layers && o.x + size.width <= side.width && o.y + size.height <= side.height &&
+           o.z + size.depth <= side.depth;
 }
 
 // A buffer side's planes: `image` bytes apart, each on the rows' terms (bufferRows), the last inside the buffer
@@ -124,8 +126,8 @@ static bool sameSizeLevels(id<MTLTexture> s, id<MTLTexture> d, NSUInteger &sl, N
     RMTexture *a = (RMTexture *)s, *b = (RMTexture *)d;
     const bool both = [(id)a isKindOfClass:[RMTexture class]] && [(id)b isKindOfClass:[RMTexture class]];
     // the copy engine's, of bytes, between pitch and block-linear sides as each side is laid out
-    const bool ok = both && !ss && !ds && a->_raw.bpp == b->_raw.bpp && copySideOk(a, sl, so, size) &&
-                    copySideOk(b, dl, dorg, size);
+    const bool ok =
+        both && a->_raw.bpp == b->_raw.bpp && copySideOk(a, ss, sl, so, size) && copySideOk(b, ds, dl, dorg, size);
     if (!ok) {
         [_cb takeReason:WhyTexture why:@"a texture copy the raw path does not do (levels, slices, formats)"];
         hit(_cb, PredBlitTexCopy, ss | sl << 8 | ds << 16 | dl << 24,
@@ -266,8 +268,8 @@ static bool sameSizeLevels(id<MTLTexture> s, id<MTLTexture> d, NSUInteger &sl, N
 {
     RMBuffer *a = (RMBuffer *)s;
     RMTexture *b = (RMTexture *)d;
-    const bool ok = [(id)a isKindOfClass:[RMBuffer class]] && [(id)b isKindOfClass:[RMTexture class]] && !ds &&
-                    copySideOk(b, dl, dorg, size) && b->_raw.bpp &&
+    const bool ok = [(id)a isKindOfClass:[RMBuffer class]] && [(id)b isKindOfClass:[RMTexture class]] &&
+                    copySideOk(b, ds, dl, dorg, size) && b->_raw.bpp &&
                     bufferPlanes(so, row, image, size, b->_raw.bpp, a->_raw.length, true);
     if (!ok) {
         [_cb takeReason:WhyTexture why:@"a buffer-to-texture copy the raw path does not do"];
@@ -328,8 +330,8 @@ static bool sameSizeLevels(id<MTLTexture> s, id<MTLTexture> d, NSUInteger &sl, N
 {
     RMTexture *a = (RMTexture *)s;
     RMBuffer *b = (RMBuffer *)d;
-    const bool ok = [(id)a isKindOfClass:[RMTexture class]] && [(id)b isKindOfClass:[RMBuffer class]] && !ss &&
-                    copySideOk(a, sl, so, size) && a->_raw.bpp &&
+    const bool ok = [(id)a isKindOfClass:[RMTexture class]] && [(id)b isKindOfClass:[RMBuffer class]] &&
+                    copySideOk(a, ss, sl, so, size) && a->_raw.bpp &&
                     bufferPlanes(dof, row, image, size, a->_raw.bpp, b->_raw.length, false);
     if (!ok) {
         [_cb takeReason:WhyTexture why:@"a texture-to-buffer copy the raw path does not do"];
