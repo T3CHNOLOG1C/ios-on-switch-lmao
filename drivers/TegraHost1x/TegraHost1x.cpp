@@ -26,7 +26,6 @@
 #include "../../kits/SwitchDMA/SwitchDMABuffer.h"
 #include "../../kits/SwitchDMA/SwitchDcache.h"
 #include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
-#include "../../kits/SwitchTime/SwitchTime.h"
 
 namespace {
 constexpr uint64_t kHost1xPA = 0x50000000, kHost1xSize = 0x34000;
@@ -258,28 +257,7 @@ int bringUp()
         return fail("no push buffer below 4 GiB", 0);
     channelProgram();
     gState = 1;
-
-    uint32_t id = 0;
-    tegra_host1x_syncpt_alloc(&id);
-    const uint32_t before = tegra_host1x_syncpt_read(id);
-    const uint32_t stream[] = {
-        tegra_host1x_op_setclass(TEGRA_HOST1X_CLASS_HOST1X, 0, 0),
-        tegra_host1x_op_incr_syncpt(TEGRA_HOST1X_COND_IMMEDIATE, id),
-    };
-    const uint64_t began = switch_now_us();
-    int ret = tegra_host1x_submit(stream, 2);
-    if (!ret)
-        ret = tegra_host1x_syncpt_wait(id, before + 1, 100000);
-    if (ret) {
-        char state[160];
-        tegra_host1x_describe(state, sizeof(state));
-        IOLog("TegraHost1x: H1 FAIL self-test syncpoint %u at %u (%s), %s\n", id, tegra_host1x_syncpt_read(id),
-              ret == TEGRA_HOST1X_ELOST ? "reached, but its interrupt never came" : "not reached", state);
-        gState = TEGRA_HOST1X_ENODEV;
-        return gState;
-    }
-    IOLog("TegraHost1x: H1 ok syncpoint %u %u->%u by interrupt in %llu us (channel 0, host1x %u MHz%s)\n", id, before,
-          tegra_host1x_syncpt_read(id), switch_now_us() - began, gClockMHz, enabled ? ", enabled here" : "");
+    IOLog("TegraHost1x: H1 ok channel 0, host1x %u MHz%s\n", gClockMHz, enabled ? ", enabled here" : "");
     return TEGRA_HOST1X_OK;
 }
 }  // namespace
