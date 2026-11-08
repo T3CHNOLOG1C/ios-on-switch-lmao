@@ -260,8 +260,8 @@ genrule(
         "arm64e/SwitchHWTest27e.entitlements",
     ],
     cmd = " && ".join([
-        "sed 's|<string>HW Test</string>|<string>HW Test arm64e</string>|' $(location Info.plist) > $(location arm64e/Info.plist)",
-        "sed 's|com.brunostjohn.switch.hwtest<|com.brunostjohn.switch.hwtest27e<|' $(location SwitchHWTest.entitlements) > $(location arm64e/SwitchHWTest27e.entitlements)",
+        "sed 's|<string>HW Test</string>|<string>HW Test arm64e</string>|' $(execpath Info.plist) > $(execpath arm64e/Info.plist)",
+        "sed 's|com.brunostjohn.switch.hwtest<|com.brunostjohn.switch.hwtest27e<|' $(execpath SwitchHWTest.entitlements) > $(execpath arm64e/SwitchHWTest27e.entitlements)",
     ]),
 )
 
