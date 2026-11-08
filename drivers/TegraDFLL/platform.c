@@ -619,11 +619,11 @@ static int platform_init(char *why, size_t len)
 	u8 vout = 0;
 	int err = 0;
 
-	car = (volatile u8 *)dfllxnu_ioremap(CAR_PA, 0x1000);
-	fuse = (volatile u8 *)dfllxnu_ioremap(FUSE_PA, 0x400);
-	apbmisc = (volatile u8 *)dfllxnu_ioremap(APBMISC_PA, 0x100);
-	i2c5 = (volatile u8 *)dfllxnu_ioremap(I2C5_PA, 0x100);
-	dfll = (volatile u8 *)dfllxnu_ioremap(DFLL_PA, 0x400);
+	car = (volatile u8 *)switch_linux_ioremap(CAR_PA, 0x1000, 0);
+	fuse = (volatile u8 *)switch_linux_ioremap(FUSE_PA, 0x400, 0);
+	apbmisc = (volatile u8 *)switch_linux_ioremap(APBMISC_PA, 0x100, 0);
+	i2c5 = (volatile u8 *)switch_linux_ioremap(I2C5_PA, 0x100, 0);
+	dfll = (volatile u8 *)switch_linux_ioremap(DFLL_PA, 0x400, 0);
 	if (!car || !fuse || !apbmisc || !i2c5 || !dfll)
 		return fail(why, len, -ENOMEM, "cannot map CAR/FUSE/APB_MISC/I2C5/DFLL");
 
