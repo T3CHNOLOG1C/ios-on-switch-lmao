@@ -26,6 +26,15 @@ constexpr uint32_t kProbeIndex =
 constexpr uint32_t kTargetSide = 64;
 constexpr uint32_t kPayloads[3] = {256, 16, 4096};
 
+// probe.mm's: a 542 snapshot renders into the frontend's RGBA16Float stand-in, and an extended-range attachment (550 to 555) is
+// held as its raw codes; a load or store of either adds m2v's own passes, so the state's draw would not be the pass's only one
+constexpr MTLPixelFormat kRGB8_444_2P = MTLPixelFormat(542);
+
+bool extendedRange(MTLPixelFormat f)
+{
+    return f >= MTLPixelFormat(550) && f <= MTLPixelFormat(555);
+}
+
 bool operator!=(const InitAddresses &a, const InitAddresses &b)
 {
     return a.heap != b.heap || a.zero != b.zero || a.root != b.root || a.tic != b.tic || a.tsc != b.tsc ||
@@ -129,7 +138,8 @@ id<MTLTexture> Probe::target(MTLPixelFormat format, bool memoryless)
 }
 
 // probe.mm's pass: the first written BGRA8 color is the IOSurface (Core Animation's framebuffer) unless the state has depth or
-// stencil (beside them a linear color is m2v's stand-in, which NVK renders in place only for private ones)
+// stencil (beside them a linear color is m2v's stand-in, which NVK renders in place only for private ones); memoryless, 542
+// and extended-range attachments neither loaded nor stored
 MTLRenderPassDescriptor *Probe::pass(MTLRenderPipelineDescriptor *d)
 {
     MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
@@ -146,8 +156,9 @@ MTLRenderPassDescriptor *Probe::pass(MTLRenderPipelineDescriptor *d)
                                : target(ca.pixelFormat, memoryless);
         usedFramebuffer |= t == framebuffer_;
         pass.colorAttachments[c].texture = t;
-        pass.colorAttachments[c].loadAction = memoryless ? MTLLoadActionDontCare : MTLLoadActionLoad;
-        pass.colorAttachments[c].storeAction = memoryless ? MTLStoreActionDontCare : MTLStoreActionStore;
+        const bool loose = memoryless || ca.pixelFormat == kRGB8_444_2P || extendedRange(ca.pixelFormat);
+        pass.colorAttachments[c].loadAction = loose ? MTLLoadActionDontCare : MTLLoadActionLoad;
+        pass.colorAttachments[c].storeAction = loose ? MTLStoreActionDontCare : MTLStoreActionStore;
     }
     if (depthStencil && d.depthAttachmentPixelFormat != MTLPixelFormatInvalid)
         pass.depthAttachment.texture = target(d.depthAttachmentPixelFormat, true);
@@ -259,8 +270,12 @@ Compiler::Outcome Probe::make(id<MTLRenderPipelineState> twin, MTLRenderPipeline
             },
             out, why))
         return Compiler::Outcome::Made;
-    // NVK's export names every program a draw of the command buffer binds: one it does not is the export's failure
-    return why == "unknown program" ? Compiler::Outcome::Failed : Compiler::Outcome::Refused;
+    // NVK's export names every program a draw of the command buffer binds: one it does not is the export's failure. A set-0
+    // word the probe's tags don't name is this process's (m2v's descriptor tables moved under the capture), not the state's:
+    // tried again, never kept on disk as the state's refusal
+    const bool ours =
+        why == "unknown program" || why.rfind("unidentified handle", 0) == 0 || why.rfind("untagged pointer", 0) == 0;
+    return ours ? Compiler::Outcome::Failed : Compiler::Outcome::Refused;
 }
 
 }  // namespace raw

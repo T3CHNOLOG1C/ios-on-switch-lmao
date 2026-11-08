@@ -211,8 +211,8 @@ extern "C" void pushcount_exec(const struct TegraGM20BAbiExec *e)
     }
 }
 
-// What reached the GPU, for the raw harnesses' checks (decoding only: RAWCAP_LOG or NVDEC_WRITETHROUGH set): the draws of
-// every channel so far, and a 3D method's value after the last submission
+// What reached the GPU, for the raw harnesses' checks: the draws of every channel so far and a 3D method's value after the last
+// submission (decoding only: RAWCAP_LOG or NVDEC_WRITETHROUGH set), the instruction-cache invalidates submitted
 extern "C" uint64_t cap_draws(void)
 {
     std::lock_guard<std::mutex> l(gLock);
@@ -220,6 +220,29 @@ extern "C" uint64_t cap_draws(void)
     for (auto &c : gChannels)
         n += c.second->draws;
     return n;
+}
+
+extern "C" uint64_t cap_instruction_invalidates(void)
+{
+    std::lock_guard<std::mutex> l(gLock);
+    return gC.instructionInval;
+}
+
+extern "C" uint64_t
+cap_shader_invalidates(void)  // INVALIDATE_SHADER_CACHES (flush and invalidate, with a wait for idle)
+{
+    std::lock_guard<std::mutex> l(gLock);
+    return gC.shaderInval;
+}
+
+// `bytes` at GPU VA `va` as the GPU reads them; false where they are not in one bound range
+extern "C" bool cap_read(uint64_t va, void *out, uint64_t bytes)
+{
+    std::lock_guard<std::mutex> l(gLock);
+    const uint8_t *h = host(va, bytes);
+    if (h)
+        memcpy(out, h, bytes);
+    return h != nullptr;
 }
 
 extern "C" uint32_t cap_reg3d(uint32_t mthd)

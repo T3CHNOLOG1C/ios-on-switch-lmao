@@ -20,7 +20,8 @@ reference computed on the CPU (`core/`). On the Switch each one runs twice: on t
 (the raw GM20B facade) and on the m2v device that facade wraps. Fields prefixed `raw_` and `m2v_` belong
 to those two runs. `raw_paths=` lists the path each command buffer took, as `raw`, `m2v:<reason>:<predicate>` or
 `split:…`. `raw_cbs`, `m2v_cbs` and `m2v_why` are the facade's process-wide counters over the run; they come from
-`switchRawCounters`, `switchRawPath` and `switchM2VDevice` in `RawMetal.mm`, which only debug builds have. The app's
+`switchRawCounters` and `switchM2VDevice` in `RawMetalDevice.mm` and `switchRawPath` in `RawMetalCommandBuffer.mm`,
+which only debug builds have. The app's
 own shaders aren't in the raw pack, so draws with them always go to m2v. Clears, blits, uploads and the `gpu.ca.*`
 scenes, which build Core Animation's own pipeline states from QuartzCore's library, are what reach raw. A failed
 comparison names the first wrong pixel, both values, the bounding box, an 8x8 hex map of the wrong area and any streak

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 // The raw device's completion of the states its pack lacks (RawMetal.mm), of any library's functions: each asked once per
-// process and per build, off the asker's thread. A state is first looked up in the record cache under the process's shader cache directory, else probed in
-// process on the m2v device (RawProbe.h), its record kept, and handed to the raw device; until then, and for a state it refuses,
-// m2v draws it.
+// process and per build. A state is looked up in the record cache under the process's shader cache directory when it is created
+// (made()), else probed in process on the m2v device (RawProbe.h) off the asker's thread, its record kept, and handed to the raw
+// device; until then, and for a state it refuses, m2v draws it.
 #pragma once
 #import <Metal/Metal.h>
 #include <dispatch/dispatch.h>
@@ -11,7 +11,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
-#include "raw_cache.h"
+#include "raw_compiler.h"
 #include "raw_metallib.h"
 
 namespace raw {
@@ -39,6 +39,12 @@ public:
     // The state's pipeline handed to `ready` once made (on the compile queue; at once if it was before), or null once the raw
     // path will not draw it (refused, its probe failed past its retries, or no room for it)
     void ask(Ask a, std::function<void(Pipeline *)> ready);
+    // The state's pipeline now, on the caller's thread, if this process or the disk has its record (`a.twin` unused): a state
+    // made in an earlier boot is raw from its first draw. Null: not made yet, or refused
+    Pipeline *made(Ask a);
+    // The state's pipeline made now on the caller's thread (its probe, one state at a time), as Metal makes a state at its
+    // creation. Null: refused, or the probe could not run (*retry: ask() may make it later)
+    Pipeline *makeNow(Ask a, bool *retry);
 
     Compiler::Stats stats() const;
 
