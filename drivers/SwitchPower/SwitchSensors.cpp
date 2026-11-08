@@ -40,8 +40,7 @@
 #include "SwitchPower.h"
 #include "SwitchSensors.h"
 #include "SwitchSocTherm.h"
-
-extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
+#include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
 
 namespace {
 constexpr vm_offset_t kCarPA = 0x60006000, kFusePA = 0x7000F800, kSocThermPA = 0x700E2000;
@@ -87,16 +86,6 @@ constexpr uint32_t kHotspotCpu = 10, kHotspotGpu = 5;                          /
 constexpr uint32_t kHookQuietMS = 10000;  // for all 38 devices together
 static_assert(kHookQuietMS < 41000, "IOService::waitQuiet reports (and may panic on) busy services from 41 s on");
 
-inline uint32_t rd(const volatile uint8_t *base, uint32_t offset)
-{
-    return *reinterpret_cast<const volatile uint32_t *>(base + offset);
-}
-
-inline void wr(volatile uint8_t *base, uint32_t offset, uint32_t value)
-{
-    *reinterpret_cast<volatile uint32_t *>(base + offset) = value;
-}
-
 volatile uint8_t *gSocTherm;                     // mapped and brought up: the tsensors can be read
 volatile uint8_t *gCar, *gFuse, *gSocThermRegs;  // mapped once, reused by the bring-up after SC7
 IOService *gDevices[SWITCH_SENSOR_COUNT];
@@ -133,25 +122,25 @@ IOLock *sensorsLock()
 bool socThermStart()
 {
     if (!gCar)
-        gCar = reinterpret_cast<volatile uint8_t *>(ml_io_map(kCarPA, 0x1000));
+        gCar = switch_mmio_map(kCarPA, 0x1000);
     if (!gFuse)
-        gFuse = reinterpret_cast<volatile uint8_t *>(ml_io_map(kFusePA, 0x400));
+        gFuse = switch_mmio_map(kFusePA, 0x400);
     if (!gSocThermRegs)
-        gSocThermRegs = reinterpret_cast<volatile uint8_t *>(ml_io_map(kSocThermPA, 0x1000));
+        gSocThermRegs = switch_mmio_map(kSocThermPA, 0x1000);
     volatile uint8_t *car = gCar, *fuse = gFuse, *regs = gSocThermRegs;
     if (!car || !fuse || !regs) {
         IOLog("SwitchSensors: SOC_THERM off: mapping failed\n");
         return false;
     }
     // Fuses readable (the fuse clock and the fuse cache's visibility), then the calibration words.
-    wr(car, CLK_ENB_H_SET, kFuseClock);
-    wr(car, MISC_CLK_ENB, rd(car, MISC_CLK_ENB) | kFuseVisible);
-    (void)rd(car, MISC_CLK_ENB);
-    const uint32_t common = rd(fuse, FUSE_CACHE + SWITCH_FUSE_TSENSOR_COMMON);
+    switch_mmio_write32(car, CLK_ENB_H_SET, kFuseClock);
+    switch_mmio_write32(car, MISC_CLK_ENB, switch_mmio_read32(car, MISC_CLK_ENB) | kFuseVisible);
+    (void)switch_mmio_read32(car, MISC_CLK_ENB);
+    const uint32_t common = switch_mmio_read32(fuse, FUSE_CACHE + SWITCH_FUSE_TSENSOR_COMMON);
     const switch_tsensor_shared shared = switch_tsensor_shared_calib(common);
     uint32_t calib[SWITCH_SOCTHERM_SENSORS];
     for (unsigned i = 0; i < SWITCH_SOCTHERM_SENSORS; ++i) {
-        const uint32_t word = rd(fuse, FUSE_CACHE + switch_tsensors[i].calib_fuse);
+        const uint32_t word = switch_mmio_read32(fuse, FUSE_CACHE + switch_tsensors[i].calib_fuse);
         calib[i] = switch_tsensor_calib(&switch_tsensor_b01, &shared, &switch_tsensors[i], word);
         if (!calib[i] || !common) {
             IOLog("SwitchSensors: SOC_THERM off: %s calibration fuse %#x (common %#x) gives no calibration\n",
@@ -160,38 +149,40 @@ bool socThermStart()
         }
     }
     // Clocks under reset, as L4T's soctherm_clk_enable (rates from its clock init table), then out of reset.
-    wr(car, RST_DEV_U_SET, kSocThermBit);
-    wr(car, CLK_SOURCE_SOC_THERM, kSocThermSource);
-    wr(car, CLK_SOURCE_TSENSOR, kTsensorSource);
-    wr(car, CLK_ENB_U_SET, kSocThermBit);
-    wr(car, CLK_ENB_V_SET, kTsensorBit);
-    (void)rd(car, CLK_OUT_ENB_V);
+    switch_mmio_write32(car, RST_DEV_U_SET, kSocThermBit);
+    switch_mmio_write32(car, CLK_SOURCE_SOC_THERM, kSocThermSource);
+    switch_mmio_write32(car, CLK_SOURCE_TSENSOR, kTsensorSource);
+    switch_mmio_write32(car, CLK_ENB_U_SET, kSocThermBit);
+    switch_mmio_write32(car, CLK_ENB_V_SET, kTsensorBit);
+    (void)switch_mmio_read32(car, CLK_OUT_ENB_V);
     IODelay(2);
-    wr(car, RST_DEV_U_CLR, kSocThermBit);
-    (void)rd(car, RST_DEVICES_U);
-    if (!(rd(car, CLK_OUT_ENB_U) & kSocThermBit) || !(rd(car, CLK_OUT_ENB_V) & kTsensorBit) ||
-        (rd(car, RST_DEVICES_U) & kSocThermBit)) {
+    switch_mmio_write32(car, RST_DEV_U_CLR, kSocThermBit);
+    (void)switch_mmio_read32(car, RST_DEVICES_U);
+    if (!(switch_mmio_read32(car, CLK_OUT_ENB_U) & kSocThermBit) ||
+        !(switch_mmio_read32(car, CLK_OUT_ENB_V) & kTsensorBit) ||
+        (switch_mmio_read32(car, RST_DEVICES_U) & kSocThermBit)) {
         IOLog("SwitchSensors: SOC_THERM off: clocks did not come up (CLK_OUT_ENB_U %#x, V %#x, RST_DEVICES_U %#x)\n",
-              rd(car, CLK_OUT_ENB_U), rd(car, CLK_OUT_ENB_V), rd(car, RST_DEVICES_U));
+              switch_mmio_read32(car, CLK_OUT_ENB_U), switch_mmio_read32(car, CLK_OUT_ENB_V),
+              switch_mmio_read32(car, RST_DEVICES_U));
         return false;
     }
     // soctherm_init: each tsensor's configuration and calibration, the groups' PDIV and hotspot offsets.
     for (unsigned i = 0; i < SWITCH_SOCTHERM_SENSORS; ++i) {
         const uint32_t base = switch_tsensors[i].base;
-        wr(regs, base + CONFIG0, switch_tsensor_config0(&switch_tsensor_b01));
-        wr(regs, base + CONFIG1, switch_tsensor_config1(&switch_tsensor_b01));
-        wr(regs, base + CONFIG2, calib[i]);
+        switch_mmio_write32(regs, base + CONFIG0, switch_tsensor_config0(&switch_tsensor_b01));
+        switch_mmio_write32(regs, base + CONFIG1, switch_tsensor_config1(&switch_tsensor_b01));
+        switch_mmio_write32(regs, base + CONFIG2, calib[i]);
     }
-    uint32_t pdiv = rd(regs, SENSOR_PDIV);
+    uint32_t pdiv = switch_mmio_read32(regs, SENSOR_PDIV);
     pdiv &= ~((0xfu << kPdivCpuShift) | (0xfu << kPdivGpuShift) | (0xfu << kPdivPllxShift));
     pdiv |= switch_tsensor_b01.pdiv << kPdivCpuShift | switch_tsensor_b01.pdiv << kPdivGpuShift |
             switch_tsensor_b01.pdiv << kPdivPllxShift;
-    wr(regs, SENSOR_PDIV, pdiv);
-    uint32_t hotspot = rd(regs, HOTSPOT_OFF);
+    switch_mmio_write32(regs, SENSOR_PDIV, pdiv);
+    uint32_t hotspot = switch_mmio_read32(regs, HOTSPOT_OFF);
     hotspot &= ~((0xffu << kHotspotCpuShift) | (0xffu << kHotspotGpuShift));
     hotspot |= kHotspotCpu << kHotspotCpuShift | kHotspotGpu << kHotspotGpuShift;
-    wr(regs, HOTSPOT_OFF, hotspot);
-    (void)rd(regs, HOTSPOT_OFF);
+    switch_mmio_write32(regs, HOTSPOT_OFF, hotspot);
+    (void)switch_mmio_read32(regs, HOTSPOT_OFF);
     __atomic_store_n(&gSocTherm, regs, __ATOMIC_RELEASE);
     switch_soctherm_armed(regs);
     IOLog(
@@ -217,7 +208,7 @@ bool read(switch_sensor_source source, int32_t *milliC, uint64_t *at)
         volatile uint8_t *regs = __atomic_load_n(&gSocTherm, __ATOMIC_ACQUIRE);  // nullptr during the wake bring-up
         if (!regs)
             return false;
-        const uint32_t status = rd(regs, switch_tsensors[source].base + STATUS1);
+        const uint32_t status = switch_mmio_read32(regs, switch_tsensors[source].base + STATUS1);
         if (!(status & kTempValid))
             return false;
         *milliC = switch_soctherm_millic(status & 0xffffu);
