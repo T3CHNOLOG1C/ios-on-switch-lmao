@@ -40,11 +40,12 @@ uint32_t targets(const std::string &key)
     return n;
 }
 
-// mkpack.py foreign: a color target's own register for a target the state does not have
+// mkpack.py foreign: a color target's own register for a target the state does not have (its blend, SET_CT_WRITE, SET_BLEND)
 bool foreign(uint32_t m, uint32_t targets)
 {
     return (m >= 0x1E00 && m < 0x1F00 && (m - 0x1E00) / 0x20 >= targets) ||
-           (m >= 0x1A00 && m < 0x1A20 && (m - 0x1A00) / 4 >= targets);
+           (m >= 0x1A00 && m < 0x1A20 && (m - 0x1A00) / 4 >= targets) ||
+           (m >= 0x1360 && m < 0x1380 && (m - 0x1360) / 4 >= targets);
 }
 
 uint32_t valueOf(const std::map<uint32_t, uint32_t> &regs, uint32_t m)
