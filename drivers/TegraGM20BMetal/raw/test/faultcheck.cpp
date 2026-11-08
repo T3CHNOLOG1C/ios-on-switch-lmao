@@ -14,6 +14,7 @@
 //   channel.
 // - A wait that fails on a channel destroyed meanwhile marks no new channel of the same id lost.
 // - A command buffer larger than its push ring reaches the GPU whole (the ring grows under it).
+// - A fill writes its byte over its range, at any alignment and length, and nothing around it.
 // - A channel the kernel killed is made again with its context before any command buffer is encoded for it: one whose
 //   ChannelCreate or context Exec the kernel refused gives no command buffer, and the next begin() tries again.
 // - Programs placed in the shader heap are behind an instruction-cache invalidate before any draw runs them, even when the
@@ -349,6 +350,50 @@ void outgrownRing(const char *pack, const Expect &expect)
     client.destroyBuffer(chain);
 }
 
+// Fills of a byte value over ranges of every alignment, one of them past the copy engine's line (32768 words): the range
+// holds the value, every byte around it what it held
+void fills(raw::Device &dev, const Expect &expect)
+{
+    constexpr uint64_t kBytes = 400000;
+    raw::Buffer b;
+    if (!dev.createBuffer(kBytes, b)) {
+        expect(false, "a buffer");
+        return;
+    }
+
+    const struct {
+        uint64_t at, bytes;
+        uint8_t value;
+    } cases[] = {{3, 1, 0x11}, {1, 2, 0x22}, {9, 4, 0x33}, {16, 64, 0x44}, {101, 7, 0x55}, {1001, 300001, 0x66}};
+
+    bool all = true;
+    for (const auto &f : cases) {
+        memset(b.cpu, 0xee, kBytes);
+        raw::CommandBuffer *cb = dev.begin();
+        if (!cb) {
+            all = false;
+            break;
+        }
+        cb->clean(b.cpu, kBytes, true);
+        raw::BlitEncoder *e = cb->blit();
+        e->fillBytes(b.va + f.at, f.bytes, f.value);
+        e->end();
+        uint32_t seq = 0;
+        if (!cb->commit(seq) || !dev.wait(seq)) {
+            all = false;
+            break;
+        }
+        uint64_t wrong = 0;
+        for (uint64_t i = 0; i < kBytes; i++)
+            wrong += b.cpu[i] != (i >= f.at && i < f.at + f.bytes ? f.value : 0xee);
+        std::printf("fill of %llu bytes at %llu: %llu bytes wrong\n", (unsigned long long)f.bytes,
+                    (unsigned long long)f.at, (unsigned long long)wrong);
+        all = all && !wrong;
+    }
+    expect(all, "every fill wrote its range and nothing else");
+    dev.destroyBuffer(b);
+}
+
 void reopenRefused(raw::Device &dev, const Expect &expect)
 {
     raw::Buffer a, b;
@@ -486,6 +531,7 @@ int main(int argc, char **argv)
     freedHeader(dev, expect);
     partialCommit(dev, expect);
     lostReused(expect);
+    fills(dev, expect);
     reopenRefused(dev, expect);
     invalidateRefused(dev, expect);
     waitRefused(dev, expect);

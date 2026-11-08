@@ -202,6 +202,23 @@ static bool sameSizeLevels(id<MTLTexture> s, id<MTLTexture> d, NSUInteger &sl, N
     }
 }
 
+- (void)fillBuffer:(id<MTLBuffer>)b range:(NSRange)r value:(uint8_t)value
+{
+    RMBuffer *t = (RMBuffer *)b;
+    if (![(id)t isKindOfClass:[RMBuffer class]] || NSMaxRange(r) > t->_raw.length) {
+        [_cb takeReason:WhyCall why:@"a buffer fill out of range"];
+        hit(_cb, PredCallBufCopyRange, NSMaxRange(r), [(id)t isKindOfClass:[RMBuffer class]] ? t->_raw.length : 0);
+    }
+    [_cb retain:b];
+    Cmd m = cmd(OpFillBuffer);
+    m.obj = (__bridge void *)b;
+    m.a = value;
+    m.c = r.location;
+    m.x = _cb->_extra.size();
+    _cb->_extra.push_back(r.length);
+    [_cb record:m];
+}
+
 - (void)copyFromBuffer:(id<MTLBuffer>)s
           sourceOffset:(NSUInteger)so
               toBuffer:(id<MTLBuffer>)d

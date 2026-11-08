@@ -466,6 +466,9 @@ class BlitEncoder {
 public:
     // `bytes` bytes from `src` to `dst` (vkCmdCopyBuffer)
     void copyBytes(uint64_t src, uint64_t dst, uint64_t bytes);
+    // `bytes` bytes at `dst` set to `value` (fillBuffer:range:value:): the copy engine writing a constant, its whole words as
+    // NVK's vkCmdFillBuffer (nvk_cmd_fill_memory_ce), the bytes before and after them one at a time
+    void fillBytes(uint64_t dst, uint64_t bytes, uint8_t value);
     // `lines` rows of `width` pixels of `bpp` bytes, from `src` (row stride srcPitch) to `dst` (dstPitch) (vkCmdCopyImage and the
     // buffer<->image copies of linear images)
     void copyRect(uint64_t src, uint32_t srcPitch, uint64_t dst, uint32_t dstPitch, uint32_t width, uint32_t lines,

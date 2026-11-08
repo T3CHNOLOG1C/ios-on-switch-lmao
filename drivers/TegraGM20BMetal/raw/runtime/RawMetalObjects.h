@@ -181,6 +181,7 @@ enum Op : uint8_t {
     OpWaitEvent,
     OpDrawIndexed,
     OpVisibility,
+    OpFillBuffer,
 };
 
 // one record: `stage` 1 vertex, 2 fragment; `obj` unretained (the command buffer keeps it); `x` into the extras
@@ -218,6 +219,8 @@ struct RMSegment {
 @interface RMCommandBuffer : RMObject {
 @public
     uint64_t _protection;  // setProtectionOptions: (kept, no effect)
+    NSMutableDictionary *_userDictionary;
+    uint64_t _traceId;
     raw::ResidencySets _residency;
     // Its encoders: each one's first command (OpRender, OpBlit, OpCompute) carries index 1 where it goes to m2v (a refusal taken
     // while it was the active encoder: _encRefused, written into it as the next encoder begins or at commit, _encAt the

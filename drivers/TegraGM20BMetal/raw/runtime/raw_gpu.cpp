@@ -88,6 +88,7 @@ enum : uint32_t {
     // MAXWELL_DMA_COPY_A (NV90B5 layout)
     CE_LAUNCH_DMA = 0x0300,
     CE_OFFSET_IN_UPPER = 0x0400,
+    CE_PITCH_IN = 0x0410,
     CE_LINE_LENGTH_IN = 0x0418,
     CE_SET_REMAP_CONST_A = 0x0700,
     CE_SET_REMAP_COMPONENTS = 0x0708,
@@ -3658,6 +3659,48 @@ void BlitEncoder::copyBytes(uint64_t src, uint64_t dst, uint64_t bytes)
         dev_->stats.ceBytes += n;
         done += n;
     }
+}
+
+void BlitEncoder::fillBytes(uint64_t dst, uint64_t bytes, uint8_t value)
+{
+    // SET_REMAP_COMPONENTS: DST_X..W CONST_A (4), COMPONENT_SIZE ONE (0) or FOUR (3) bytes, one source and destination
+    // component; LAUNCH_DMA: PIPELINED, FLUSH, pitch both sides, REMAP
+    constexpr uint32_t kConstA = 0x4444, kRemap = 1u << 10, kMaxDim = 1u << 15;
+    constexpr uint32_t kLaunch = 1u | 1u << 2 | 1u << 7 | 1u << 8 | kRemap;
+    auto run = [&](uint64_t at, uint32_t width, uint32_t height, uint32_t unit) {
+        room();
+        p_.inc(CE_OFFSET_IN_UPPER + 8, {uint32_t(at >> 32), uint32_t(at)}, SUBC_COPY);
+        p_.inc(CE_LINE_LENGTH_IN, {width, height}, SUBC_COPY);
+        p_.m(CE_LAUNCH_DMA, kLaunch | (height > 1 ? 1u << 9 : 0), SUBC_COPY);
+        dev_->stats.ceOps++;
+        dev_->stats.ceBytes += uint64_t(width) * height * unit;
+    };
+    auto bytesOf = [&](uint64_t at, uint64_t n) {
+        if (!n)
+            return;
+        room();
+        p_.m(CE_SET_REMAP_CONST_A, value, SUBC_COPY);
+        p_.m(CE_SET_REMAP_COMPONENTS, kConstA, SUBC_COPY);
+        run(at, uint32_t(n), 1, 1);
+    };
+    const uint64_t end = dst + bytes, first = std::min((dst + 3) & ~uint64_t(3), end),
+                   last = std::max(end & ~uint64_t(3), first);
+    bytesOf(dst, first - dst);
+    if (last > first) {
+        room();
+        p_.m(CE_SET_REMAP_CONST_A, uint32_t(value) * 0x01010101u, SUBC_COPY);
+        p_.m(CE_SET_REMAP_COMPONENTS, kConstA | 3u << 16, SUBC_COPY);
+        p_.inc(CE_PITCH_IN, {kMaxDim * 4, kMaxDim * 4}, SUBC_COPY);
+        for (uint64_t at = first, left = last - first; left >= 4;) {
+            const uint64_t words = left / 4;
+            const uint32_t width = uint32_t(std::min<uint64_t>(words, kMaxDim)),
+                           height = words >= kMaxDim ? uint32_t(std::min<uint64_t>(words / kMaxDim, kMaxDim)) : 1;
+            run(at, width, height, 4);
+            at += uint64_t(width) * height * 4;
+            left -= uint64_t(width) * height * 4;
+        }
+    }
+    bytesOf(last, end - last);
 }
 
 void BlitEncoder::copyRect(uint64_t src, uint32_t srcPitch, uint64_t dst, uint32_t dstPitch, uint32_t width,

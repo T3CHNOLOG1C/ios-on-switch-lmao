@@ -45,6 +45,9 @@ void forEachWritten(RMCommandBuffer *cb, size_t from, size_t to, void (*written)
         case OpCopyTextureToBuffer:
             written(c.obj2);
             break;
+        case OpFillBuffer:
+            written(c.obj);
+            break;
         case OpBuffer:
         case OpTexture:
             if (compute)

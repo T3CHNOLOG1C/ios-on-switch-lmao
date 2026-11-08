@@ -501,6 +501,15 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
             be->copyBytes(s->_raw.va + c.c, t->_raw.va + dof, n);
             break;
         }
+        case OpFillBuffer: {
+            RMBuffer *t = (__bridge RMBuffer *)c.obj;
+            const uint64_t n = extra(cb, c.x);
+            useBuffer(rc, t, true);
+            if (!t->_raw.wc)
+                rc->clean(t->_raw.cpu + c.c, n, true);
+            be->fillBytes(t->_raw.va + c.c, n, uint8_t(c.a));
+            break;
+        }
         case OpCopyBufferToTexture: {
             RMBuffer *s = (__bridge RMBuffer *)c.obj;
             RMTexture *t = (__bridge RMTexture *)c.obj2;

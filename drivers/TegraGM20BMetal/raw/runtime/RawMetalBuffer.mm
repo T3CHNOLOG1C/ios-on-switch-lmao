@@ -61,6 +61,11 @@
     return NSUInteger(_raw.length);
 }
 
+- (NSUInteger)heapOffset
+{
+    return 0;  // a heap's buffers are allocations of their own (RMHeap)
+}
+
 - (NSUInteger)allocatedSize
 {
     return NSUInteger(_raw.span.valid() ? _raw.span.bytes : _raw.length);
