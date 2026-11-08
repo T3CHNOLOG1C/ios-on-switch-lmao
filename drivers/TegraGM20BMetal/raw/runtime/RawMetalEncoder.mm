@@ -262,12 +262,11 @@ static bool rawDepthStencil(MTLRenderPassDescriptor *pass)
 - (id<MTLComputeCommandEncoder>)computeCommandEncoderWithDispatchType:(MTLDispatchType)type
 {
     RMComputeEncoder *e = [RMComputeEncoder new];
+    e->_type = type;
     [self begin:e];
     Cmd m = cmd(OpCompute);
     m.a = uint32_t(type);
     [self record:m];
-    [self takeReason:WhyCompute why:@"a compute encoder"];
-    hit(self, PredCompute, type);
     return (id<MTLComputeCommandEncoder>)e;
 }
 

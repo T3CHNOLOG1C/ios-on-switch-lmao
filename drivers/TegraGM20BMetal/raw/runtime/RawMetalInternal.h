@@ -64,8 +64,9 @@ struct Stats {
     // diagnostics (r10-rawsweep): the raw encode thrown away by aborted command buffers, the m2v replay's time on the committing
     // thread (replay + commit), and the bytes replay cleans
     std::atomic<uint64_t> abortUs{0}, replayUs{0}, replayClean{0};
-    // command buffers submitted in segments (planSegments), and their segments on m2v
-    std::atomic<uint64_t> splits{0}, splitM2v{0};
+    // command buffers submitted in segments (planSegments), and their segments on m2v; of those with both drivers' encoders, the
+    // ones split around their shared events, and the ones kept whole for an event wait or signal between encoders
+    std::atomic<uint64_t> splits{0}, splitM2v{0}, eventSplits{0}, eventWhole{0};
     // command buffers completed (finish): with the commits, what the stall line (rawStall) watches
     std::atomic<uint64_t> finished{0};
     // waitUntilScheduled / waitUntilCompleted calls that blocked, and the time they blocked: CPU waits on the caller's thread

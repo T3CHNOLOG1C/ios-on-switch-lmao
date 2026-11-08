@@ -388,8 +388,7 @@ bool planeStage(const PlaneSet &p, uint32_t &update, uint32_t &request)
     planeLatch.write(set);
     planeSetOf(set) = p;
     planeRequestedAt = frameEnds;
-    if (flipTimer)
-        flipTimer->setTimeoutMS(kFlipDeadlineMS);
+    armFlipDeadline();
     if (stats)
         ++stPlaneFlips;
     return true;

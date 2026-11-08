@@ -334,10 +334,8 @@ void Decoder::method(uint32_t subc, uint32_t mthd, uint32_t data, bool fromMme)
     }
     if (subc != 0) {
         reg_[subc][mthd >> 2] = data;
-        if (subc == 1 && mthd == 0x02b4) {
-            dispatches++;
-            fprintf(out_, "DISPATCH\n");
-        }
+        if (subc == 1)
+            computeMethod(mthd, data);
         if (subc == 4 && mthd == 0x0300) {
             barrier("CE_COPY");
             copyEngine(data);

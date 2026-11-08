@@ -161,7 +161,7 @@ static int check_image(const uint8_t *base, uint64_t mh_off, uint64_t slice_off,
         }
         uint8_t *keep = island;
         island = NULL;
-        struct a64x_islands is = {keep, fsb, 0, 0, false, false, 0, 0};
+        struct a64x_islands is = {keep, fsb, 0, 0, false, false, 0, 0, 0, 0};
         for (uint64_t off = exec_off; off < exec_off + exec_size; off += 4096) {
             uint32_t in[1024] = {0};
             uint64_t n = exec_off + exec_size - off < 4096 ? exec_off + exec_size - off : 4096;

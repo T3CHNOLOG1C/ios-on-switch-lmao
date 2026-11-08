@@ -27,15 +27,8 @@ static bool bytesRoom(RMBytes &s, uint32_t padded, uint32_t &chunk, uint32_t &of
     return s.chunks[s.at].va != 0;
 }
 
-- (void)bytes:(int)stage data:(const void *)bytes length:(NSUInteger)length index:(NSUInteger)index
+void recordBytes(RMCommandBuffer *cb, Cmd m, const void *bytes, NSUInteger length)
 {
-    SWITCH_API(ApiBind);
-    if (stage >= 1 && stage <= 2 && index < 31) {
-        _bufVa[stage][index] = 0;  // its own 256-byte-aligned upload chunk
-        _buf[stage][index] = nil;
-    }
-    RMCommandBuffer *cb = _cb;
-    Cmd m = cmd(OpBytes, uint8_t(stage), uint16_t(index));
     const uint32_t padded = std::max<uint32_t>((uint32_t(length) + 255) & ~255u, 256);
     uint32_t chunk, offset;
     if (!bytesRoom(cb->_bytes, padded, chunk, offset)) {
@@ -49,6 +42,16 @@ static bool bytesRoom(RMBytes &s, uint32_t padded, uint32_t &chunk, uint32_t &of
     m.b = uint32_t(length);
     m.c = chunk;
     [cb record:m];
+}
+
+- (void)bytes:(int)stage data:(const void *)bytes length:(NSUInteger)length index:(NSUInteger)index
+{
+    SWITCH_API(ApiBind);
+    if (stage >= 1 && stage <= 2 && index < 31) {
+        _bufVa[stage][index] = 0;  // its own 256-byte-aligned upload chunk
+        _buf[stage][index] = nil;
+    }
+    recordBytes(_cb, cmd(OpBytes, uint8_t(stage), uint16_t(index)), bytes, length);
 }
 
 - (void)setVertexBytes:(const void *)bytes length:(NSUInteger)length atIndex:(NSUInteger)index
