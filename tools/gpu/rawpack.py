@@ -91,7 +91,8 @@ def fresh(path: Path) -> Path:
 def build(args: argparse.Namespace, generator: list[str], env: dict[str, str], root: Path) -> None:
     xcode = dict(line.split('=', 1) for line in Path(args.xcode_env).read_text().splitlines() if '=' in line)
     env['DEVELOPER_DIR'] = xcode['DEVELOPER_DIR']
-    arguments = ['--build-only', '--bridge', root / args.host_bridge, '--out', root / args.out]
+    arguments = ['--build-only', '--bridge', root / args.host_bridge, '--metal-abi', root / args.metal_abi]
+    arguments += ['--out', root / args.out]
     generate(generator, arguments, env, "the pack generator's tools")
 
 
@@ -143,7 +144,7 @@ def stamp(args: argparse.Namespace, generator: list[str], env: dict[str, str], _
 
 
 STEPS = {
-    'build': ('xcode-env', 'host-bridge', 'generator', 'tree', 'out'),
+    'build': ('xcode-env', 'host-bridge', 'metal-abi', 'generator', 'tree', 'out'),
     'split': ('generator', 'qc', 'corpus'),
     'probe': ('generator', 'raw', 'nvk', 'qc', 'lines', 'out'),
     'link': ('generator', 'out'),

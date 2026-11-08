@@ -3,6 +3,7 @@
 # rawframe (raw C++ API), killcheck (a channel kill), facadeframe (RawMetal.mm over the frontend as its m2v fallback), blitframe (copies), orderframe (the
 # two drivers' order on the GPU, over the mock's asynchronous GPU) and cabench (CPU per frame).
 # usage: test/build.sh <host libnative_metal_bridge.a> <frontend dir (NativeBridgeMetalFrontend.{mm,h})> <tree> <outdir>
+#   the frontend's MetalABI.h: bazel build //drivers/NativeMetal/abi:header (or METAL_ABI=<its directory>)
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
 RAW=$HERE/..
@@ -10,6 +11,7 @@ BRIDGE=$1
 FRONT=$2
 TREE=$3
 OUT=$4
+METAL_ABI=${METAL_ABI:-$TREE/bazel-bin/drivers/NativeMetal/abi}
 mkdir -p "$OUT"
 # SWITCH_RAW_HARNESS_MARKS: raw_gpu.cpp marks each fetch barrier it leaves out and each draw it splits, for pack/eqcheck.py
 FLAGS=(-O2 -g -Wall -Wextra -std=c++17 -DSWITCH_RAW_HARNESS_MARKS)
@@ -21,7 +23,7 @@ xcrun clang++ "${FLAGS[@]}" -DNVDEC_TWOD -I "$TREE/drivers/TegraGM20B" -c "$RAW/
 xcrun clang++ "${FLAGS[@]}" -c "$RAW/fx/test/twod_sim.cpp" -o "$OUT/twod_sim.o"
 xcrun clang++ -dynamiclib "$OUT/mock_iokit.o" "$OUT/cap.o" "$OUT/nvdec.o" "$OUT/twod_sim.o" "$OUT/mme_fermi.o" "$OUT/mme_fermi_sim.o" -framework IOKit \
     -framework CoreFoundation -install_name @rpath/libmock_iokit.dylib -o "$OUT/libmock_iokit.dylib"
-OBJC=(-O2 -g -std=c++17 -fobjc-arc -Wno-deprecated-declarations -DSWITCH_RAW_HARNESS_MARKS -I "$FRONT" -I "$TREE/drivers/NativeMetal" -I "$TREE/drivers/TegraGM20B")
+OBJC=(-O2 -g -std=c++17 -fobjc-arc -Wno-deprecated-declarations -DSWITCH_RAW_HARNESS_MARKS -I "$FRONT" -I "$TREE/drivers/NativeMetal" -I "$METAL_ABI" -I "$TREE/drivers/TegraGM20B")
 # the runtime's completion of states the pack lacks (RawComplete.mm, RawProbe.mm; raw_completed.cpp beside raw_gpu.cpp); nvdec is
 # the mock's
 COMPLETION=("$RAW/runtime/raw_capture.cpp" "$RAW/runtime/raw_record.cpp" "$RAW/runtime/raw_cache.cpp" "$RAW/runtime/raw_metallib.cpp")
