@@ -1,33 +1,37 @@
-"""A kernel Mach-O as the ABI check reads it, over prelink26's Mach-O reader.
+"""A kernel Mach-O as the ABI check reads it.
 
 Apple's kernel cache is an MH_FILESET whose pointers are chained fixups (DYLD_CHAINED_PTR_64_KERNEL_CACHE: the target
 is the low 30 bits, an offset from the cache's first segment). Our prelinked kernel stores plain addresses.
 """
 
 import re
-import struct
-import sys
 from collections.abc import Iterator
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parents[2] / 'translate/arm64e/xnu/prelink26'))
-from fileset import Fileset
-
-MH_FILESET = 12
+from tools.common import macho
 
 
-class KernelImage(Fileset):
+class KernelImage:
     """One kernel image: its segments, its fileset entries (Apple's), and its pointers decoded."""
 
     def __init__(self, path: str) -> None:
-        super().__init__(path)
-        self.fileset = struct.unpack_from('<I', self.d, 12)[0] == MH_FILESET
+        self.d = Path(path).read_bytes()
+        image = macho.macho(self.d, subtypes=None)
+        self.fileset = image['kind'] == macho.MH_FILESET
+        self.segs = image['segments']
         self.base = self.segs[0]['va']
         self._owners = [
             (entry, seg['va'], seg['va'] + seg['size'])
-            for entry, _, fileoff in self.entries
-            for seg in self.entry_segs(fileoff)
+            for entry, _, fileoff in macho.fileset_entries(self.d, image)
+            for seg in macho.macho(self.d, fileoff, subtypes=None)['segments']
         ]
+
+    def va2off(self, address: int) -> int | None:
+        """Return the file offset of address, None outside every segment's file bytes."""
+        for s in self.segs:
+            if s['va'] <= address < s['va'] + s['filesize']:
+                return s['fileoff'] + address - s['va']
+        return None
 
     def read(self, address: int, size: int) -> bytes:
         """Return size bytes at address."""
@@ -59,7 +63,7 @@ class KernelImage(Fileset):
         """Yield (vmaddr, bytes) of every segment that holds data."""
         for s in self.segs:
             if 'DATA' in s['name']:
-                yield s['va'], self.d[s['off'] : s['off'] + s['filesize']]
+                yield s['va'], self.d[s['fileoff'] : s['fileoff'] + s['filesize']]
 
     def owner(self, address: int) -> str | None:
         """Return the fileset entry holding address ('kernel' throughout a kernel that is not a fileset)."""
@@ -71,7 +75,7 @@ class KernelImage(Fileset):
         """Return the bundle identifiers in __PRELINK_INFO."""
         for s in self.segs:
             if s['name'] == '__PRELINK_INFO':
-                info = self.d[s['off'] : s['off'] + s['filesize']]
+                info = self.d[s['fileoff'] : s['fileoff'] + s['filesize']]
                 pattern = rb'<key>CFBundleIdentifier</key>\s*<string>([^<]+)</string>'
                 return {m.decode() for m in re.findall(pattern, info)}
         return set()

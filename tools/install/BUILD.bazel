@@ -157,11 +157,27 @@ py_library(
     imports = ["../.."],
 )
 
-py_test(
-    name = "compose_test",
-    srcs = ["compose_test.py"],
+# Unit tests: Python on files in the test's own temporary directory, inside the sandbox.
+[py_test(
+    name = name + "_test",
+    size = "small",
+    srcs = [name + "_test.py"],
     deps = [":lib"],
-)
+) for name in [
+    "compose",
+    "delta",
+    "direct",
+    "extents",
+    "host",
+    "keys",
+    "manifest",
+    "overlay_index",
+    "owners",
+    "pretranslate",
+    "progress",
+    "space",
+    "to_card",
+]]
 
 py_test(
     name = "card_test",
@@ -171,20 +187,6 @@ py_test(
         ":lib",
         "@rules_python//python/runfiles",
     ],
-)
-
-py_test(
-    name = "manifest_test",
-    size = "small",
-    srcs = ["manifest_test.py"],
-    deps = [":lib"],
-)
-
-py_test(
-    name = "extents_test",
-    size = "small",
-    srcs = ["extents_test.py"],
-    deps = [":lib"],
 )
 
 # hdiutil and fsck_apfs on a real 128 MB container: macOS, outside the sandbox.
@@ -222,20 +224,6 @@ py_test(
     deps = [":lib"],
 )
 
-py_test(
-    name = "space_test",
-    size = "small",
-    srcs = ["space_test.py"],
-    deps = [":lib"],
-)
-
-py_test(
-    name = "owners_test",
-    size = "small",
-    srcs = ["owners_test.py"],
-    deps = [":lib"],
-)
-
 # Owners given offline on real APFS images, sealed after: hdiutil and diskutil, macOS, outside the sandbox.
 py_test(
     name = "owners_apfs_test",
@@ -244,20 +232,6 @@ py_test(
         "local",
         "manual",
     ],
-    deps = [":lib"],
-)
-
-py_test(
-    name = "to_card_test",
-    size = "small",
-    srcs = ["to_card_test.py"],
-    deps = [":lib"],
-)
-
-py_test(
-    name = "direct_test",
-    size = "small",
-    srcs = ["direct_test.py"],
     deps = [":lib"],
 )
 
@@ -282,13 +256,6 @@ py_test(
         ":lib",
         "@rules_python//python/runfiles",
     ],
-)
-
-py_test(
-    name = "keys_test",
-    size = "small",
-    srcs = ["keys_test.py"],
-    deps = [":lib"],
 )
 
 py_library(
@@ -317,39 +284,4 @@ py_test(
         ":lib",
         ":sii_fixture",
     ],
-)
-
-py_test(
-    name = "delta_test",
-    size = "small",
-    srcs = ["delta_test.py"],
-    deps = [":lib"],
-)
-
-py_test(
-    name = "pretranslate_test",
-    size = "small",
-    srcs = ["pretranslate_test.py"],
-    deps = [":lib"],
-)
-
-py_test(
-    name = "progress_test",
-    size = "small",
-    srcs = ["progress_test.py"],
-    deps = [":lib"],
-)
-
-py_test(
-    name = "host_test",
-    size = "small",
-    srcs = ["host_test.py"],
-    deps = [":lib"],
-)
-
-py_test(
-    name = "overlay_index_test",
-    size = "small",
-    srcs = ["overlay_index_test.py"],
-    deps = [":lib"],
 )

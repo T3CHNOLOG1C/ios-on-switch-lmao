@@ -37,6 +37,7 @@ from tools.install import (
     gpt,
     host,
     manifest,
+    progress,
     target as targets,
 )
 
@@ -230,14 +231,13 @@ class Direct:
         if host.container_on(self.slice):
             raise host.HostError(f'macOS has a container attached on {self.slice}: refusing to write under it')
         self.log(f'writing {self.m.write_bytes / GB:.2f} GB onto {self.slice}')
-        progress = streams.Progress(self.m.write_bytes)
         start = time.monotonic()
         fd = os.open('/dev/r' + self.slice, os.O_RDWR)
         try:
-            written = streams.install(self.m, self.stream, fd, self.target.bytes, progress)
+            with progress.step(f'write: {self.slice}', self.m.write_bytes):
+                written = streams.install(self.m, self.stream, fd, self.target.bytes, progress.advance)
         finally:
             os.close(fd)
-            progress.finish()
         took = time.monotonic() - start
         self.log(f'write: {written} bytes in {took:.1f} s ({written / max(took, 1e-6) / (1 << 20):.1f} MiB/s)')
 

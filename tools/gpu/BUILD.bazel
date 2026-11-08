@@ -15,13 +15,17 @@ py_binary(
 py_binary(
     name = "bundle",
     srcs = ["bundle.py"],
-    deps = ["//tools/trustcache"],
+    deps = [
+        "//tools/common:macho",
+        "//tools/trustcache",
+    ],
 )
 
 py_library(
     name = "nvk_twin",
     srcs = ["nvk_twin.py"],
     visibility = ["//tools/gpu/shaders:__pkg__"],
+    deps = ["//tools/common:macho"],
 )
 
 py_binary(
