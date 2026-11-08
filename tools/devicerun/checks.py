@@ -7,6 +7,7 @@
 from tools.devicerun.hwtest import HWTEST
 from tools.devicerun.morning import MORNING
 from tools.devicerun.rules import REPORT, TIMELINE, Check
+from tools.devicerun.stutter import STUTTER
 
 LAUNCHD = 'launchd'
 KERNEL = 'kernel'
@@ -520,6 +521,7 @@ GROUPS: dict[str, list[Check]] = {
     ],
     'gpu-morning': MORNING,
     'hwtest': HWTEST,
+    'stutter': STUTTER,
 }
 
 # The tools/frames lines, pulled with the checks' own query.
