@@ -127,7 +127,7 @@ def ca_corpus(qc: Path, corpus: Path, work: Path) -> Path:
     out = work / 'corpus.ca.log'
     with open(corpus) as src, open(out, 'w') as dst:
         dst.writelines(line for line in src if not caspec.corpus_fields(line)[0])
-        for tier, names in caset.labels(tables, caset.corpus_names(str(corpus)), CA_TIERS).items():
+        for tier, names in caset.labels(tables, caset.corpus_names(str(corpus), tables), CA_TIERS).items():
             dst.writelines(caspec.state_line(tables, n) + '\n' for n in names)
             print(f'rawpack: Core Animation states, {tier}: {len(names)}')
     return out

@@ -282,7 +282,7 @@ metal_seed = rule(
 _RAW_BUCKETS = 16
 
 # The generator's modules each step runs (rawpack.py imports or runs them by path, beside it).
-_RAW_SPLIT = ["rawpack.py", "ca/caset.py", "ca/caspec.py"]
+_RAW_SPLIT = ["rawpack.py", "ca/caset.py", "ca/caspec.py", "ca/caspec27.py"]
 _RAW_PROBE = ["rawpack.py", "mkprograms.py", "nvkshader.py", "probelog.py"]
 _RAW_LINK = ["rawpack.py", "mkpack.py", "layouts.py", "packfile.py", "probelog.py"]
 
