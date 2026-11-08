@@ -1705,8 +1705,8 @@ static inline bool schedule_work(struct work_struct *w)
 
 #define queue_work(wq, w) schedule_work(w)
 
-/* A queued run is taken off the thread call and made here, after any run under way: Linux's flush runs it, and nvkm's
- * fini paths rely on that (a runlist's recovery cancelled at suspend left the runlist blocked). */
+/* A queued run is taken off the thread call and made here, after any run under way, as Linux's flush runs it: nvkm's fini
+ * paths rely on it (nvkm_runl_fini's flush is what lets a queued recovery unblock its runlist before a power-down). */
 static inline bool flush_work(struct work_struct *w)
 {
 	if (!nvxnu_work_cancel_wait(w->thread_call))
