@@ -205,7 +205,8 @@ int main(int argc, char **argv)
         id<MTLCommandQueue> queue = [dev newCommandQueue];
         // tagged textures and samplers: BGRA8, for the stand-ins' conversions the integer formats they read codes as
         // (pack/xr.metal), for the two-plane store the RGBA16Float stand-in it reads (the texture's class decides the push
-        // words of its read), and for the resolves 4x multisampled ones (pack/resolve.metal), tagged alike by their sizes
+        // words of its read), and for the raw path's own resolves 4x multisampled ones (pack/resolve.metal: m2v binds its null
+        // texture for a texture2d_ms argument given another), tagged alike by their sizes
         auto tagged = [&](MTLPixelFormat f, NSUInteger samples = 1) {
             std::vector<id<MTLTexture>> out;
             for (unsigned t = 0; t < 16; t++) {
@@ -229,9 +230,11 @@ int main(int argc, char **argv)
             {"f xr_bgr10_frag", tagged(MTLPixelFormatR32Uint)},
             {"f xr_bgra10_frag", tagged(MTLPixelFormatRGBA16Uint)},
             {"f xr_planes_frag", tagged(MTLPixelFormatRG32Uint)},
-            {"f two_plane_store", tagged(MTLPixelFormatRGBA16Float)},
-            {"f resolve_", tagged(MTLPixelFormatBGRA8Unorm, 4)}};
-        auto texturesOf = [&](const std::string &line) -> const std::vector<id<MTLTexture>> & {
+            {"f two_plane_store", tagged(MTLPixelFormatRGBA16Float)}};
+        const std::vector<id<MTLTexture>> multisampled = tagged(MTLPixelFormatBGRA8Unorm, 4);
+        auto texturesOf = [&](const std::string &line, bool ours) -> const std::vector<id<MTLTexture>> & {
+            if (ours && line.find("| v resolve_vert | f resolve_") != std::string::npos)
+                return multisampled;
             for (const auto &[fragment, set] : codeTextures)
                 if (line.find("| " + fragment) != std::string::npos)
                     return set;
@@ -667,7 +670,7 @@ int main(int argc, char **argv)
                     }
                 }
             for (unsigned t = 0; t < 16; t++)
-                [enc setFragmentTexture:texturesOf(line)[t] atIndex:t];
+                [enc setFragmentTexture:texturesOf(line, ours)[t] atIndex:t];
             for (unsigned t = 0; t < 16; t++)
                 [enc setFragmentSamplerState:samplers[t] atIndex:t];
             [enc drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];

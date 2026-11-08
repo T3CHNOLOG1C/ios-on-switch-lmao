@@ -573,9 +573,12 @@ int main(int argc, char **argv)
         // after it in its command buffer) drawing, three times, the first corpus state whose line holds <text> (a multisampled
         // one: iOS 17's Pride poster lightsMesh, samples=2 RG11B10Float; FRAME_MSAA_CORPUS: the corpus, else the frame's) from
         // the library at FRAME_MSAA_LIB into memoryless multisampled targets of its count (FRAME_MSAA_SAMPLES: of that many
-        // instead) and formats (FRAME_MSAA_FORMAT: target 0 of that MTLPixelFormat instead), neither loaded nor stored (FRAME_MSAA_STORE: its first target resolved into a texture of its size)
+        // instead) and formats (FRAME_MSAA_FORMAT: target 0 of that MTLPixelFormat instead), its depth/stencil one too
+        // (FRAME_MSAA_DEPTH: of that MTLPixelFormat instead), cleared and
+        // not stored, the colors neither loaded nor stored (FRAME_MSAA_STORE: its first target resolved into a texture of its size)
         id<MTLRenderPipelineState> msaa = nil;
-        id<MTLTexture> msaaTargets[8] = {}, msaaResolved = nil;
+        id<MTLTexture> msaaTargets[8] = {}, msaaResolved = nil, msaaDepth = nil;
+        bool msaaStencil = false;
         if (const char *pick = getenv("FRAME_MSAA")) {
             NSError *libError = nil;
             id<MTLLibrary> lib = [dev newLibraryWithURL:[NSURL fileURLWithPath:@(getenv("FRAME_MSAA_LIB") ?: "")]
@@ -600,26 +603,35 @@ int main(int argc, char **argv)
                 md.rasterSampleCount = NSUInteger(atoi(n));
             if (const char *f = getenv("FRAME_MSAA_FORMAT"); f && md)
                 md.colorAttachments[0].pixelFormat = MTLPixelFormat(atoi(f));
+            if (const char *z = getenv("FRAME_MSAA_DEPTH"); z && md) {
+                md.depthAttachmentPixelFormat = MTLPixelFormat(atoi(z));
+                md.stencilAttachmentPixelFormat = md.depthAttachmentPixelFormat == MTLPixelFormatDepth32Float_Stencil8
+                                                      ? MTLPixelFormatDepth32Float_Stencil8
+                                                      : MTLPixelFormatInvalid;
+            }
             msaa = md ? [dev newRenderPipelineStateWithDescriptor:md error:&libError] : nil;
             if (!msaa) {
                 fprintf(stderr, "FRAME_MSAA %s: no state (%s)\n", pick,
                         libError ? libError.localizedDescription.UTF8String : "no line or library");
                 return 1;
             }
-            for (int c = 0; c < 8; c++) {
-                const MTLPixelFormat f = md.colorAttachments[c].pixelFormat;
-                if (f == MTLPixelFormatInvalid)
-                    continue;
+            auto msTarget = [&](MTLPixelFormat f) {
                 MTLTextureDescriptor *td = [MTLTextureDescriptor new];
-                td.textureType = MTLTextureType2DMultisample;
-                td.sampleCount = md.rasterSampleCount;
+                td.textureType = md.rasterSampleCount > 1 ? MTLTextureType2DMultisample : MTLTextureType2D;
+                td.sampleCount = std::max<NSUInteger>(md.rasterSampleCount, 1);
                 td.pixelFormat = f;
                 td.width = 640;
                 td.height = 360;
                 td.usage = MTLTextureUsageRenderTarget;
                 td.storageMode = MTLStorageModeMemoryless;
-                msaaTargets[c] = [dev newTextureWithDescriptor:td];
-            }
+                return [dev newTextureWithDescriptor:td];
+            };
+            for (int c = 0; c < 8; c++)
+                if (md.colorAttachments[c].pixelFormat != MTLPixelFormatInvalid)
+                    msaaTargets[c] = msTarget(md.colorAttachments[c].pixelFormat);
+            if (md.depthAttachmentPixelFormat != MTLPixelFormatInvalid)
+                msaaDepth = msTarget(md.depthAttachmentPixelFormat);
+            msaaStencil = md.stencilAttachmentPixelFormat != MTLPixelFormatInvalid;
             if (getenv("FRAME_MSAA_STORE") && msaaTargets[0]) {
                 MTLTextureDescriptor *rd =
                     [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:msaaTargets[0].pixelFormat
@@ -644,6 +656,16 @@ int main(int argc, char **argv)
             if (msaaResolved) {
                 rp.colorAttachments[0].resolveTexture = msaaResolved;
                 rp.colorAttachments[0].storeAction = MTLStoreActionMultisampleResolve;
+            }
+            if (msaaDepth) {
+                rp.depthAttachment.texture = msaaDepth;
+                rp.depthAttachment.loadAction = MTLLoadActionClear;
+                rp.depthAttachment.storeAction = MTLStoreActionDontCare;
+            }
+            if (msaaStencil) {
+                rp.stencilAttachment.texture = msaaDepth;
+                rp.stencilAttachment.loadAction = MTLLoadActionClear;
+                rp.stencilAttachment.storeAction = MTLStoreActionDontCare;
             }
             id<MTLRenderCommandEncoder> e = [cb renderCommandEncoderWithDescriptor:rp];
             [e setRenderPipelineState:msaa];
