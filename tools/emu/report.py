@@ -5,6 +5,7 @@ import struct
 import zlib
 from pathlib import Path
 
+from tools.emu import gpulog
 from tools.emu.monitor import Monitor
 
 RAMOOPS = (0xB0000000, 0x200000)
@@ -74,6 +75,7 @@ def summarize(run: Path) -> str:
         f'kernel log: {len(log)} lines; secondary cores online: {", ".join(online) or "none"}',
         f'core PCs: {" ".join(program_counters((run / "registers.txt").read_text()))}',
         f'panic: {panic or "none"}',
+        f'gpu: {gpulog.summarize(run)}',
         'last kernel lines:',
         *log[-12:],
     ]
