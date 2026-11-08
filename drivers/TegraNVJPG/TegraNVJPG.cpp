@@ -483,14 +483,6 @@ extern "C" int tegra_nvjpg_buffer(uint64_t size, TegraNVJPGBuffer *out)
     return 0;
 }
 
-extern "C" void tegra_nvjpg_cache_pages(switch_dcache_op op, const uint64_t *pages, uint32_t count)
-{
-    for (uint32_t i = 0; i < count; i++) {
-        if (switch_dma_pa_managed(pages[i]))
-            switch_dcache_phys_lines(op, pages[i] & ~SWITCH_HW_PAGE_MASK, SWITCH_HW_PAGE_SIZE);
-    }
-}
-
 extern "C" void tegra_nvjpg_lock(void)
 {
     IOLockLock(gJobLock);

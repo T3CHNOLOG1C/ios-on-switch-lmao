@@ -217,7 +217,7 @@ IOReturn runJob(Job *job)
         ret = kIOReturnNoSpace;
     // NVJPG does not snoop the CPU's caches: no dirty line of the destination may be written back over the picture.
     if (!ret) {
-        tegra_nvjpg_cache_pages(SWITCH_DCACHE_CLEAN_INVALIDATE, gOutList, pages);
+        switch_dcache_hw_pages(SWITCH_DCACHE_CLEAN_INVALIDATE, gOutList, pages);
         switch_dcache_sync();
     }
     nvjpg_dec_status status = {};
@@ -231,7 +231,7 @@ IOReturn runJob(Job *job)
             ret = kIOReturnIOError;
     }
     // The CPU may have pulled destination lines in while NVJPG wrote: readers must see DRAM.
-    tegra_nvjpg_cache_pages(SWITCH_DCACHE_CLEAN_INVALIDATE, gOutList, pages);
+    switch_dcache_hw_pages(SWITCH_DCACHE_CLEAN_INVALIDATE, gOutList, pages);
     switch_dcache_sync();
     tegra_nvjpg_window_clear(TEGRA_NVJPG_WINDOW_OUT);
     tegra_nvjpg_window_clear(TEGRA_NVJPG_WINDOW_IN);
