@@ -167,12 +167,46 @@
 }
 
 // A descriptor whose functions are this device's: a copy over their twins, for the m2v device
+// A stage's linked functions as their twins; `l` itself while one has none (m2v then refuses it as another device's)
+static MTLLinkedFunctions *twinLinked(MTLLinkedFunctions *l)
+{
+    if (!l.functions.count && !l.privateFunctions.count)
+        return l;
+    NSMutableArray *functions = [NSMutableArray array], *hidden = [NSMutableArray array];
+    for (id f in l.functions) {
+        id twin = twinOf(f);
+        if (!twin)
+            return l;
+        [functions addObject:twin];
+    }
+    for (id f in l.privateFunctions) {
+        id twin = twinOf(f);
+        if (!twin)
+            return l;
+        [hidden addObject:twin];
+    }
+    MTLLinkedFunctions *t = [MTLLinkedFunctions linkedFunctions];
+    t.functions = functions;
+    t.privateFunctions = hidden;
+    t.binaryFunctions = l.binaryFunctions;
+    t.groups = l.groups;
+    return t;
+}
+
 static MTLRenderPipelineDescriptor *twinDescriptor(MTLRenderPipelineDescriptor *d)
 {
     MTLRenderPipelineDescriptor *t = [d copy];
     t.vertexFunction = twinOf(d.vertexFunction);
     t.fragmentFunction = twinOf(d.fragmentFunction);
+    t.vertexLinkedFunctions = twinLinked(d.vertexLinkedFunctions);
+    t.fragmentLinkedFunctions = twinLinked(d.fragmentLinkedFunctions);
     return t;
+}
+
+static bool linksFunctions(MTLRenderPipelineDescriptor *d)
+{
+    return d.vertexLinkedFunctions.functions.count || d.vertexLinkedFunctions.privateFunctions.count ||
+           d.fragmentLinkedFunctions.functions.count || d.fragmentLinkedFunctions.privateFunctions.count;
 }
 
 // A state the pack lacks whose record this process or an earlier boot made (RawComplete.h made()): raw from its first draw, and
@@ -197,7 +231,8 @@ static raw::Pipeline *madeBefore(RMPipeline *p, MTLRenderPipelineDescriptor *d)
     p.label = d.label;
     RMFunction *vf = [(id)d.vertexFunction isKindOfClass:[RMFunction class]] ? (RMFunction *)d.vertexFunction : nil;
     RMFunction *ff = [(id)d.fragmentFunction isKindOfClass:[RMFunction class]] ? (RMFunction *)d.fragmentFunction : nil;
-    p->_packable = vf && ff && !vf->_framework.empty() && vf->_framework == ff->_framework;
+    // a state linking functions is its linked functions' too: no pack names it, its record is kept under their AIR
+    p->_packable = vf && ff && !vf->_framework.empty() && vf->_framework == ff->_framework && !linksFunctions(d);
     p->_completable = vf && ff;
     if (p->_completable)
         p->_key = raw_metal_pipeline_key(d).UTF8String;

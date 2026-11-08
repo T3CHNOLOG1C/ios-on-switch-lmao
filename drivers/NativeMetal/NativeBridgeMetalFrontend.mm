@@ -2117,6 +2117,14 @@ static bool asyncRenderPipelineWanted(MTLRenderPipelineDescriptor *d, MTLPipelin
         return false;
     if (![(id)d.vertexFunction isKindOfClass:[NBFunction class]])
         return false;
+    for (MTLLinkedFunctions *l : {d.vertexLinkedFunctions, d.fragmentLinkedFunctions}) {
+        for (id f in l.functions)
+            if (![f isKindOfClass:[NBFunction class]])
+                return false;
+        for (id f in l.privateFunctions)
+            if (![f isKindOfClass:[NBFunction class]])
+                return false;
+    }
     return !d.fragmentFunction || [(id)d.fragmentFunction isKindOfClass:[NBFunction class]];
 }
 
@@ -5064,8 +5072,38 @@ static std::string journalComputePipeline(MTLComputePipelineDescriptor *d, NBFun
     return refused ? std::string() : state + " | ";
 }
 
-// A render pipeline descriptor in the bridge's form; false, with the error, for a function of another device.
-static bool renderDescriptor(MTLRenderPipelineDescriptor *d, NmbRenderPipelineDescriptor *p, NSError **error)
+static bool linkedHandles(NSArray *functions, std::vector<NmbFunction *> &out);
+
+// A stage's visible and private linked functions appended to `linked`; false for what the bridge does not represent (binary
+// functions, function groups) or a function of another device.
+static bool stageLinked(MTLLinkedFunctions *functions, std::vector<NmbFunction *> &linked, size_t &visible,
+                        size_t &hidden, NSError **error)
+{
+    if (functions.binaryFunctions.count || functions.groups.count) {
+        if (error)
+            *error = nbError(@"render binary functions and function groups are not implemented");
+        return false;
+    }
+    const size_t before = linked.size();
+    if (!linkedHandles(functions.functions, linked)) {
+        if (error)
+            *error = nbError(@"foreign linked function");
+        return false;
+    }
+    visible = linked.size() - before;
+    if (!linkedHandles(functions.privateFunctions, linked)) {
+        if (error)
+            *error = nbError(@"foreign linked function");
+        return false;
+    }
+    hidden = linked.size() - before - visible;
+    return true;
+}
+
+// A render pipeline descriptor in the bridge's form; false, with the error, for a function of another device. `linked` holds
+// the stages' linked functions' handles that `p` points into: it outlives the creation call.
+static bool renderDescriptor(MTLRenderPipelineDescriptor *d, NmbRenderPipelineDescriptor *p,
+                             std::vector<NmbFunction *> &linked, NSError **error)
 {
     if (![(id)d.vertexFunction isKindOfClass:[NBFunction class]] ||
         (d.fragmentFunction && ![(id)d.fragmentFunction isKindOfClass:[NBFunction class]])) {
@@ -5073,6 +5111,20 @@ static bool renderDescriptor(MTLRenderPipelineDescriptor *d, NmbRenderPipelineDe
             *error = nbError(@"foreign function");
         return false;
     }
+    // Metal's functions that call a function by name (IconRendering's custom effects call custom_fn) get it from these
+    linked.clear();
+    size_t vertexVisible = 0, vertexHidden = 0, fragmentVisible = 0, fragmentHidden = 0;
+    if (!stageLinked(d.vertexLinkedFunctions, linked, vertexVisible, vertexHidden, error) ||
+        !stageLinked(d.fragmentLinkedFunctions, linked, fragmentVisible, fragmentHidden, error))
+        return false;
+    p->vertex_linked = linked.data();
+    p->vertex_linked_count = vertexVisible;
+    p->vertex_private_linked = linked.data() + vertexVisible;
+    p->vertex_private_count = vertexHidden;
+    p->fragment_linked = linked.data() + vertexVisible + vertexHidden;
+    p->fragment_linked_count = fragmentVisible;
+    p->fragment_private_linked = linked.data() + vertexVisible + vertexHidden + fragmentVisible;
+    p->fragment_private_count = fragmentHidden;
     p->vertex = [(NBFunction *)d.vertexFunction handle];
     p->fragment = d.fragmentFunction ? [(NBFunction *)d.fragmentFunction handle] : nullptr;
     for (unsigned i = 0; i < 8; i++) {
@@ -5502,7 +5554,8 @@ static bool computeDescriptor(MTLComputePipelineDescriptor *d, NmbComputePipelin
 - (BOOL)addRenderPipelineFunctionsWithDescriptor:(MTLRenderPipelineDescriptor *)d error:(NSError **)error
 {
     auto *p = new NmbRenderPipelineDescriptor();
-    const bool ok = renderDescriptor(d, p, error) && nmb_binary_archive_add_render(_handle, p);
+    std::vector<NmbFunction *> linked;
+    const bool ok = renderDescriptor(d, p, linked, error) && nmb_binary_archive_add_render(_handle, p);
     delete p;
     if (!ok)
         return failWith<BOOL>(error, @"archive render pipeline", NO);
@@ -6971,7 +7024,8 @@ static uint64_t askAnswer(SEL cmd, NSUInteger arg);
         return asyncRenderPipeline(self, d, options);
     }
     auto *p = new NmbRenderPipelineDescriptor();
-    if (!renderDescriptor(d, p, error)) {
+    std::vector<NmbFunction *> linked;
+    if (!renderDescriptor(d, p, linked, error)) {
         delete p;
         return nil;
     }
