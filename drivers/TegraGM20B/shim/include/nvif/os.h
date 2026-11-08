@@ -1705,13 +1705,21 @@ static inline bool schedule_work(struct work_struct *w)
 
 #define queue_work(wq, w) schedule_work(w)
 
+/* A queued run is taken off the thread call and made here, after any run under way: Linux's flush runs it, and nvkm's
+ * fini paths rely on that (a runlist's recovery cancelled at suspend left the runlist blocked). */
 static inline bool flush_work(struct work_struct *w)
 {
-	nvxnu_work_cancel_wait(w->thread_call);
+	if (!nvxnu_work_cancel_wait(w->thread_call))
+		return false;
+	w->func(w);
 	return true;
 }
 
-#define cancel_work_sync flush_work
+static inline bool cancel_work_sync(struct work_struct *w)
+{
+	return nvxnu_work_cancel_wait(w->thread_call) != 0;
+}
+
 #define system_wq ((struct workqueue_struct *)0)
 
 /* interrupts: the handler runs from nvxnu_poll_irqs */
@@ -1740,7 +1748,7 @@ const void *free_irq(unsigned int irq, void *dev);
 	} while (0)
 #define in_interrupt() 0
 #define in_atomic() 0
-#define irqs_disabled() 0
+#define irqs_disabled() (!nvxnu_irqs_enabled())
 
 struct firmware {
 	size_t size;

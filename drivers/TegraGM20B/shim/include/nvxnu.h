@@ -55,6 +55,7 @@ void nvxnu_spin_lock(void *s);
 void nvxnu_spin_unlock(void *s);
 unsigned long nvxnu_irq_save(void);
 void nvxnu_irq_restore(unsigned long flags);
+int nvxnu_irqs_enabled(void);
 void nvxnu_preempt_disable(void);
 void nvxnu_preempt_enable(void);
 void *nvxnu_rw_alloc(void);
@@ -70,10 +71,11 @@ void nvxnu_udelay(nvxnu_u32 us); /* busy wait */
 void nvxnu_usleep(nvxnu_u32 us); /* may block */
 void nvxnu_yield(void);
 
-/* deferred work: run fn(arg) on a kernel thread call */
+/* deferred work: run fn(arg) on a kernel thread call, never two runs of one item at once (a Linux work item's rule) */
 void *nvxnu_work_alloc(void (*fn)(void *), void *arg);
 void nvxnu_work_schedule(void *w);
-void nvxnu_work_cancel_wait(void *w);
+/* 1 if a run was pending (and is now cancelled); returns once no run is under way */
+int nvxnu_work_cancel_wait(void *w);
 /* once, ns from now (a deadline, not a loop); cancel: no wait, any context */
 void nvxnu_work_schedule_after(void *w, nvxnu_u64 ns);
 void nvxnu_work_cancel(void *w);

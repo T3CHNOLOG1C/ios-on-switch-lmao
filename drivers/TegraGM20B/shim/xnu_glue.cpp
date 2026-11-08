@@ -276,6 +276,11 @@ extern "C" void nvxnu_irq_restore(unsigned long flags)
 	ml_set_interrupts_enabled(static_cast<boolean_t>(flags));
 }
 
+extern "C" int nvxnu_irqs_enabled(void)
+{
+	return static_cast<int>(ml_get_interrupts_enabled());
+}
+
 extern "C" void nvxnu_preempt_disable(void)
 {
 	_disable_preemption();
@@ -601,12 +606,16 @@ extern "C" void nvxnu_wakeup(const void *event)
 	thread_wakeup(reinterpret_cast<event_t>(const_cast<void *>(event)));
 }
 
+// THREAD_CALL_OPTIONS_ONCE: an XNU thread call entered while it runs may run again at once on another worker thread, and
+// a Linux work item never runs twice at once.
 extern "C" void *nvxnu_work_alloc(void (*fn)(void *), void *arg)
 {
 	// Through void * on purpose: a direct cast trips -Wcast-function-type-mismatch. thread_call passes a second
 	// argument, which fn ignores.
 	void *const entry = reinterpret_cast<void *>(fn);
-	return thread_call_allocate(reinterpret_cast<thread_call_func_t>(entry), arg);
+	return thread_call_allocate_with_options(reinterpret_cast<thread_call_func_t>(entry), arg,
+						 THREAD_CALL_PRIORITY_HIGH,
+						 THREAD_CALL_OPTIONS_ONCE);
 }
 
 extern "C" void nvxnu_work_schedule(void *w)
@@ -615,10 +624,9 @@ extern "C" void nvxnu_work_schedule(void *w)
 		thread_call_enter(static_cast<thread_call_t>(w));
 }
 
-extern "C" void nvxnu_work_cancel_wait(void *w)
+extern "C" int nvxnu_work_cancel_wait(void *w)
 {
-	if (w)
-		thread_call_cancel_wait(static_cast<thread_call_t>(w));
+	return w ? static_cast<int>(thread_call_cancel_wait(static_cast<thread_call_t>(w))) : 0;
 }
 
 extern "C" void nvxnu_work_schedule_after(void *w, nvxnu_u64 ns)

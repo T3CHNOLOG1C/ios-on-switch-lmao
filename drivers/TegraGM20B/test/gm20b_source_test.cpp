@@ -740,3 +740,22 @@ TEST(GM20BChannelSource, SeqnoCursorsStartAtTheSlotsFence)
 			    HasSubstr(std::string("chan->") + cursor + " = chan->submitted;"))
 			<< cursor;
 }
+
+// Linux's work items, as XNU thread calls: never two runs of one at once (THREAD_CALL_OPTIONS_ONCE), a flush runs one
+// still queued, and irqs_disabled() answers.
+TEST(GM20BShimSource, WorkItemsKeepLinuxSemantics)
+{
+	const std::string glue = SourceText("../shim/xnu_glue.cpp");
+	EXPECT_THAT(flat(definition(
+			    glue,
+			    "extern \"C\" void *nvxnu_work_alloc(void (*fn)(void *), void *arg)")),
+		    HasSubstr("THREAD_CALL_OPTIONS_ONCE"));
+	EXPECT_THAT(flat(definition(glue, "extern \"C\" int nvxnu_irqs_enabled(void)")),
+		    HasSubstr("ml_get_interrupts_enabled()"));
+	const std::string os = flat(SourceText("../shim/include/nvif/os.h"));
+	EXPECT_THAT(os,
+		    HasSubstr("static inline bool flush_work(struct work_struct *w) { if "
+			      "(!nvxnu_work_cancel_wait(w->thread_call)) return false; w->func(w); "
+			      "return true; }"));
+	EXPECT_THAT(os, HasSubstr("#define irqs_disabled() (!nvxnu_irqs_enabled())"));
+}
