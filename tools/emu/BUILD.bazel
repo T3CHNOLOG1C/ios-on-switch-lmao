@@ -98,6 +98,12 @@ py_test(
     deps = [":boot_lib"],
 )
 
+py_test(
+    name = "msgbuf_test",
+    srcs = ["msgbuf_test.py"],
+    deps = [":emu_lib"],
+)
+
 # bazel run //tools/emu:boot -- --kind=ios17|ios27 [--sd IMAGE] [--seconds N] (README.md).
 py_library(
     name = "boot_lib",
