@@ -149,18 +149,4 @@ static bool faceWritesStencil(const raw::StencilFace &f)
     (void)logs;
 }
 
-// The agents a signal is for and the time a wait gives up after are Apple's GPU scheduler's: a signal is every agent's here, and
-// a wait the CPU holds gives up after waitEvents' limit
-- (void)encodeSignalEvent:(id<MTLEvent>)event value:(uint64_t)value agentMask:(uint64_t)mask
-{
-    (void)mask;
-    [(id<MTLCommandBuffer>)self encodeSignalEvent:event value:value];
-}
-
-- (void)encodeWaitForEvent:(id<MTLEvent>)event value:(uint64_t)value timeout:(uint32_t)milliseconds
-{
-    (void)milliseconds;
-    [(id<MTLCommandBuffer>)self encodeWaitForEvent:event value:value];
-}
-
 @end

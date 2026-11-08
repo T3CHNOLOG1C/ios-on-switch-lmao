@@ -12,11 +12,12 @@
 // buffer k: value k + 1) and signals the next value after its last, as Core Animation's per-surface events do. The first waits
 // for the host, which writes the chain's first link only then and signals: a first segment run before the signal copies the
 // old bytes down the chain (BROKEN). Each signal must come with its command buffer's last link written, in order, and the event
-// end at the last value.
+// end at the last value; then a wait with a 50 ms timeout for a value nothing signals goes on after the timeout.
 // usage: NVK_COPIES=ce splitframe <pack> <cache> <nvk host dylib> [command buffers per thread] (NVK_COPIES=ce: m2v's copies on
 // the copy engine, which the mock runs; its shader copies it does not, and every chain through m2v would read as broken)
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
+#import <objc/message.h>
 #include <atomic>
 #include <memory>
 #include <cstring>
@@ -217,7 +218,22 @@ int main(int argc, char **argv)
         if (raw_metal_rates(line, sizeof line))
             printf("rates: %s\n", line);
         const bool handlers = scheduledRan.load() == threads * count && completedRan.load() == threads * count;
-        const bool ordered = !events || (signalled && !early.load() && notified.load() == threads * count);
+        double timedMs = 0;
+        if (events) {
+            id<MTLCommandBuffer> cb = [q commandBuffer];
+            ((void (*)(id, SEL, id, uint64_t, uint32_t))objc_msgSend)(
+                cb, sel_registerName("encodeWaitForEvent:value:timeout:"), [dev newSharedEvent], 1, 50);
+            id<MTLBlitCommandEncoder> e = [cb blitCommandEncoder];
+            [e copyFromBuffer:chains[0].links[0] sourceOffset:0 toBuffer:chains[0].a[0] destinationOffset:0 size:bytes];
+            [e endEncoding];
+            const double from = nowMs();
+            [cb commit];
+            [cb waitUntilCompleted];
+            timedMs = nowMs() - from;
+            printf("a wait with a 50 ms timeout for a value never signalled: completed after %.1f ms\n", timedMs);
+        }
+        const bool ordered = !events || (signalled && !early.load() && notified.load() == threads * count &&
+                                         timedMs >= 50 && timedMs < 1000);
         return intact && handlers && ordered && !errors.load() && !misordered.load() ? 0 : 1;
     }
 }
