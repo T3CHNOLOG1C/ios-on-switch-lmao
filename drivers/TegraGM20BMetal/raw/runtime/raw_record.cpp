@@ -313,8 +313,9 @@ bool handleEntry(const LayoutEntry &e, const nvdec::ProbeRecord &r, const PackRu
         p.slot = e.texSlot;
         break;
     case Tex::Texture3D:
-        why = "a texture3d argument, and the raw path has no 3D textures";
-        return false;
+        p.kind = EntryTexture3d;
+        p.slot = kNoSlot;
+        break;
     case Tex::Unknown:
         why = "texture unidentified";
         return false;
@@ -461,8 +462,8 @@ bool makeRecord(const ProbeRuns &runs, const PackRules &rules, const ProgramLook
     std::vector<LayoutEntry> layoutEntries;
     if (!layout(s, runs.index, layoutEntries, why))
         return false;
-    if (layoutEntries.size() > 16) {
-        why = "more than 16 set-0 entries";
+    if (layoutEntries.size() > kPackEntries) {
+        why = "more than 32 set-0 entries";
         return false;
     }
     PackPipeline &p = out.pipeline;

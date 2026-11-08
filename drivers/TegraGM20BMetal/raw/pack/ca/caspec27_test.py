@@ -51,6 +51,17 @@ class States27(unittest.TestCase):
         self.assertEqual(caspec.state_line(self.tables, 'PBGRABsovXmw_TgbhA3Xhf_Isrc_Isrc'), GLASS)
         self.assertEqual(caspec.state_line(self.tables, 'PRGhAXm_Tds4A2Xhf_Isrc'), DOWNSAMPLE)
 
+    def test_generic_manifest_states_are_in_the_pack(self):
+        generic = [m[0] for m in self.tables.t['manifest'] if 'Xg' in m[0]]
+        self.assertEqual(len(generic), 19)
+        manifest = caset.labels(self.tables, [], ('manifest',))['manifest']
+        for name in generic:
+            self.assertIn(name, manifest)
+            line = caspec.state_line(self.tables, name)
+            self.assertIn(' | v fixed_vert_lph_gen fc_base_color:53:00 fc_generic:53:01 ', line)
+            self.assertIn(' | f fixed_frag_lph_cpf ', line)
+            self.assertNotIn(' a0=', line)
+
     def test_every_tier_state_is_one_the_library_declares(self):
         declared = self.tables.t['functions']
         checked = 0

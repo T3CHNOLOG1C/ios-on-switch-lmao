@@ -2942,6 +2942,22 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
     return true;
 }
 
+// The lowest fragment texture index with a texture bound that none of the state's 2D texture entries names, -1 when there
+// is none: what a texture3d argument (whose index the record does not know) may sample. Its handle stays 0 while it is -1.
+static int strayTexture(const PackPipeline &r, const Texture *const (&textures)[16])
+{
+    uint32_t named = 0;
+    for (uint32_t i = 0; i < r.entries; i++) {
+        if (r.entry[i].kind == EntryTexture && r.entry[i].slot < 16)
+            named |= 1u << r.entry[i].slot;
+    }
+    for (int k = 0; k < 16; k++) {
+        if (textures[k] && !(named >> k & 1))
+            return k;
+    }
+    return -1;
+}
+
 bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uint32_t vFirst, uint32_t vCount,
                             uint32_t baseInstance, bool indexed, const char **why)
 {
@@ -3096,6 +3112,13 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                 return false;
             }
             tic = t ? t->tic : 0;
+        } else if (e.kind == EntryTexture3d) {
+            const int stray = strayTexture(r, textures_);
+            if (stray >= 0) {
+                *why = "a texture bound where the state may take it as a texture3d argument";
+                cb_->refusal = {RefNoTic, uint32_t(stray), textures_[stray]->format, textures_[stray]->width};
+                return false;
+            }
         }
         const uint8_t map = e.kind == EntryTexture && textures_[e.slot] ? textures_[e.slot]->addressMap : 0;
         if (e.samplerKind == SamplerSlot) {
