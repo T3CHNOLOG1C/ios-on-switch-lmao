@@ -70,8 +70,8 @@ static uint8_t live[16]; /* slots in use: a connection gets its lowest free one,
 static uint32_t kill_next;
 static uint64_t kill_next_va;
 static atomic_ulong calls[16];
-static atomic_uint fail_method, fail_left; /* mock_iokit_fail_next's */
-static atomic_int fail_kr;
+static atomic_uint fail_left[16]; /* mock_iokit_fail_next's, by method */
+static atomic_int fail_kr[16];
 static atomic_ulong import_maps;    /* VmBind map ops onto imported pages */
 static atomic_ulong kind_maps[256]; /* VmBind map ops by PTE kind */
 
@@ -425,9 +425,9 @@ static kern_return_t mock_call(mach_port_t c, uint32_t sel, const void *in, size
         return KERN_SUCCESS;
     if (sel < 16)
         atomic_fetch_add(&calls[sel], 1);
-    if (sel == atomic_load(&fail_method) && atomic_load(&fail_left)) {
-        atomic_fetch_sub(&fail_left, 1);
-        return atomic_load(&fail_kr);
+    if (sel < 16 && atomic_load(&fail_left[sel])) {
+        atomic_fetch_sub(&fail_left[sel], 1);
+        return atomic_load(&fail_kr[sel]);
     }
     switch (sel) {
     case TegraGM20BMethodGetInfo: {
@@ -783,9 +783,10 @@ void mock_iokit_kill_next_at(uint32_t error, uint64_t fault_va)
  * WaitFence that fails with no kill) */
 void mock_iokit_fail_next(unsigned method, unsigned count, int kr)
 {
-    atomic_store(&fail_kr, kr);
-    atomic_store(&fail_method, method);
-    atomic_store(&fail_left, count);
+    if (method >= 16)
+        return;
+    atomic_store(&fail_kr[method], kr);
+    atomic_store(&fail_left[method], count);
 }
 
 unsigned long mock_iokit_calls(unsigned method)

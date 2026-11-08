@@ -5602,9 +5602,14 @@ static void commitBuffer(RMCommandBuffer *cb);
 {
     SWITCH_API(ApiObject);
     id<MTLBuffer> b = [self newBufferWithLength:n options:o];
-    if (b && p && n) {
-        memcpy(((RMBuffer *)b)->_raw.cpu, p, n);  // the draws that read it clean the lines they read
+    if (!b || !p || !n)
+        return b;
+    if (![(id)b isKindOfClass:[RMBuffer class]]) {  // the pool had no room: m2v's buffer, made with the bytes
+        RMTwinObject *t = (RMTwinObject *)b;
+        t->_twin = [gRM->fallback newBufferWithBytes:p length:n options:o];
+        return t->_twin ? b : nil;
     }
+    memcpy(((RMBuffer *)b)->_raw.cpu, p, n);  // the draws that read it clean the lines they read
     return b;
 }
 
