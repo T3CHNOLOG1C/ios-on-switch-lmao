@@ -483,7 +483,7 @@ void loader_after_transition(void)
     // Verify the immutable ADT pointer in the actual destination, then commit
     // only the external reference page. The staged/kernel image stays intact.
     const volatile uint8_t *sd_bytes =
-        (const volatile uint8_t *)(uintptr_t)(LOAD_DEST + (LOAD_ADT_VA - LOAD_VIRT) + LOAD_SD_REFERENCE_ADT_OFFSET);
+        (const volatile uint8_t *)(uintptr_t)(LOAD_ADT_PA + LOAD_SD_REFERENCE_ADT_OFFSET);
     // AppleDT properties are only four-byte aligned; load individual bytes.
     uint64_t sd_address = 0, sd_size = 0;
     for (unsigned i = 0; i < 8; ++i) {
