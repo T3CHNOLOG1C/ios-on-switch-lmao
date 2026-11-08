@@ -20,7 +20,7 @@ void switch_root_record_stage(unsigned stage);
 #define switch_root_record_stage(stage)                 ((void)sizeof(stage))
 #endif
 #endif
-#if defined(SWITCH_XNU_DIAGNOSTICS) && SWITCH_XNU_DIAGNOSTICS
+#if defined(SWITCH_XNU_BOARD) && SWITCH_XNU_BOARD
 void switch_diag_early_stage(unsigned stage, const char *message);
 void switch_diag_early_leave(void);
 void switch_diag_early_fault(void) __attribute__((noreturn));
@@ -40,7 +40,7 @@ int switch_native_profile_active(void);
 #define switch_native_text_console_active()     0
 #define switch_native_profile_active()          0
 #endif
-#if defined(SWITCH_XNU_DIAGNOSTICS) && SWITCH_XNU_DIAGNOSTICS && (DEVELOPMENT || DEBUG)
+#if defined(SWITCH_XNU_BOARD) && SWITCH_XNU_BOARD && (DEVELOPMENT || DEBUG)
 void switch_diag_user_syscall(unsigned code, int error, int pid, uint64_t pc, uint64_t cpsr, int result);
 void switch_diag_stage(const char *message);
 int switch_diag_console_active(void);

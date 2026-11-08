@@ -28,7 +28,7 @@ filegroup(
 kernel_headers()
 
 _C_COPTS = [
-    "-DSWITCH_XNU_DIAGNOSTICS=1",
+    "-DSWITCH_XNU_BOARD=1",
     "-DXNU_SWITCH_VERIFIED_ROOT=1",
     "-DSWITCH_SD_MODEL=0",
     "-mgeneral-regs-only",

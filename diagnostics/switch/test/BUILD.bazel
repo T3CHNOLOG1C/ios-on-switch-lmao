@@ -22,7 +22,7 @@ host_library(
     hdrs = ["switch_diag_debug_view.h"],
     defines = [
         "DEVELOPMENT=1",
-        "SWITCH_XNU_DIAGNOSTICS=1",
+        "SWITCH_XNU_BOARD=1",
         "XNU_SWITCH_VERIFIED_ROOT=1",
     ],
 )
@@ -35,7 +35,7 @@ host_test(
     ],
     data = ["//diagnostics/switch:SwitchDiagHud.c"],
     defines = [
-        "SWITCH_XNU_DIAGNOSTICS=1",
+        "SWITCH_XNU_BOARD=1",
         "XNU_SWITCH_VERIFIED_ROOT=1",
     ],
     deps = [":debug_view"],
