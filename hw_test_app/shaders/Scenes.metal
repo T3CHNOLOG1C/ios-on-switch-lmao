@@ -31,6 +31,13 @@ fragment DualSource dual_fragment(constant float4 *colors [[buffer(0)]])
     return DualSource{colors[0], colors[1]};
 }
 
+/// gpu.xr_blend: row y's S in red, green and blue and its source1 alpha (XRBlendScene.row), colour alpha one
+fragment DualSource xr_blend_fragment(float4 position [[position]], constant float4 *rows [[buffer(0)]])
+{
+    const float4 row = rows[uint(position.y)];
+    return DualSource{float4(row.rgb, 1), float4(0, 0, 0, row.a)};
+}
+
 struct TexturedVertex {
     float4 position [[position]];
     float2 uv;
