@@ -41,6 +41,7 @@ py_library(
         "monitor.py",
         "msgbuf.py",
         "qemu.py",
+        "qtest.py",
         "report.py",
         "sdcard.py",
     ],
@@ -96,6 +97,19 @@ py_test(
         "check_test.py",
     ],
     deps = [":boot_lib"],
+)
+
+# Display controller A and the SMMU of the patched tegra_qemu under qtest. It runs the shared emulator build (built
+# first if this Mac has none), so it runs outside the sandbox; a Mac that cannot build tegra_qemu skips it.
+py_test(
+    name = "dc_test",
+    timeout = "long",
+    srcs = ["dc_test.py"],
+    tags = [
+        "local",
+        "requires-darwin",
+    ],
+    deps = [":emu_lib"],
 )
 
 py_test(

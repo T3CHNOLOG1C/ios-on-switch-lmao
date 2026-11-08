@@ -78,12 +78,19 @@ def _run(args: list, log: Path, cwd: Path | None = None) -> None:
         sys.exit(f'tegra_qemu build failed ({log}):\n' + '\n'.join(tail))
 
 
-def _check_host() -> None:
+def host_missing() -> str | None:
+    """Return what this Mac lacks to build tegra_qemu, or None."""
     missing = [f for f in BREW_FORMULAE if not (BREW / 'opt' / f).exists()]
     if missing:
-        sys.exit('tegra_qemu needs Homebrew formulae: brew install ' + ' '.join(missing))
+        return 'tegra_qemu needs Homebrew formulae: brew install ' + ' '.join(missing)
     if not shutil.which('uv'):
-        sys.exit('tegra_qemu needs uv (https://docs.astral.sh/uv/) for its build-time Python')
+        return 'tegra_qemu needs uv (https://docs.astral.sh/uv/) for its build-time Python'
+    return None
+
+
+def _check_host() -> None:
+    if missing := host_missing():
+        sys.exit(missing)
 
 
 def _source(base: Path, log: Path) -> Path:
