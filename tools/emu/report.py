@@ -3,6 +3,7 @@
 import re
 import struct
 import zlib
+from collections.abc import Sequence
 from pathlib import Path
 
 from tools.emu import gpulog, msgbuf
@@ -18,9 +19,9 @@ def capture(monitor: Monitor, run: Path, kernel: Path | None) -> None:
     monitor.command('stop')
     registers = monitor.human('info registers -a')
     (run / 'registers.txt').write_text(registers)
-    live = msgbuf.read(monitor, kernel, registers) if kernel else None
-    if live:
-        (run / 'msgbuf.raw').write_bytes(live)
+    ring = msgbuf.read(monitor, kernel, registers)
+    if ring:
+        (run / 'msgbuf.raw').write_bytes(ring.data)
     monitor.command('pmemsave', val=RAMOOPS[0], size=RAMOOPS[1], filename=str(run / 'ramoops.raw'))
     monitor.command('pmemsave', val=FRAMEBUFFER[0], size=FRAMEBUFFER[1], filename=str(run / 'framebuffer.raw'))
     try:
@@ -63,10 +64,15 @@ def program_counters(registers: str) -> list[str]:
     return re.findall(r'PC=([0-9a-f]+)', registers)[:4]
 
 
-def summarize(run: Path) -> str:
+def summarize(run: Path, polled: Sequence[str] = ()) -> str:
+    """Write and return the run's summary.
+
+    `polled` are log lines read during the run, which the capture at its end misses when no core is in the kernel then
+    (all of them idle in bl31).
+    """
     ramoops = (run / 'ramoops.raw').read_bytes()
     live = run / 'msgbuf.raw'
-    log = kernel_log(live.read_bytes() if live.exists() else ramoops)
+    log = sorted(set(kernel_log(live.read_bytes() if live.exists() else ramoops)).union(polled))
     (run / 'kernel.log').write_text('\n'.join(log) + '\n')
     panic = panic_text(ramoops)
     if panic:

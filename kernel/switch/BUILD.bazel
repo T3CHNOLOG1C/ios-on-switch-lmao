@@ -38,6 +38,7 @@ filegroup(
     name = "headers",
     srcs = glob(["**/*.h"]) + [
         "//boot:loader/ram.h",
+        "//kits/SwitchCDHash:switch_cdhash.h",
         "//kits/SwitchIdle:switch_idle.h",
         "//kits/SwitchIdle:switch_idle_governor.h",
         "//kits/SwitchPretranslated:switch_pretranslated.h",

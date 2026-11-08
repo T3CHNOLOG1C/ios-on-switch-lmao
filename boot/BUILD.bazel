@@ -107,7 +107,7 @@ write_file(
 boot_package(
     name = "package",
     adt = ":adt",
-    app_trust = "//ipsw:app_cryptex_trust_cache",
+    app_trust = "//ipsw:app_cryptex_trust",
     bl31 = "//bazel/pinned:firmware/bl31.bin",
     bl33 = "//bazel/pinned:firmware/bl33.bin",
     bootlogo = "//boot/logo:bootlogo.bmp",
@@ -205,7 +205,8 @@ boot_package(
         "//install:from_release": ":release_smp",
         "//conditions:default": ":smp",
     }),
-    static_trust = "//ipsw:static_system_trust",
+    static_trust = "//ipsw:static_trust",
+    system_trust = "//ipsw:system_cryptex_trust",
     xcode_env = select({
         "//install:from_release": None,
         "//conditions:default": "@xcode//:xcode.env",

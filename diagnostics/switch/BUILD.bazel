@@ -32,6 +32,7 @@ kernel_driver(
     name = "SwitchDiag",
     srcs = [
         "SwitchDiag.c",
+        "SwitchPanicEarly.c",
         "SwitchPanicSave.c",
         "SwitchPowerTrail.c",
         "SwitchFiles.c",

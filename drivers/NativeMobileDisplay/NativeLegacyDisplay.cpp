@@ -54,7 +54,6 @@ extern "C" void native_legacy_frame_end_release(void);
 // The last swap Core Animation offered (validateSwap, accepted or not; mach time): while swaps keep coming CA is
 // animating, and TegraGM20B's idle clock never drops the GPU (native_display_last_swap_ns below).
 static uint64_t gLastSwapAbs;
-extern "C" __attribute__((noreturn)) void native_legacy_backend_guard(unsigned, void *, void *);
 extern "C" IOService *native_legacy_display_allocate(void);
 extern "C" bool native_legacy_gop_mapping_observed(IOService *, IOMemoryMap *, uint32_t, uint32_t);
 extern "C" void native_legacy_registration_observed(IOService *);
@@ -946,6 +945,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     IOTimerEventSource *flipTimer =
         nullptr;  // a flip's deadline: a lost DC A interrupt would otherwise stall the screen
     static constexpr unsigned kFlipDeadlineMS = 100;
+    bool settleArmed = false;  // flipTimer is armed to settle requests the stopped scanout cannot take (settleStopped)
     // XNU's console tape (startConsoleTape), from start until the first client frame scans: the pages, their write-combined view
     // and physical address, and whether the console draws there (window A scans it; read by the filter and the console's wait).
     switch_dma_buffer tapeBuffer = {};
@@ -2391,6 +2391,15 @@ private:
     // taken by the filter but not yet handled (the gate was busy, e.g. with a copy) only moves the deadline.
     void checkFlipDeadline()
     {
+        if (settleArmed) {
+            settleArmed = false;
+            if (!scanoutStopped) {
+                flipTimer->setTimeoutMS(kFlipDeadlineMS);  // restarted before the settle: the deadline runs from now
+            } else if (!hwSuspended && !gPanicRestore.panicking) {
+                settleStopped();
+            }
+            return;
+        }
         // r18-planes: a window B set still out counts while planes are on; once they are off it is planeFrameEnd's alone
         // (one line, never a panic: a path that has not run on hardware).
         if ((ring.pending == kNoBuffer && !probeRequest && !(planesOn && planeLatch.requested())) || hwSuspended ||
@@ -2554,7 +2563,17 @@ private:
         if (SWITCH_FRAME_TIMELINE)
             KDBG(SWITCH_KDBG_CODE(SWITCH_KDBG_FLIP), surfaceAddress(i));
         flipRequested = frameEnds;  // a replaced flip's boundary is this one's too
-        flipTimer->setTimeoutMS(kFlipDeadlineMS);
+        armFlipDeadline();
+    }
+
+    // Under the gate, a request just written: checkFlipDeadline looks at it kFlipDeadlineMS from now, or settles it at once while the
+    // scanout is stopped.
+    void armFlipDeadline()
+    {
+        if (!flipTimer)
+            return;
+        settleArmed = scanoutStopped;
+        flipTimer->setTimeoutMS(scanoutStopped ? 0 : kFlipDeadlineMS);
     }
 
     // Under the gate, a block-linear frame complete in drawSurface(): the first one switches window A to the rotated layout (and,
@@ -2872,8 +2891,39 @@ private:
             // the last flip of every burst. The next writeFlip arms it again.
         } else if (ring.pending == kNoBuffer && !probeRequest && flipTimer) {
             flipTimer->cancelTimeout();
+            settleArmed = false;
         }
         if (kickDeferred) {
+            kickDeferred = false;
+            kickSwapQueue();
+        }
+    }
+
+    // Under the gate, with the scanout stopped (display power off): no boundary takes a request until the restart, whose first
+    // boundary takes the newest one. Every request written is therefore as shown as it will get: both windows' models take it now,
+    // and the swaps taken up to it retire instead of waiting for a latch only the restart brings (IOMFB's swap wait gives up on a
+    // swap after 5 s and cancels the queue).
+    // NOLINTNEXTLINE(misc-no-recursion): kickSwapQueue's kicking flag stops re-entry; a nested kick only loops
+    void settleStopped()
+    {
+        const int asked = ring.pending;
+        uint64_t seq = asked != kNoBuffer ? entrySeq[asked] : 0;
+        ring.settle();
+        if (planeLatch.requested()) {
+            planeLatch.settle();
+            const uint64_t planeSeq = planeSetOf(planeLatch.active).seq;
+            seq = planeSeq > seq ? planeSeq : seq;
+        }
+        if (seq)
+            retireThrough(seq, mach_absolute_time());
+        if (planeHeldSet && planeLatch.mayWrite()) {
+            planeHeldSet = false;
+            planeFlipOnly(planeHeld);
+        }
+        planeReleaseIdle();
+        if (asked != kNoBuffer) {
+            flipLatched();
+        } else if (kickDeferred) {
             kickDeferred = false;
             kickSwapQueue();
         }
@@ -3215,6 +3265,8 @@ public:
         scanoutStopped = !on;
         if (on)
             writeIntMask(0, kFrameEndInt | (vsyncArmed ? kVblankInt : 0));
+        else
+            armFlipDeadline();  // what is in flight now settles
         if (!on && tapeAttached)
             thread_wakeup((event_t)&tapeFrames);  // no frame end comes now: the console scrolls without one
         return true;
@@ -5150,16 +5202,60 @@ public:
             frameInfo->clients.change(client, 0);
     }
 
-#define LEAF(name, n)                                                      \
-    __attribute__((noreturn, noinline)) void name() override               \
-    {                                                                      \
-        native_legacy_backend_guard(n, this, __builtin_return_address(0)); \
+    // DC A's timing generator, which display power (setScanout) and SC7 stop.
+    bool areTimingsEnabled() const override
+    {
+        if (SWITCH_FRAME_TIMELINE)
+            logHeldHead();
+        return dc && !scanoutStopped && !hwSuspended;
     }
-    LEAF(platformInternalPlug, 245)
-    LEAF(platformInternalUnplug, 246)
-    LEAF(platformRefreshRates, 338)
-    LEAF(platformIdleWithoutClients, 345)
-#undef LEAF
+
+    // Debug kernels. IOMFB asks for the timing state when a swap wait has gone 5 s without a completion (swap_wait_gated, just
+    // before it cancels the queue) and when its last client goes away: a swap at the queue head for over a second then gets one
+    // line of what holds it.
+    void logHeldHead() const
+    {
+        const OriginalLegacySwapRequest *head = pendingSwapRequest();
+        if (!head)
+            return;
+        const uint64_t accepted = submittedAt(head);
+        const uint64_t now = mach_absolute_time();
+        uint64_t second = 0;
+        nanoseconds_to_absolutetime(1000000000ULL, &second);
+        if (accepted && now - accepted < second)
+            return;
+        uint32_t id = 0;
+        memcpy(&id, reinterpret_cast<const unsigned char *>(head) + swapId, sizeof(id));
+        IOLog(
+            "SwitchDisplay: swap %u held at the queue head %llu ms (accepted %d, taken %llu of %llu): transferred %d, "
+            "deferred %d (probe %d, plane probe %d, column scan %d, tape %d, no surface %d), ring front %d pending %d "
+            "replaced %d drawing %d held %d, latch retire %d, direct %d, planes %d (armed %d, held %d), gpu %d%s, "
+            "copy %d%s, scanout %s, %llu frame ends, %llu since the last flip\n",
+            id, accepted ? static_cast<unsigned long long>(ticksNs(now - accepted) / 1000000) : 0ULL, isValidated(head),
+            static_cast<unsigned long long>(seqOf(head)), static_cast<unsigned long long>(takeSeq), transferred,
+            kickDeferred, probe.active() || probeRequest, planeProbe.active(), columnScanBusy(), tapeSettle,
+            ring.target() == kNoBuffer, ring.front, ring.pending, ring.superseded, ring.drawing, ring.held, latchRetire,
+            directOn, planesOn, planeLatch.armed, planeHeldSet, gpuRequest != nullptr,
+            gpuRequest == head ? " (this swap)" : "", copyQueued,
+            copyQueued && job.request == head ? " (this swap)" : "",
+            hwSuspended ? "suspended" : (scanoutStopped ? "stopped" : "running"),
+            static_cast<unsigned long long>(frameEnds), static_cast<unsigned long long>(frameEnds - flipRequested));
+    }
+
+    // As J120's AppleCLCD and J181's UnifiedPipeline answer: the internal panel is never plugged or unplugged, and it has
+    // one refresh rate.
+    IOReturn platformInternalPlug() override
+    {
+        return kIOReturnUnsupported;
+    }
+
+    IOReturn platformInternalUnplug() override
+    {
+        return kIOReturnUnsupported;
+    }
+
+    void platformRefreshRates() override
+    {}
 };
 
 // OSDefineMetaClassAndStructors(NativeLegacyDisplay, IOMobileFramebufferLegacy), registered under the class name of J120's

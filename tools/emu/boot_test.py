@@ -56,6 +56,7 @@ class BuildPackageTest(unittest.TestCase):
             self.assertIn('--//ipsw:kind=24B119', rest, verb)
             self.assertIn('--config=agent', rest, verb)
         self.assertEqual([verb for verb, _ in self.bazel.calls], ['build', 'info', 'cquery', 'cquery'])
+        self.assertEqual(self.bazel.calls[0][1][-2:], ['//:boot', '//kernel:prelinked'])
 
     def test_every_kind_has_a_build(self):
         for kind in boot.KINDS:

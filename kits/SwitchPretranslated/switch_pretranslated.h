@@ -434,7 +434,7 @@ struct switch_pt_trust_facts {
 };
 
 /* A file of the tree counts as authenticated, as a sealed volume's file does, only if it is listed, a root:wheel
- * regular file nobody else can write, its CDHash both in the trust module pinned for this tree and equal to the one
+ * regular file nobody else can write, its CDHash both in the boot package's list for this tree and equal to the one
  * its own index entry carries, so no trusted binary stands in at another listed path. */
 static inline bool switch_pt_trusted(const struct switch_pt_trust_facts *facts)
 {

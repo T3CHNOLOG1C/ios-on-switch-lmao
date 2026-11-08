@@ -114,6 +114,11 @@ struct a64x_code_map {
     void *ctx;
     bool (*is_code)(void *ctx, uint64_t va); /* is the word at va inside an instruction section? */
     uint32_t flags;                          /* A64X_MAP_* */
+    /*
+     * Is the word at va entered other than by falling into it (a branch, a jump table, a landing pad, a pointer)?
+     * Only stub placement asks (a64x_dead_checks' holes); NULL where nothing is placed.
+     */
+    bool (*is_target)(void *ctx, uint64_t va);
 };
 
 /*
@@ -156,10 +161,25 @@ uint32_t a64x_translate_page(const uint32_t *in, uint32_t *out, uint32_t nwords,
 
 /*
  * Dead PAC failure checks -> `b ok` (see a64x_image.c). Returns how many; hole() gets each freed run (word index in
- * the page, length). The kernel and the cache planner use this same function on the same 4 KB pages.
+ * the page, length) that nothing enters (code->is_target). The kernel and the cache planner use this same function on
+ * the same 4 KB pages.
  */
 uint32_t a64x_dead_checks(const uint32_t *in, uint32_t *out, uint32_t n, uint64_t va, const struct a64x_code_map *code,
                           void (*hole)(void *ctx, uint32_t index, uint32_t nwords), void *hctx);
+
+/*
+ * The code addresses the word w[i] (at va + 4 * i) refers to: a direct branch's target (B, BL, B.cond, CBZ/CBNZ,
+ * TBZ/TBNZ), an ADR's, or an ADRP's page plus the ADD of its register among the next four words. Returns how many
+ * went to out (0 or 1). a64x_refs.c, host tools only.
+ */
+uint32_t a64x_code_refs(const uint32_t *w, uint32_t n, uint32_t i, uint64_t va, uint64_t out[1]);
+/*
+ * The arm64e hardened jump table whose BR x16 is w[8] (w[0..7]: the eight words before it, br_va - 32 up):
+ *   [mov x17, #N] cmp x16, #N | csel x16, x16, xzr, ls | adrp x17, T | add x17, x17, T | ldrsw x16, [x17, x16, lsl #2]
+ *   | adr x17, B | add x16, x17, x16 | br x16
+ * Its targets are B + (int32)T[i], i = 0..N. false if w is no such dispatch; *count is 0 when its bound is neither form.
+ */
+bool a64x_jump_table(const uint32_t w[9], uint64_t br_va, uint64_t *table, uint64_t *base, uint64_t *count);
 
 struct a64x_islands {
     uint8_t *data;         /* out: 1 bit per word of the image's executable segment, set = data (zeroed by caller) */
@@ -167,9 +187,17 @@ struct a64x_islands {
     uint64_t piece, pnun;  /* open piece: first word, unallocated words in it */
     bool open, sticky;
     uint64_t runs, words; /* stats: data runs and words found */
+    uint64_t tail;        /* the open piece's first word after its last call (BL, BLR) */
+    uint32_t last;        /* the open piece's last word */
 };
 
 bool a64x_unallocated(uint32_t w);
+/*
+ * Whether code can stop at w and have padding (a zero or UDF word) or the end of the section next: w ends its block
+ * unconditionally (B, BR, RET, BRK) or calls (BL, BLR) a function that does not return. Code never runs into padding,
+ * so a run of words that does is data, whatever its words decode as.
+ */
+bool a64x_ends_code(uint32_t w);
 /* feed words [first, first + n) of the segment (va of the first one, code map as for translation), in order */
 void a64x_islands_page(struct a64x_islands *is, const uint32_t *w, uint32_t n, uint64_t first, uint64_t va,
                        const struct a64x_code_map *code);

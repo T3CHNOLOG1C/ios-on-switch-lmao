@@ -6,8 +6,7 @@ The iPad's identity (model, board, SoC, /product) is read from Apple's device tr
 --smp, all four A57s.
 
     adt_edit.py --adt BASE --apple-adt APPLE --overlay-plan PLAN --bt-patch HCD --portrait-header H
-                --root-volume-uuid UUID [--smp] [--a64x-cache-pretranslated LIST] [--switch-pretranslated-trust MODULE]
-                --out ADT
+                --root-volume-uuid UUID [--smp] [--a64x-cache-pretranslated LIST] [--cdhashes ROLE=MODULE]... --out ADT
 """
 
 import argparse
@@ -27,6 +26,8 @@ from loader_abi import (
 )
 from native_oled_adt import property_bytes, root_matching
 from native_xnu_layout import parse_adt
+
+from tools.trustcache.trustcache import cdhash_list
 
 # USB 2.0 device mode on the USB-C port (drivers/SwitchUSB): the USB function set configd's USBDeviceConfiguration
 # plug-in gives Apple's IOUSBDeviceFamily, by name from /System/Library/AppleUSBDevice/USBDeviceConfiguration.plist.
@@ -430,17 +431,26 @@ def with_a64x_cache_pretranslated(data: bytes, cache: bytes) -> bytes:
     return adt_serialize(tree)
 
 
-def with_switch_pretranslated_trust(data: bytes, module: bytes) -> bytes:
-    """Return the ADT with iOS 27's /chosen/switch-pretranslated-trust.
+# The roles whose files the kernel authenticates by CDHash (kernel/switch/vfs/auth_fs.c, pretranslated.c): the System
+# and App cryptexes' mounts and iOS 27's pretranslated tree.
+CDHASH_ROLES = ('os-cryptex', 'app-cryptex', 'pretranslated')
 
-    That is the UUID of the trust module of the System volume's translated executables (the os role's), which the
-    kernel's lookup redirect requires loaded and checks each such executable's CDHash against
-    (bsd/vfs/vfs_switch_pretranslated.c).
+
+def with_cdhash_lists(data: bytes, modules: dict[str, Sequence[bytes]]) -> bytes:
+    """Return the ADT with /chosen/switch-<role>-cdhashes: the CDHashes of each role's trust modules, ascending.
+
+    Every module is also in the bundle's one static module (trust.py); the kernel finds a file's CDHash in its role's
+    list by binary search (kits/SwitchCDHash).
     """
-    if len(module) < 24 or struct.unpack_from('<I', module)[0] != 2:
-        raise SystemExit(f'switch-pretranslated-trust: {len(module)} bytes, not a version 2 trust module')
     tree, _ = adt_parse(data)
-    put(child(tree, 'chosen'), 'switch-pretranslated-trust', module[4:20])
+    chosen = child(tree, 'chosen')
+    for role, role_modules in modules.items():
+        if role not in CDHASH_ROLES:
+            raise SystemExit(f'--cdhashes: unknown role {role}')
+        listed = cdhash_list(role_modules)
+        if not listed:
+            raise SystemExit(f'switch-{role}-cdhashes: no CDHashes')
+        put(chosen, f'switch-{role}-cdhashes', listed)
     return adt_serialize(tree)
 
 
@@ -452,7 +462,9 @@ def main() -> None:
     parser.add_argument('--smp', action='store_true')
     parser.add_argument('--boot-manifest-hash', action='store_true', help='a zeroed slot the layout step fills')
     parser.add_argument('--a64x-cache-pretranslated', type=Path)
-    parser.add_argument('--switch-pretranslated-trust', type=Path)
+    parser.add_argument(
+        '--cdhashes', action='append', default=[], metavar='ROLE=MODULE', help='a trust module of a role, repeatable'
+    )
     args = parser.parse_args()
     dirs = [tuple(d) for d in json.loads(args.overlay_plan.read_text())['dirs']]
     adt = ipad_adt(
@@ -468,8 +480,12 @@ def main() -> None:
         adt = with_boot_manifest_hash_slot(adt)
     if args.a64x_cache_pretranslated:
         adt = with_a64x_cache_pretranslated(adt, args.a64x_cache_pretranslated.read_bytes())
-    if args.switch_pretranslated_trust:
-        adt = with_switch_pretranslated_trust(adt, args.switch_pretranslated_trust.read_bytes())
+    if args.cdhashes:
+        modules = {}
+        for given in args.cdhashes:
+            role, _, path = given.partition('=')
+            modules.setdefault(role, []).append(Path(path).read_bytes())
+        adt = with_cdhash_lists(adt, modules)
     if ('/filesystems', 'DoNotUseSEP') not in parse_adt(adt).properties:
         raise SystemExit('ADT patch failed')
     args.out.write_bytes(adt)

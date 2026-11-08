@@ -9,6 +9,8 @@ from types import ModuleType
 import native_oled_adt
 from python.runfiles import runfiles
 
+from tools.trustcache.trustcache import trust_module
+
 
 def load_adt_edit() -> ModuleType:
     path = runfiles.Create().Rlocation('_main/tools/package/adt_edit.py')
@@ -130,6 +132,31 @@ class Capabilities(unittest.TestCase):
         self.assertIn('function-button_volup', buttons)
         self.assertNotIn('function-button_halleffect', buttons)
         self.assertEqual(properties(find(tree, 'product', 'maps'))['3d-maps'], struct.pack('<I', 0))
+
+
+def h(n: int) -> bytes:
+    return bytes([n]) * 20
+
+
+class CdhashLists(unittest.TestCase):
+    def test_each_role_lists_its_modules_cdhashes_ascending_and_once(self):
+        adt_edit = load_adt_edit()
+        system, translated = trust_module([h(9), h(3)]), trust_module([h(3), h(5)])
+        adt = adt_edit.with_cdhash_lists(
+            adt_edit.ipad_adt(switch_tree()),
+            {'os-cryptex': [system, translated], 'app-cryptex': [trust_module([h(1)])]},
+        )
+        chosen = properties(find(adt_edit.adt_parse(adt)[0], 'chosen'))
+        self.assertEqual(chosen['switch-os-cryptex-cdhashes'], h(3) + h(5) + h(9))
+        self.assertEqual(chosen['switch-app-cryptex-cdhashes'], h(1))
+        self.assertNotIn('switch-pretranslated-cdhashes', chosen)
+
+    def test_refuses_what_is_not_a_trust_module_an_unknown_role_or_an_empty_list(self):
+        adt_edit = load_adt_edit()
+        adt = adt_edit.ipad_adt(switch_tree())
+        for modules in ({'os-cryptex': [b'\x01' * 24]}, {'kernel': [trust_module([h(1)])]}, {'os-cryptex': []}):
+            with self.subTest(modules=modules), self.assertRaises((SystemExit, ValueError)):
+                adt_edit.with_cdhash_lists(adt, modules)
 
 
 if __name__ == '__main__':
