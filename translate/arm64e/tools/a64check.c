@@ -119,7 +119,7 @@ static int check_image(const uint8_t *base, uint64_t mh_off, uint64_t slice_off,
         puts("  loader: cannot lay out (not one executable segment)");
         return 1;
     }
-    struct a64x_code_map cm = {NULL, is_code, kernel ? A64X_MAP_KERNEL : subtype == 2 ? 0 : A64X_MAP_NO_PAC};
+    struct a64x_code_map cm = {NULL, is_code, kernel ? A64X_MAP_KERNEL : subtype == 2 ? 0 : A64X_MAP_NO_PAC, NULL};
     /* data islands exactly as the kernel finds them for an image without a plan (a64x_find_islands) */
     uint64_t nw_seg = (exec_size + 4095) / 4096 * 1024;
     uint8_t *fsb = calloc(nw_seg / 8 + 1, 1);

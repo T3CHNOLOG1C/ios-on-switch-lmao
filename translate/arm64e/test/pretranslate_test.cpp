@@ -319,6 +319,55 @@ TEST(Pretranslate, AStubLongerThanEveryHoleIsSplitOverSeveral)
     EXPECT_GT(holes, 1u) << "the stub spans several holes";
 }
 
+// A tail-call LR check shared with an unsigned early return (libsystem_trace's _logDestructor in iOS 27): the CBZ enters
+// the check at its EOR, so those words stay live and no stub piece may go there; the other checks still take theirs.
+// Holes are taken from the end of the segment first, so the entered check is there.
+constexpr uint32_t kWords = (kSeg - kTextOff) / 4, kEntered = kWords - 7;
+
+Spec shared_check()
+{
+    Spec s;
+    s.code.assign(kWords, kAdd);
+    s.code[0] = kCasal;
+    s.code[1] = kRet;
+    const uint32_t lr_check[] = {kAutibsp, 0xCA1E07D0, 0xB6F00050, 0xD4388E20, kRet};
+    for (uint32_t f = 2; f + 5 <= kEntered; f += 5)
+        memcpy(&s.code[f], lr_check, sizeof(lr_check));
+    const uint32_t entered[] = {0xB4000040, kAutibsp, 0xCA1E07D0, 0xB6F00050, 0xD4388E20, kRet, kRet};  // cbz x0, . + 8
+    memcpy(&s.code[kEntered], entered, sizeof(entered));
+    s.starts = {0, 2, kEntered};
+    return s;
+}
+
+TEST(Pretranslate, NoStubWordGoesWhereABranchEntersACheck)
+{
+    Result x;
+    run(shared_check(), x);
+    ASSERT_EQ(x.r.status, A64X_PT_TRANSLATED) << x.r.why;
+    EXPECT_EQ(x.verified, 1) << x.err;
+    EXPECT_EQ(text(x, kEntered), 0xB4000040u);
+    EXPECT_EQ(text(x, kEntered + 1), 0x14000004u) << "the check still passes by construction";
+    EXPECT_EQ(text(x, kEntered + 2), 0xCA1E07D0u);
+    EXPECT_EQ(text(x, kEntered + 3), 0xB6F00050u);
+    EXPECT_EQ(text(x, kEntered + 4), 0xD4388E20u);
+    int used = 0;
+    for (uint32_t f = 2; f + 5 <= kEntered; f += 5)
+        used += text(x, f + 1) != 0xCA1E07D0u;
+    EXPECT_GT(used, 0) << "the other checks' words hold the stub";
+}
+
+TEST(Pretranslate, TheVerifierCatchesAStubWordABranchEnters)
+{
+    Result x;
+    run(shared_check(), x);
+    ASSERT_EQ(x.r.status, A64X_PT_TRANSLATED) << x.r.why;
+    put32(x.out, kTextOff + 4 * (kEntered + 2), kAdd);
+    a64x_pt_check v;
+    EXPECT_LT(a64x_pt_verify(&x.m, x.out.data(), &v, x.err, sizeof(x.err)), 0);
+    EXPECT_EQ(v.entered_stub_words, 1u);
+    EXPECT_NE(strstr(x.err, "where something branches"), nullptr) << x.err;
+}
+
 // Every branch of a split stub reaches the new place of the word it reached before; one out of the stub keeps its target.
 TEST(StubSplit, BranchesFollowTheWordsTheyTarget)
 {
