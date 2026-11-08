@@ -43,8 +43,8 @@ LatchedTime latch()
     if (!switch_car_clock_enabled(kRtcClock))
         switch_car_clock_enable(kRtcClock);
     const IOInterruptState state = IOSimpleLockLockDisableInterrupt(gLatch);
-    const uint32_t millis = *reinterpret_cast<volatile uint32_t *>(gRtc + RTC_MILLI_SECONDS);
-    const uint32_t seconds = *reinterpret_cast<volatile uint32_t *>(gRtc + RTC_SHADOW_SECONDS);
+    const uint32_t millis = switch_mmio_read32(gRtc, RTC_MILLI_SECONDS);
+    const uint32_t seconds = switch_mmio_read32(gRtc, RTC_SHADOW_SECONDS);
     const uint64_t now = mach_absolute_time();
     IOSimpleLockUnlockEnableInterrupt(gLatch, state);
     return {(static_cast<uint64_t>(seconds) * 1000 + millis) * 1000 + gBaseUsec, now};

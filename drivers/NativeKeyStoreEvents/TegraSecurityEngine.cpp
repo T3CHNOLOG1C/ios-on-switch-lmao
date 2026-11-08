@@ -32,6 +32,8 @@
 #include "AKSCmac.h"
 #include "../TegraSE/TegraSE.h"
 #include "../../kits/SwitchDMA/SwitchDcache.h"
+#include "../../kits/SwitchDMA/SwitchDMABuffer.h"
+#include "../../kits/SwitchMMIO/SwitchMMIO.h"
 
 // Debug kernels only: nothing reads what the probe finds yet.
 #if DEVELOPMENT || DEBUG
@@ -90,21 +92,21 @@ struct Engine {
     const char *name;
     uint64_t physical;
     uint32_t ahbMaster;  // bit in MEM_WRQUE_MST_ID: SE1 14, SE2 13 (the DTB's nvidia,ahb-master-id)
-    volatile uint32_t *regs;
+    volatile uint8_t *regs;
 
     uint32_t r(uint32_t offset) const
     {
-        return regs[offset / 4];
+        return switch_mmio_read32(regs, offset);
     }
 
     void w(uint32_t offset, uint32_t value) const
     {
-        regs[offset / 4] = value;
+        switch_mmio_write32(regs, offset, value);
     }
 };
 
 struct Dma {
-    IOBufferMemoryDescriptor *memory;
+    switch_dma_buffer buffer;
     uint8_t *va;
     uint32_t pa;
 };
@@ -112,52 +114,37 @@ struct Dma {
 struct Block {
     const Engine *se;
     Dma *dma;
-    volatile uint32_t *ahb;
+    volatile uint8_t *ahb;
     uint32_t slot;
     uint32_t error;       // ERR_STATUS (or INT_STATUS) of a failed operation
     const char *refusal;  // why an operation was not started
 };
 
-volatile uint32_t *mapRegisters(uint64_t physical, IOMemoryMap **map)
+volatile uint8_t *mapRegisters(uint64_t physical, IOMemoryMap **map)
 {
     IODeviceMemory *memory = IODeviceMemory::withRange(physical, 0x1000);
     *map = memory ? memory->map(kIOMapAnywhere | kIOMapInhibitCache) : nullptr;
     OSSafeReleaseNULL(memory);
-    return *map ? reinterpret_cast<volatile uint32_t *>((*map)->getVirtualAddress()) : nullptr;
+    return *map ? reinterpret_cast<volatile uint8_t *>((*map)->getVirtualAddress()) : nullptr;
 }
 
 bool allocateDma(Dma *dma)
 {
-    const IOOptionBits options = static_cast<IOOptionBits>(kIODirectionInOut) |
-                                 static_cast<IOOptionBits>(kIOMemoryPhysicallyContiguous) |
-                                 static_cast<IOOptionBits>(kIOMemoryMapperNone);
-    dma->memory = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task, options, PAGE_SIZE, 0xfffff000ULL);
-    if (!dma->memory || dma->memory->prepare() != kIOReturnSuccess) {
-        OSSafeReleaseNULL(dma->memory);
+    if (!switch_dma_alloc(&dma->buffer, PAGE_SIZE))
         return false;
-    }
-    IOByteCount length = 0;
-    const uint64_t pa = dma->memory->getPhysicalSegment(0, &length, kIOMemoryMapperNone);
-    dma->va = static_cast<uint8_t *>(dma->memory->getBytesNoCopy());
-    if (!pa || !dma->va || length < kDmaUsed || pa + kDmaUsed > (1ULL << 32)) {
-        dma->memory->complete();
-        OSSafeReleaseNULL(dma->memory);
-        return false;
-    }
-    dma->pa = static_cast<uint32_t>(pa);
-    memset(dma->va, 0, kDmaUsed);
-    switch_dcache_clean_invalidate(dma->va, kDmaUsed);
+    dma->va = dma->buffer.va;
+    dma->pa = static_cast<uint32_t>(dma->buffer.pa);
     return true;
 }
 
+// The buffer held key material: it is zeroed to DRAM before its pages go back.
 void releaseDma(Dma *dma)
 {
-    if (!dma->memory)
+    if (!dma->buffer.memory)
         return;
     memset(dma->va, 0, kDmaUsed);
     switch_dcache_clean_invalidate(dma->va, kDmaUsed);
-    dma->memory->complete();
-    OSSafeReleaseNULL(dma->memory);
+    switch_dma_free(&dma->buffer);
 }
 
 // Waits for `done` within the operation's deadline; a handshake that never finishes is the one-line panic.
@@ -218,7 +205,8 @@ bool ecbBlock(void *context, const uint8_t in[16], uint8_t out[16])
     // T210B01: the output is in memory once the engine is idle, its memory interface quiet and the AHB write queue drained (L4T
     // tegra_se_start_operation ahb_ack, hekate _se_op_wait).
     waitFor(b, deadline, "memory drain", [&] {
-        return !(se.r(kStatus) & (kStatusStateMask | kStatusMemBusy)) && !(b.ahb[kAhbMemWrqueMstId / 4] & se.ahbMaster);
+        return !(se.r(kStatus) & (kStatusStateMask | kStatusMemBusy)) &&
+               !(switch_mmio_read32(b.ahb, kAhbMemWrqueMstId) & se.ahbMaster);
     });
     const uint32_t interrupt = se.r(kIntStatus);
     const uint32_t error = se.r(kErrStatus);
@@ -253,7 +241,7 @@ struct Result {
     uint8_t mac[16] = {};
 };
 
-void probeSlot(const Engine &se, Dma &dma, volatile uint32_t *ahb, uint32_t slot, Result &result)
+void probeSlot(const Engine &se, Dma &dma, volatile uint8_t *ahb, uint32_t slot, Result &result)
 {
     const uint32_t security = se.r(kSecurity);
     const uint32_t perKey = se.r(kPerKey);
@@ -323,10 +311,10 @@ extern "C" void native_aks_se_probe(void)
     IOMemoryMap *mcMap = nullptr;
     IOMemoryMap *se1Map = nullptr;
     IOMemoryMap *se2Map = nullptr;
-    const volatile uint32_t *car = mapRegisters(kCarPA, &carMap);
-    volatile uint32_t *ahb = mapRegisters(kAhbArbPA, &ahbMap);
-    const volatile uint32_t *fuse = mapRegisters(kFusePagePA, &fuseMap);
-    const volatile uint32_t *mc = mapRegisters(kMcPA, &mcMap);
+    const volatile uint8_t *car = mapRegisters(kCarPA, &carMap);
+    volatile uint8_t *ahb = mapRegisters(kAhbArbPA, &ahbMap);
+    const volatile uint8_t *fuse = mapRegisters(kFusePagePA, &fuseMap);
+    const volatile uint8_t *mc = mapRegisters(kMcPA, &mcMap);
     Engine se1{"SE1", 0x70012000, 1u << 14, nullptr};
     Engine se2{"SE2", 0x70412000, 1u << 13, nullptr};
     se1.regs = mapRegisters(se1.physical, &se1Map);
@@ -340,18 +328,18 @@ extern "C" void native_aks_se_probe(void)
         goto out;
     }
     {
-        const uint32_t clocks = car[kCarClkOutEnbV / 4];
-        const uint32_t resets = car[kCarRstDevicesV / 4];
-        const bool fuseOn =
-            ((car[kCarClkOutEnbH / 4] & kFuseClockBit) != 0u) && ((car[kCarRstDevicesH / 4] & kFuseClockBit) == 0u);
-        const uint32_t privateKey = fuseOn ? fuse[kFusePrivateKeyDisable / 4] : ~0u;
-        const uint32_t smmu = mc[kMcSmmuConfig / 4];
-        const uint32_t ppcs = mc[kMcSmmuPpcsAsid / 4];
+        const uint32_t clocks = switch_mmio_read32(car, kCarClkOutEnbV);
+        const uint32_t resets = switch_mmio_read32(car, kCarRstDevicesV);
+        const bool fuseOn = ((switch_mmio_read32(car, kCarClkOutEnbH) & kFuseClockBit) != 0u) &&
+                            ((switch_mmio_read32(car, kCarRstDevicesH) & kFuseClockBit) == 0u);
+        const uint32_t privateKey = fuseOn ? switch_mmio_read32(fuse, kFusePrivateKeyDisable) : ~0u;
+        const uint32_t smmu = switch_mmio_read32(mc, kMcSmmuConfig);
+        const uint32_t ppcs = switch_mmio_read32(mc, kMcSmmuPpcsAsid);
         // A clock-gated or reset APB block can hang the bus: no SE register is read unless the clock runs and reset is off.
         if (!(clocks & kSeClockBit) || (resets & kSeClockBit)) {
             IOLog("AppleKeyStore: SE probe: SE clock %d reset %d (source %#x), engine not read; fuse pkdisable %#x\n",
                   static_cast<int>((clocks & kSeClockBit) != 0), static_cast<int>((resets & kSeClockBit) != 0),
-                  car[kCarClkSourceSe / 4], privateKey);
+                  switch_mmio_read32(car, kCarClkSourceSe), privateKey);
             goto out;
         }
         IOLog(
