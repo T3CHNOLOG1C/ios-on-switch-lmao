@@ -24,6 +24,10 @@ bool volumeLayout(uint32_t width, uint32_t height, uint32_t depth, uint32_t leve
 // levels (mipChainLayout's), `arrayStride` apart
 bool arrayLayout(uint32_t width, uint32_t height, uint32_t layers, uint32_t levels, uint32_t bpp, MipChain &out);
 
+// NIL's layout of a multisampled 2D colour image of one level: its samples as a 2D image of the sample grid NIL's sample layout
+// gives (2: 2X1_D3D, 4: 2X2, 8: 4X2_D3D), its block height chosen by the height in pixels; false: not 1, 2, 4 or 8 samples
+bool msLayout(uint32_t width, uint32_t height, uint32_t samples, uint32_t bpp, MipChain &out);
+
 // Byte offset of texel byte (xB, y) of plane z in level `l`, from the image's base, in the CPU's view (TegraColor GOBs)
 uint64_t volumeOffset(const MipChain &c, uint32_t l, uint32_t xB, uint32_t y, uint32_t z);
 

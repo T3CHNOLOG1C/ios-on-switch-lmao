@@ -66,6 +66,38 @@ bool volumeLayout(uint32_t width, uint32_t height, uint32_t depth, uint32_t leve
     return true;
 }
 
+bool msLayout(uint32_t width, uint32_t height, uint32_t samples, uint32_t bpp, MipChain &out)
+{
+    // NIL SampleLayout::choose_sample_layout, px_extent_sa, and the TEXHEAD MULTI_SAMPLE_COUNT of each (clb097tex.h)
+    struct Grid {
+        uint32_t samples;
+        uint8_t sx, sy, mode;
+    };
+
+    static const Grid grids[] = {{1, 0, 0, 0}, {2, 1, 0, 5}, {4, 1, 1, 2}, {8, 2, 1, 4}};
+    const Grid *g = nullptr;
+    for (const Grid &k : grids)
+        if (k.samples == samples)
+            g = &k;
+    if (!g || !mipChainLayout(width, height, 1, bpp, out))
+        return false;
+    MipLevel &lv = out.level[0];
+    const uint32_t rowsSa = height << g->sy;
+    const uint8_t y = uint8_t(std::min<uint32_t>(tgm_layout_y_log2(height), tgm_layout_log2_ceil((rowsSa + 7) / 8)));
+    out.yLog2 = lv.yLog2 = y;
+    lv.rowBytes = ((width << g->sx) * bpp + 63) & ~63u;
+    lv.rows = (rowsSa + (8u << y) - 1) / (8u << y) * (8u << y);
+    const uint64_t tile0 = 512ull << y;
+    out.arrayStride = (uint64_t(lv.rowBytes) * lv.rows + tile0 - 1) / tile0 * tile0;
+    out.align = std::max<uint64_t>(tile0, kChainAlign);
+    out.bytes = (out.arrayStride + out.align - 1) / out.align * out.align;
+    out.samples = uint8_t(samples);
+    out.sxLog2 = g->sx;
+    out.syLog2 = g->sy;
+    out.sampleMode = g->mode;
+    return true;
+}
+
 bool arrayLayout(uint32_t width, uint32_t height, uint32_t layers, uint32_t levels, uint32_t bpp, MipChain &out)
 {
     if (!layers || layers > 2048 || !mipChainLayout(width, height, levels, bpp, out))
