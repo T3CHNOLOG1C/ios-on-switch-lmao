@@ -134,7 +134,7 @@ struct shared {
 struct pt {
     const struct a64x_macho *m;
     uint8_t *out;
-    const uint8_t *data;
+    const uint8_t *data, *entries;
     uint64_t *fstarts;
     size_t nfs;
     struct hole *h3, *h5;
@@ -175,6 +175,12 @@ static bool is_code(void *ctx, uint64_t off)
 {
     struct pt *p = ctx;
     return a64x_image_is_code(p->m, p->data, off);
+}
+
+static bool is_entered(void *ctx, uint64_t off)
+{
+    struct pt *p = ctx;
+    return a64x_pt_entered(p->m, p->entries, off);
 }
 
 static int cmp_u64(const void *a, const void *b)
@@ -406,13 +412,14 @@ static void free_pt(struct pt *p)
     free(p->h5);
     free(p->sh);
     free((void *)p->data);
+    free((void *)p->entries);
 }
 
 /* pass 1: one-word rewrites and dead checks, page by page as the loader would; pass 2: every stub site */
 static int translate(struct pt *p, uint32_t map_flags, char *why, size_t whylen)
 {
     const struct a64x_macho *m = p->m;
-    struct a64x_code_map cm = {p, is_code, map_flags};
+    struct a64x_code_map cm = {p, is_code, map_flags, is_entered};
     for (uint64_t off = m->exec_fileoff; off < m->exec_fileoff + m->exec_filesize; off += PAGE) {
         uint32_t in[WORDS] = {0}, now[WORDS];
         uint64_t keep =
@@ -477,7 +484,9 @@ int a64x_pretranslate(const struct a64x_macho *m, uint8_t *out, struct a64x_pt_r
     a64x_pt_tail(m, &p.tail, &p.tail_end);
     r->tail_words = (p.tail_end - p.tail) / 4;
     load_function_starts(&p);
-    int rc = translate(&p, map_flags, r->why, sizeof(r->why));
+    p.entries = a64x_pt_entries(m, p.data);
+    int rc = p.entries ? translate(&p, map_flags, r->why, sizeof(r->why))
+                       : fail(r->why, sizeof(r->why), "no entry map (out of memory or unreadable fixups)");
     free_pt(&p);
     if (rc) {
         memcpy(out, m->base, m->size);

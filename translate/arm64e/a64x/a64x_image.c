@@ -85,7 +85,8 @@ uint32_t a64x_translate_page(const uint32_t *in, uint32_t *out, uint32_t nwords,
  *   [aut* x16,x17][mov x17,x16][xpac* x17][cmp x16,x17][b.eq ok][brk #0xc47x] ok:          5 free words
  * x16, x17 and NZCV are clobbered by these sequences by definition, so skipping them changes nothing observable.
  * Only sequences entirely inside [0, n) and inside code are taken (the kernel sees one page at a time; the planner
- * applies the same rule). `hole` (optional) is told every freed run.
+ * applies the same rule). `hole` (optional) is told every freed run that nothing enters: compilers share one check
+ * between a signed path and an unsigned early return that branches straight to its EOR, and those words stay live.
  */
 static bool is_check_brk(uint32_t w)
 {
@@ -123,7 +124,11 @@ uint32_t a64x_dead_checks(const uint32_t *in, uint32_t *out, uint32_t n, uint64_
             continue;
         }
         out[first] = 0x14000000u | len; /* b ok (the word after the brk) */
-        if (hole) {
+        bool entered = false;
+        for (uint32_t q = first + 1; hole && q <= k && code && code->is_target; q++) {
+            entered |= code->is_target(code->ctx, va + 4ull * q);
+        }
+        if (hole && !entered) {
             hole(hctx, first + 1, len - 1);
         }
         found++;

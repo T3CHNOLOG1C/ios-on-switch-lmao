@@ -131,7 +131,7 @@ static void slice(const char *name, const uint8_t *mh, uint64_t len)
         }
         lc += u32(lc, 4);
     }
-    struct a64x_code_map cm = {NULL, is_code, 0};
+    struct a64x_code_map cm = {NULL, is_code, 0, NULL};
     uint64_t stub_va = (vmend + 0x3FFF) & ~0x3FFFull;
     /* dylibs extracted from a dyld cache keep cache addresses (LINKEDIT GBs away): put the region after the text */
     uint64_t xend = 0;
