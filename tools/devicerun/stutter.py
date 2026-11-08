@@ -94,11 +94,12 @@ STUTTER = [
         'stutter.c7-frame-wakes',
         OWNER,
         POWER,
-        'max(wakes) <= 2',
+        'max(wakes) <= 10',
         process=KERNEL,
         regex=r'cpu3 c7 [\d.]+% \(\d+, \d+ skipped, (?P<wakes>\d+) frame wakes\)',
         source=IDLE,
-        note='frame lines (all on CPU3) that found it in C7, per 10 s: one per animation start after 100 ms still',
+        note='frame lines (all on CPU3) that found it in C7, per 10 s: one per animation start after 100 ms still is '
+        'the design (Control Center x5 is five); tens mean the frame core power-gates between frames',
     ),
     Check(
         'stutter.c7-exit-max',
@@ -148,11 +149,12 @@ STUTTER = [
         'stutter.cpu-at-vsync',
         OWNER,
         'SwitchFrame: latch',
-        'min(vsync) >= 1785',
+        'min(vsync) >= 1683',
         process=KERNEL,
         regex=r'cpu (?P<vsync>\d+) MHz at vsync (?P<swap>\d+) at swap',
         source=DISPLAY,
-        note='CPU clock at the vsync of each slow frame: touch, missed-frame and launch hints boost it',
+        note='CPU clock at the vsync of each slow frame: touch, missed-frame and launch hints boost it to the '
+        'ceiling, 1785 or 1683 MHz where the DFLL row measured high',
     ),
     Check(
         'stutter.gpu-raise',

@@ -82,20 +82,23 @@ class BlockedWait {
 public:
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     BlockedWait(std::atomic<uint64_t> &waits, std::atomic<uint64_t> &waitedUs)
-        : waits_(waits), waitedUs_(waitedUs), began_(nowUs())
+        : waits_(&waits), waitedUs_(&waitedUs), began_(nowUs())
     {}
 
     ~BlockedWait()
     {
-        waits_.fetch_add(1, std::memory_order_relaxed);
-        waitedUs_.fetch_add(nowUs() - began_, std::memory_order_relaxed);
+        waits_->fetch_add(1, std::memory_order_relaxed);
+        waitedUs_->fetch_add(nowUs() - began_, std::memory_order_relaxed);
     }
 
     BlockedWait(const BlockedWait &) = delete;
     BlockedWait &operator=(const BlockedWait &) = delete;
+    BlockedWait(BlockedWait &&) = delete;
+    BlockedWait &operator=(BlockedWait &&) = delete;
 
 private:
-    std::atomic<uint64_t> &waits_, &waitedUs_;
+    std::atomic<uint64_t> *waits_;
+    std::atomic<uint64_t> *waitedUs_;
     uint64_t began_;
 #else
     BlockedWait(std::atomic<uint64_t> &, std::atomic<uint64_t> &)

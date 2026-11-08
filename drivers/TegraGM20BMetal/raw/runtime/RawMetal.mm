@@ -238,12 +238,12 @@ extern "C" dispatch_queue_global_t dispatch_pthread_root_queue_create(const char
 // workers, which XNU clamps to 37 in a daemon: below the fixed-priority render thread waiting on them.
 static dispatch_queue_t followingSerialQueue(const char *label)
 {
-    static dispatch_queue_global_t root =
+    static const dispatch_queue_global_t root =
         dispatch_pthread_root_queue_create("com.brunostjohn.switch.raw.following", 0, nullptr, ^{
             pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
             raw::followers().join();
         });
-    dispatch_queue_t queue =
+    const dispatch_queue_t queue =
         dispatch_queue_create(label, dispatch_queue_attr_make_initially_inactive(DISPATCH_QUEUE_SERIAL));
     dispatch_set_target_queue(queue, root);
     dispatch_activate(queue);
