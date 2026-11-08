@@ -60,6 +60,8 @@ xcrun clang++ "${FLAGS[@]}" -I "$TREE/drivers/TegraGM20B" "$HERE/datacheck.cpp" 
     "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_alias.cpp" "$RAW/runtime/raw_pack.cpp" "$RAW/runtime/raw_ycbcr.cpp" "$RAW/runtime/raw_zeta.cpp" "${LIBS[@]}" -o "$OUT/datacheck"
 # recordcheck: the runtime's records of states (raw_record.cpp) against the pack mkpack.py made from the same probe runs
 xcrun clang++ "${FLAGS[@]}" "$HERE/recordcheck.cpp" "$RAW/runtime/raw_record.cpp" "$RAW/runtime/raw_pack.cpp" -o "$OUT/recordcheck"
+# emitcheck: the per-state registers raw computes from a state's key fields and programs (raw_emit.h) against a pack's records
+xcrun clang++ "${FLAGS[@]}" "$HERE/emitcheck.cpp" "$RAW/runtime/raw_emit.cpp" "$RAW/runtime/raw_pack.cpp" -o "$OUT/emitcheck"
 # invocationcheck: a call recorded as an invocation keeps what its pointer arguments pointed to (raw_invocation.h)
 xcrun clang++ -O1 -g -std=c++17 -fobjc-arc -Wall -Wextra "$HERE/invocationcheck.mm" -framework Foundation -framework Metal \
     -o "$OUT/invocationcheck"
@@ -69,7 +71,7 @@ xcrun clang++ "${FLAGS[@]}" "$HERE/cachecheck.cpp" "$RAW/runtime/raw_cache.cpp" 
 # completecheck: the runtime's own probe of every Core Animation state of a corpus, its records against the pack
 xcrun clang++ "${OBJC[@]}" -Wall -Wextra -x objective-c++ "$HERE/completecheck.mm" "$RAW/runtime/RawProbe.mm" "$FRONT/NativeBridgeMetalFrontend.mm" \
     -x c++ "$RAW/runtime/raw_pack.cpp" "${COMPLETION[@]}" -x none "$BRIDGE" "${LIBS[@]}" -o "$OUT/completecheck" 2>&1 | grep -v "duplicate libraries" || true
-echo "built $OUT/nvkframe $OUT/rawframe $OUT/facadeframe $OUT/poolcheck $OUT/killcheck $OUT/faultcheck $OUT/footprint $OUT/heapcheck $OUT/datacheck $OUT/recordcheck $OUT/cachecheck $OUT/completecheck"
+echo "built $OUT/nvkframe $OUT/rawframe $OUT/facadeframe $OUT/poolcheck $OUT/killcheck $OUT/faultcheck $OUT/footprint $OUT/heapcheck $OUT/datacheck $OUT/recordcheck $OUT/emitcheck $OUT/cachecheck $OUT/completecheck"
 xcrun clang++ "${OBJC[@]}" -Wall -Wextra -x objective-c++ "$HERE/blitframe.mm" "${FACADE[@]}" "$FRONT/NativeBridgeMetalFrontend.mm" \
     -x c++ "$RAW/runtime/raw_gpu.cpp" "$RAW/fx/fx_mip.cpp" "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_alias.cpp" "$RAW/runtime/raw_pack.cpp" "$RAW/runtime/raw_ycbcr.cpp" "$RAW/runtime/raw_zeta.cpp" "$RAW/runtime/raw_completed.cpp" "${COMPLETION[@]}" "$TREE/kits/SwitchRefusal/SwitchRefusal.c" -x none "$BRIDGE" "${LIBS[@]}" \
     -o "$OUT/blitframe" 2>&1 | grep -v "duplicate libraries" || true
