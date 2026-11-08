@@ -7,6 +7,7 @@
 //   that ran past one) and reaches the GPU whole.
 // - A draw whose vertex buffer is unbound fetches from NVK's empty stream (the zero page, its limit before its start), never
 //   from VA 0 with no limit.
+// - A pass with an empty color slot below a target disables the slot, as NVK does, and counts through the target.
 // - A channel the kernel killed is made again with its context before any command buffer is encoded for it: one whose
 //   ChannelCreate or context Exec the kernel refused gives no command buffer, and the next begin() tries again.
 // - Programs placed in the shader heap are behind an instruction-cache invalidate before any draw runs them, even when the
@@ -118,6 +119,33 @@ void instances(raw::Device &dev, Pass &pass, const Expect &expect)
     expect(drawn && cb->commit(seq) && dev.wait(seq), "a draw and an indexed draw of 4000 instances each, submitted");
     expect(cap_draws() - before == 2 * kInstances, "every instance of both reached the GPU");
     dev.destroyBuffer(indices);
+}
+
+// A pass whose first color slot is empty below a target: the slot is DISABLED and CT_SELECT counts through the target, never
+// the earlier pass's first target still in the slot
+void holeTarget(raw::Device &dev, Pass &pass, const Expect &expect)
+{
+    constexpr uint32_t kTargetFormat0 = 0x0810, kCtSelect = 0x121c;  // SET_COLOR_TARGET_FORMAT(0), SET_CT_SELECT
+    if (pass.desc.count < 2) {
+        expect(false, "a state of two color targets");
+        return;
+    }
+    auto run = [&](const raw::PassDesc &desc) {
+        raw::CommandBuffer *cb = dev.begin();
+        raw::RenderEncoder *e = cb ? cb->render(desc) : nullptr;
+        if (!e)
+            return false;
+        e->end();
+        uint32_t seq = 0;
+        return cb->commit(seq) && dev.wait(seq);
+    };
+    raw::PassDesc hole = pass.desc;
+    hole.color[0].texture = nullptr;
+    expect(run(pass.desc) && cap_reg3d(kTargetFormat0) != 0, "a pass over both targets");
+    expect(run(hole), "a pass over the second alone");
+    std::printf("hole: target 0 format 0x%x, CT_SELECT 0x%x\n", cap_reg3d(kTargetFormat0), cap_reg3d(kCtSelect));
+    expect(cap_reg3d(kTargetFormat0) == 0 && (cap_reg3d(kCtSelect) & 0xf) == 2,
+           "slot 0 DISABLED, CT_SELECT counting through slot 1");
 }
 
 uint64_t method64(uint32_t hi)
@@ -304,6 +332,7 @@ int main(int argc, char **argv)
     }
     instances(dev, pass, expect);
     unboundStream(dev, pass, expect);
+    holeTarget(dev, pass, expect);
     reopenRefused(dev, expect);
     invalidateRefused(dev, expect);
     waitRefused(dev, expect);

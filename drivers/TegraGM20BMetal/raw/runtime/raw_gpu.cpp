@@ -3422,13 +3422,19 @@ void RenderEncoder::end()
         p.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
     }
     uint32_t ct = 0, count = 0;
-    for (uint32_t j = 0; j < pass_.count && j < 8; j++) {
-        const Texture *t = pass_.color[j].texture;
-        if (!t)
-            continue;
-        targetWords(p, COLOR_TARGET + 0x40 * j, *t);
-        p.m(COLOR_COMPRESSION + 4 * j, 0);
-        count++;
+    for (uint32_t j = 0; j < pass_.count && j < 8; j++)
+        if (pass_.color[j].texture)
+            count = j + 1;
+    for (uint32_t j = 0; j < count; j++) {
+        if (const Texture *t = pass_.color[j].texture) {
+            targetWords(p, COLOR_TARGET + 0x40 * j, *t);
+            p.m(COLOR_COMPRESSION + 4 * j, 0);
+        } else {
+            uint32_t w[kColorTargetWords];
+            disabledTargetWords(w);
+            p.incArray(COLOR_TARGET + 0x40 * j, w, kColorTargetWords);
+            p.m(COLOR_COMPRESSION + 4 * j, 1);
+        }
     }
     // targets map to themselves (NVK writes all eight slots of the map; the hardware reads the first `count`)
     for (uint32_t k = 0; k < 8; k++)
