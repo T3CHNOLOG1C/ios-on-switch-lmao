@@ -195,6 +195,14 @@ cc_library(
     target_compatible_with = ["@platforms//os:ios"],
 )
 
+# gpu.sm53_probe's NAK_DEBUG=sm53_probe, set before any framework makes a Metal device (kit/sm53_probe_env.c)
+cc_library(
+    name = "sm53_probe_env",
+    srcs = ["kit/sm53_probe_env.c"],
+    target_compatible_with = ["@platforms//os:ios"],
+    alwayslink = True,
+)
+
 # Every test every iOS version runs, the runner, the list, the log lines and report.json. UIKit: built only under an
 # ios_application's transition, never for the host by `bazel build //hw_test_app/...`.
 swift_library(
@@ -214,6 +222,7 @@ swift_library(
         ":a64x_probe",
         ":core",
         ":gpu",
+        ":sm53_probe_env",
         ":video",
     ],
 )

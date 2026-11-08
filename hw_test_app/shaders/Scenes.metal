@@ -75,3 +75,27 @@ kernel void half_arithmetic(device const half4 *a [[buffer(0)]], device const ha
     out[4 * id + 2] = rx + ry;
     out[4 * id + 3] = rx * ry;
 }
+
+/// gpu.sm53_probe: each form NAK_DEBUG=sm53_probe lowers to SM53's half ALU with an f32 result. The first two hold if
+/// the op rounds to half before it widens, the last three if it rounds the exact result once to f32.
+kernel void sm53_probe(device const half *a [[buffer(0)]], device const half *b [[buffer(1)]],
+                       device const half *c [[buffer(2)]], device float *out [[buffer(3)]],
+                       uint id [[thread_position_in_grid]])
+{
+    const half x = a[id], y = b[id], z = c[id];
+    const half sum = x + y, product = x * y;
+    out[5 * id] = float(sum);
+    out[5 * id + 1] = float(product);
+    out[5 * id + 2] = float(x) + float(y);
+    out[5 * id + 3] = float(x) * float(y);
+    out[5 * id + 4] = fma(float(x), float(y), float(z));
+}
+
+/// gpu.sm53_probe: the half of bits row * 256 + column (a NaN at the last pixel) written as computed, which a blend
+/// of other factors than one and zero keeps from metal2vulkan's unorm rounding: the device's own conversion
+fragment half4 sm53_probe_unorm(float4 position [[position]])
+{
+    const uint i = uint(position.y) * 256 + uint(position.x);
+    const ushort bits = i == 32767 ? ushort(0x7e00) : i < 16384 ? ushort(i) : ushort(0x8000 | (i - 16384));
+    return half4(as_type<half>(bits));
+}
