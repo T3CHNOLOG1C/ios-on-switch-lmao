@@ -2608,6 +2608,7 @@ void RenderEncoder::barrier()
 {
     if (p_.room() < 64)
         reserve();
+    tiledCacheDrain(p_, dev_->k_.info());
     p_.m(WAIT_FOR_IDLE, 0);
     p_.m(INVALIDATE_SHADER_CACHES, kBetweenPasses);
     p_.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
@@ -3444,6 +3445,8 @@ void RenderEncoder::end()
         p_.m(GLOBAL_BASE_VERTEX_INDEX, 0);
         p_.m(VERTEX_ID_BASE, 0);
     }
+    if (drew_)
+        tiledCacheDrain(p_, d.k_.info());
     checkRoom(p_, "a pass body");
     if (p_.at > bodyStart_)
         bodies_.push_back({bodyStart_, p_.at});
