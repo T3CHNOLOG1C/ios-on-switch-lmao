@@ -13,6 +13,7 @@
 //   kernel refused the submission whose prologue was to invalidate it.
 // - A fence wait the kernel refuses with no kill is no completion: it is waited again, and one the kernel keeps refusing is a
 //   failure (the GPU runs each submission for MOCK_GPU_US, so it is in flight when waited for).
+// - A client whose first channel the kernel refuses says why, and gets one a second later.
 // usage: faultcheck <pack.bin>
 #include <cstdio>
 #include <cstdlib>
@@ -20,6 +21,7 @@
 #include <functional>
 #include <string>
 #include <tuple>
+#include <unistd.h>
 #include "../runtime/raw_gpu.h"
 
 extern "C" uint64_t cap_draws(void);
@@ -249,6 +251,30 @@ void waitRefused(raw::Device &dev, const Expect &expect)
     dev.destroyBuffer(b);
 }
 
+void channelRefused(const char *pack, const Expect &expect)
+{
+    raw::Device client;
+    std::string err;
+    if (!client.open(pack, 0, err, raw::Device::Role::Client)) {
+        expect(false, "a client device");
+        return;
+    }
+    mock_iokit_fail_next(TegraGM20BMethodChannelCreate, 1, kIOReturnNoResources);
+    const bool refused = !client.begin();
+    const std::string why = client.channelError();
+    std::printf("refused channel: %s\n", why.c_str());
+    expect(refused && why.find("ChannelCreate failed (0x") != std::string::npos,
+           "no channel, and the kernel's answer kept");
+    const unsigned long creates = mock_iokit_calls(TegraGM20BMethodChannelCreate);
+    expect(!client.begin() && mock_iokit_calls(TegraGM20BMethodChannelCreate) == creates,
+           "none asked for again at once (no kernel call a command buffer)");
+    usleep(1100000);
+    raw::Buffer a, b;
+    const bool made = client.createBuffer(4096, a) && client.createBuffer(4096, b);
+    const uint32_t later = made ? copy(client, a, b) : 0;
+    expect(later && client.wait(later), "a second later, a channel and a command buffer that completes");
+}
+
 }  // namespace
 
 int main(int argc, char **argv)
@@ -281,6 +307,7 @@ int main(int argc, char **argv)
     reopenRefused(dev, expect);
     invalidateRefused(dev, expect);
     waitRefused(dev, expect);
+    channelRefused(argv[1], expect);
     if (failures) {
         std::printf("FAIL: faultcheck (%d)\n", failures);
         return 1;
