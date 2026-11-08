@@ -49,6 +49,8 @@ enum : uint32_t {
     PIXEL_SHADER_BARRIER = 0x0de0,
     NO_OPERATION = 0x0100,
     INVALIDATE_TEXTURE_DATA_CACHE_PIXEL_ORDERED = 0x0f74,
+    TILED_CACHE_BARRIER = 0x0f7c,  // deko3d's engine_3d.def (raw/runtime/raw_tiled_cache.h)
+    TILED_CACHE_FLUSH = 0x0f80,
     ZT_A = 0x0fe0,
     ZT_B = 0x0fe4,
     CLEAR_SURFACE_CONTROL = 0x10f8,
@@ -72,6 +74,8 @@ enum : uint32_t {
     RENDER_ENABLE_OVERRIDE = 0x1944,
     CLEAR_SURFACE = 0x19d0,
     COLOR_COMPRESSION = 0x19e0,
+    Z_COMPRESSION = 0x19cc,
+    ZT_SIZE_A = 0x1228,
     REPORT_SEMAPHORE_A = 0x1b00,
     REPORT_SEMAPHORE_D = 0x1b0c,
     VERTEX_STREAM_A = 0x1c00,
@@ -155,7 +159,8 @@ bool ignored3d(uint32_t m)
         return true;  // control, MME RAM loads, WFI
     if (m == INVALIDATE_SHADER_CACHES || m == INVALIDATE_SHADER_CACHES_NO_WFI || m == INVALIDATE_TEXTURE_DATA_CACHE ||
         m == INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI || m == INVALIDATE_SAMPLER_CACHE_NO_WFI ||
-        m == INVALIDATE_TEXTURE_HEADER_CACHE_NO_WFI || m == FLUSH_PENDING_WRITES)
+        m == INVALIDATE_TEXTURE_HEADER_CACHE_NO_WFI || m == FLUSH_PENDING_WRITES || m == TILED_CACHE_BARRIER ||
+        m == TILED_CACHE_FLUSH)
         return true;
     if (m >= CLEAR_RECT_H && m <= COLOR_CLEAR_VALUE + 0xc)
         return true;  // clear rect/vertex array triggers/clear values
@@ -258,6 +263,11 @@ void Decoder::submitEnd()
         fprintf(out_, "END-OF-SUBMIT barriers=%s\n", s.c_str());
         pendingBarriers_.clear();
     }
+    if (compSubmit.any())
+        fprintf(out_, "COMP draws=%llu clears=%llu zbc=%llu zbcKiB=%llu\n", (unsigned long long)compSubmit.draws,
+                (unsigned long long)compSubmit.clears, (unsigned long long)compSubmit.zbc,
+                (unsigned long long)(compSubmit.zbcBytes >> 10));
+    compSubmit = {};
     fprintf(out_, "SUBMIT %llu\n", (unsigned long long)submits);
 }
 
@@ -371,6 +381,12 @@ void Decoder::method(uint32_t subc, uint32_t mthd, uint32_t data, bool fromMme)
         break;
     case PIXEL_SHADER_BARRIER:
         barrier("PSB");
+        break;
+    case TILED_CACHE_BARRIER:
+        barrier("TCBAR");
+        break;
+    case TILED_CACHE_FLUSH:
+        barrier("TCFLUSH");
         break;
     case NO_OPERATION:
         // raw_gpu.cpp's marks (SWITCH_RAW_HARNESS_MARKS builds): a fetch barrier left out, a draw's run after its first
@@ -940,6 +956,7 @@ const ProgramInfo *Decoder::program(int stage, std::string &id)
 void Decoder::clear(uint32_t data)
 {
     clears++;
+    countComp(data);
     std::string bar;
     for (auto &b : pendingBarriers_)
         bar += (bar.empty() ? "" : ",") + b;
@@ -957,6 +974,51 @@ void Decoder::clear(uint32_t data)
         data, name(addr3(m, m + 4)).c_str(), r3(m + 8), r3(m + 0xc), r3(m + 0x10), r3(m + 0x14), r3(COLOR_CLEAR_VALUE),
         r3(COLOR_CLEAR_VALUE + 4), r3(COLOR_CLEAR_VALUE + 8), r3(COLOR_CLEAR_VALUE + 0xc), r3(CLEAR_RECT_H),
         r3(CLEAR_RECT_V), r3(CLEAR_SURFACE_CONTROL), zs, bar.c_str());
+}
+
+// A draw (clearData 0) or a clear into a compressed target (nvdec_comp.h)
+void Decoder::countComp(uint32_t clearData)
+{
+    if (!vaKind)
+        return;
+    const uint32_t rt = (clearData >> 6) & 0xf, m = COLOR_TARGET + 0x40 * rt;
+    const uint32_t colorKind = r3(COLOR_COMPRESSION + 4 * rt) ? vaKind(addr3(m, m + 4)) : 0;
+    const uint32_t zetaKind = (r3(ZT_SELECT) & 1) && r3(Z_COMPRESSION) ? vaKind(addr3(ZT_A, ZT_B)) : 0;
+    auto add = [&](uint64_t CompCounts::*f, uint64_t n) {
+        comp.*f += n;
+        compSubmit.*f += n;
+    };
+    if (!clearData) {
+        uint32_t live = r3(CT_SELECT) & 0xf;
+        bool any = compressibleKind(zetaKind);
+        for (uint32_t j = 0; j < live && j < 8 && !any; j++)
+            any = r3(COLOR_COMPRESSION + 4 * j) &&
+                  compressibleKind(vaKind(addr3(COLOR_TARGET + 0x40 * j, COLOR_TARGET + 0x40 * j + 4)));
+        if (any)
+            add(&CompCounts::draws, 1);
+        return;
+    }
+    const bool rect = r3(CLEAR_SURFACE_CONTROL) & 0x10;
+    const uint32_t h = r3(CLEAR_RECT_H), v = r3(CLEAR_RECT_V);
+    auto whole = [&](uint32_t width, uint32_t height) {
+        return !rect || (!(h & 0xffff) && !(v & 0xffff) && (h >> 16) >= width && (v >> 16) >= height);
+    };
+    if ((clearData & 0x3c) && compressibleKind(colorKind)) {
+        const uint32_t w[4] = {r3(COLOR_CLEAR_VALUE), r3(COLOR_CLEAR_VALUE + 4), r3(COLOR_CLEAR_VALUE + 8),
+                               r3(COLOR_CLEAR_VALUE + 0xc)};
+        add(&CompCounts::clears, 1);
+        if ((clearData & 0x3c) == 0x3c && whole(r3(m + 8), r3(m + 0xc)) && zbcBootColorNv(r3(m + 0x10), w)) {
+            add(&CompCounts::zbc, 1);
+            add(&CompCounts::zbcBytes, uint64_t(r3(m + 8)) * r3(m + 0xc) * compBytesPerTexel(colorKind));
+        }
+    }
+    if ((clearData & 1) && compressibleKind(zetaKind)) {
+        add(&CompCounts::clears, 1);
+        if (whole(r3(ZT_SIZE_A), r3(ZT_SIZE_A + 4)) && zbcBootDepthBits(r3(Z_CLEAR_VALUE))) {
+            add(&CompCounts::zbc, 1);
+            add(&CompCounts::zbcBytes, uint64_t(r3(ZT_SIZE_A)) * r3(ZT_SIZE_A + 4) * compBytesPerTexel(zetaKind));
+        }
+    }
 }
 
 // Raw facts of a draw for the pack generator (tools/mkpack.py) and the runtime's record maker: every non-zero 3D register, the
@@ -1181,6 +1243,7 @@ void Decoder::draw(const char *kind, uint32_t first, uint32_t count)
     pendingBarriers_.clear();
     fprintf(out_, "%s first=%u count=%u begin=%08x barriers=%s\n", indexed_ ? "DRAW-INDEXED" : kind, first, count,
             r3(BEGIN), bar.c_str());
+    countComp(0);
 
     // Which render targets, vertex streams and stages are live: their registers are compared, the others are not.
     const uint32_t ct = r3(CT_SELECT), ctCount = ct & 0xf;

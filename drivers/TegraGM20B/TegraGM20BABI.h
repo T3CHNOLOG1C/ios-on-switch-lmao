@@ -55,6 +55,8 @@ enum {
 	TegraGM20BInfoPriority = 1u << 8,      /* Priority (method 18) is implemented */
 	TegraGM20BInfoCompression = 1u << 9, /* compressible kinds bind; method 19 is implemented */
 	TegraGM20BInfoKillRecord = 1u << 10, /* a channel's fence word is a TegraGM20BAbiFence */
+	TegraGM20BInfoTiledCache = 1u
+		<< 11, /* every GR context holds the tile coalescer's table: a client may enable the tiled cache */
 };
 
 /* Method 1, output only. Everything NVK's struct nv_device_info needs that the client cannot derive. */
