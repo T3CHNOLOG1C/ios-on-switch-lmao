@@ -15,11 +15,13 @@ entry under the project's former names (renamed.py) and the icon's former name (
 to the paths the caller names.
 """
 
+import argparse
 import contextlib
 import hashlib
 import os
 import re
 import shutil
+import sys
 import tempfile
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -88,6 +90,20 @@ def resolve(argument: str) -> Card:
     if not info.get('WritableMedia', True):
         raise RefusedError(f'{name} is read-only media (SD lock switch?)')
     return Card(name, info, int(info['TotalSize']), image)
+
+
+def confirm(args: argparse.Namespace, disk: str, warning: str) -> None:
+    """Have the user type `disk` after `warning` (or pass --confirm=disk), and keep it in args.confirm for sudo."""
+    if args.confirm:
+        if args.confirm != disk:
+            raise RefusedError(f'--confirm={args.confirm} does not name the target {disk}')
+        return
+    if not sys.stdin.isatty():
+        raise RefusedError(f'type-to-confirm needs a terminal (or pass --confirm={disk})')
+    answer = input(f'{warning} Type {disk} to continue: ')
+    if answer.strip() != disk:
+        raise RefusedError('not confirmed')
+    args.confirm = disk
 
 
 def read_table(card: Card) -> gpt.Table:

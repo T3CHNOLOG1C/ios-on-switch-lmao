@@ -32,7 +32,7 @@ from typing import NoReturn
 
 if __package__ in (None, ''):
     sys.path.insert(0, str(Path(os.path.abspath(__file__)).parents[2]))
-from tools.common import paths
+from tools.common import paths, sudo
 from tools.install import (
     apfs,
     card as cards,
@@ -131,11 +131,13 @@ class Installer:
         return Path(self.args.scratch or (Path.home() / 'Library/Caches/switch-ios-install'))
 
     def compose(self) -> tuple[Path, int, int]:
-        scratch = self.scratch_dir()
-        scratch.mkdir(parents=True, exist_ok=True)
-        image = scratch / 'compose.img'
+        image = sudo.user_directory(self.scratch_dir()) / 'compose.img'
         self.log("compose: attaching the IPSW's OS image", self.args.os_dmg)
-        offset, os_bytes = composer.compose(image, self.args.os_dmg, self.card.target.bytes, self.spec, self.log)
+        try:
+            offset, os_bytes = composer.compose(image, self.args.os_dmg, self.card.target.bytes, self.spec, self.log)
+        finally:
+            if image.exists():
+                sudo.give_back(image)
         return image, offset, os_bytes
 
     def write(self, image: Path, part_offset: int, os_bytes: int) -> None:
@@ -374,22 +376,8 @@ class Installer:
         return 0
 
 
-def confirm(args: argparse.Namespace, card_disk: str) -> None:
-    if args.confirm:
-        if args.confirm != card_disk:
-            raise cards.RefusedError(f'--confirm={args.confirm} does not name the target {card_disk}')
-        return
-    if not sys.stdin.isatty():
-        raise cards.RefusedError(f'type-to-confirm needs a terminal (or pass --confirm={card_disk})')
-    answer = input(f"This rewrites {card_disk}'s userdata partition. Type {card_disk} to continue: ")
-    if answer.strip() != card_disk:
-        raise cards.RefusedError('not confirmed')
-    args.confirm = card_disk
-
-
 def reexec_as_root(args: argparse.Namespace, argv: list[str]) -> NoReturn:
     """After confirmation: the same command under sudo, with absolute input paths and the confirmation."""
-    command = ['sudo', '--', sys.executable, os.path.abspath(__file__)]
     passthrough = [a for a in argv if not a.startswith('--confirm')]
     for name in ('spec', 'ipsw', 'os_dmg', 'system_cryptex', 'app_cryptex', 'boot_package', 'scratch', 'log'):
         value = getattr(args, name)
@@ -397,9 +385,7 @@ def reexec_as_root(args: argparse.Namespace, argv: list[str]) -> NoReturn:
         passthrough = [a for a in passthrough if not a.startswith(flag + '=')]
         if value:
             passthrough.append(f'{flag}={value}')
-    command += [*passthrough, f'--confirm={args.confirm}']
-    print('running under sudo:', ' '.join(command), flush=True)
-    os.execvp('sudo', command)
+    sudo.rerun(__file__, [*passthrough, f'--confirm={args.confirm}'])
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -441,7 +427,7 @@ def main(argv: list[str] | None = None) -> int:
             card = cards.resolve(args.disk)
             if args.unprivileged_test and not card.image:
                 raise cards.RefusedError('--unprivileged-test is only for disk images')
-            confirm(args, card.disk)
+            cards.confirm(args, card.disk, f"This rewrites {card.disk}'s userdata partition.")
             if os.geteuid() != 0 and not args.unprivileged_test:
                 args.scratch = str(installer.scratch_dir())
                 reexec_as_root(args, argv)

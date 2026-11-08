@@ -28,7 +28,7 @@ from typing import NoReturn
 
 if __package__ in (None, ''):
     sys.path.insert(0, str(Path(os.path.abspath(__file__)).parents[2]))
-from tools.common import paths
+from tools.common import paths, sudo
 from tools.install import (
     card as cards,
     compose,
@@ -120,7 +120,8 @@ class Direct:
         if not self.args.yes:
             self.log('dry run: nothing written (add --yes)')
             return 0
-        confirm(self.args, self.card.disk)
+        disk = self.card.disk
+        cards.confirm(self.args, disk, f"This replaces {disk}'s iOS partition and everything on it.")
         if not self.privileged():
             if os.geteuid() == 0:
                 raise host.HostError(f'{self.card.raw} cannot be opened for writing')
@@ -143,7 +144,7 @@ class Direct:
         snapshot = cards.table_snapshot(self.card)
         path = Path(str(self.log.path) + '.partition-table.bin')
         path.write_bytes(snapshot)
-        give_back(path)
+        sudo.give_back(path)
         self.log('partition table backed up to', path)
         return snapshot
 
@@ -342,13 +343,6 @@ def replace(path: Path, data: bytes) -> None:
         double.unlink()
 
 
-def give_back(path: Path) -> None:
-    """Give a file made under sudo back to the user who ran the command."""
-    uid, gid = os.environ.get('SUDO_UID'), os.environ.get('SUDO_GID')
-    if os.geteuid() == 0 and uid:
-        os.chown(path, int(uid), int(gid))
-
-
 def resolve_tool(value: str | None) -> str:
     """Return apfs_tool's absolute path from its runfiles path (`bazel run`) or a path, so a sudo rerun finds it."""
     value = paths.located(value)
@@ -357,29 +351,15 @@ def resolve_tool(value: str | None) -> str:
     return value
 
 
-def confirm(args: argparse.Namespace, disk: str) -> None:
-    if args.confirm:
-        if args.confirm != disk:
-            raise cards.RefusedError(f'--confirm={args.confirm} does not name the target {disk}')
-        return
-    if not sys.stdin.isatty():
-        raise cards.RefusedError(f'type-to-confirm needs a terminal (or pass --confirm={disk})')
-    answer = input(f"This replaces {disk}'s iOS partition and everything on it. Type {disk} to continue: ")
-    if answer.strip() != disk:
-        raise cards.RefusedError('not confirmed')
-    args.confirm = disk
-
-
 def reexec_as_root(args: argparse.Namespace) -> NoReturn:
-    command = ['sudo', '--', sys.executable, os.path.abspath(__file__), args.disk, '--yes']
+    argv = [args.disk, '--yes']
     for key in ('confirm', 'out', 'image', 'partition', 'apfs_tool', 'log'):
         value = getattr(args, key)
         if value:
-            command.append(f'--{key.replace("_", "-")}={value}')
+            argv.append(f'--{key.replace("_", "-")}={value}')
     if args.no_eject:
-        command.append('--no-eject')
-    print('running under sudo:', ' '.join(command), flush=True)
-    os.execvp('sudo', command)
+        argv.append('--no-eject')
+    sudo.rerun(__file__, argv)
 
 
 def parse(argv: list[str]) -> argparse.Namespace:

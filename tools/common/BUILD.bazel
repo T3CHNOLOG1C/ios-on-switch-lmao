@@ -31,3 +31,15 @@ py_test(
     srcs = ["paths_test.py"],
     deps = [":paths"],
 )
+
+py_library(
+    name = "sudo",
+    srcs = ["sudo.py"],
+    imports = ["../.."],
+)
+
+py_test(
+    name = "sudo_test",
+    srcs = ["sudo_test.py"],
+    deps = [":sudo"],
+)

@@ -47,6 +47,7 @@ py_library(
     deps = [
         "//tools/common:hashing",
         "//tools/common:paths",
+        "//tools/common:sudo",
     ],
 )
 
