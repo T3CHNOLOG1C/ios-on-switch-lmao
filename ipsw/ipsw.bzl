@@ -315,6 +315,20 @@ def os_volume_uuid(kind):
         fail("IPSW kind {} has no \"volumes\" in ipsw/pins.bzl".format(kind))
     return volumes["os_volume_uuid"].upper()
 
+def jetsam_properties_product(kind):
+    """The device the kind's IPSW carries jetsam properties for: its device class without "ap" ("J181").
+
+    Args:
+        kind: an IPSW kind.
+
+    Returns:
+        The product type, upper case.
+    """
+    device_class = IPSWS[kind]["device_class"]
+    if not device_class.endswith("ap"):
+        fail("IPSW kind {}'s device class {} does not end in ap".format(kind, device_class))
+    return device_class[:-len("ap")].upper()
+
 # Where the image builder stages the cryptex images on Preboot (tools/install/stages.py STAGING).
 _CRYPTEX_STAGING = "/private/preboot/Switch-Staging/"
 
