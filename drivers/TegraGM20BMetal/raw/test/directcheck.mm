@@ -7,6 +7,8 @@
 // usage: directcheck <nvk dylib> <cache dir> <default.metallib> <corpus.log> <pack.bin>
 //   DIRECTCHECK_MET=<file>: appends the key hash and form of each pack record made the same (a sweep over every bucket checks
 //   that it met every record of the pack)
+// Each state the pack set aside that the direct compile refuses too is listed with its reason (REFUSED lines): run over a
+// device's harvest against the pack it booted with, they are the states its runtime refused.
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #include <chrono>
@@ -79,7 +81,7 @@ int main(int argc, char **argv)
         uint32_t states = 0, same = 0, barriers = 0, refused = 0, bad = 0;
         double ms = 0;
         std::set<std::string> seen;
-        std::map<std::string, uint32_t> differences;
+        std::map<std::string, uint32_t> differences, reasons;
         for (const std::string &marked : probe::corpusLines(text, own != nil)) {
             probe::State s;
             const bool ours = marked.rfind("@O ", 0) == 0, framework = marked.rfind("@L ", 0) == 0;
@@ -117,6 +119,10 @@ int main(int argc, char **argv)
             } else {
                 verdict = outcome == raw::Compiler::Outcome::Made ? " made, and the pack set it aside" : "";
                 refused += verdict.empty();
+                if (verdict.empty()) {
+                    reasons[why.substr(0, 90)]++;
+                    printf("REFUSED (%s): %s\n", why.c_str(), s.key.substr(0, 160).c_str());
+                }
             }
             if (!verdict.empty()) {
                 bad++;
@@ -128,6 +134,8 @@ int main(int argc, char **argv)
             fclose(met);
         for (const auto &[what, n] : differences)
             printf("  %u x%s\n", n, what.c_str());
+        for (const auto &[why, n] : reasons)
+            printf("  %u x refused: %s\n", n, why.c_str());
         printf("directcheck: %u states made directly: %u records the same as the pack's, %u the same as its barrier "
                "forms, "
                "%u set aside and refused, %u differ; %.1f ms a state\n",
