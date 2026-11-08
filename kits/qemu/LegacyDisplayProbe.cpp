@@ -114,7 +114,6 @@ extern kern_return_t OSKextLoadKextWithIdentifier(const char *);
 extern int boot_progress_prepare_scanout(void) __attribute__((weak_import));
 extern void boot_progress_cancel_scanout(void) __attribute__((weak_import));
 extern void boot_progress_stage(const char *) __attribute__((weak_import));
-extern __attribute__((weak)) volatile int switch_console_hold;
 volatile uint32_t native_legacy_prepare_calls, native_legacy_prepare_reason, native_legacy_prepare_attempts;
 volatile uint32_t native_legacy_prepare_failures, native_legacy_prepare_retried, native_legacy_prepare_max_attempts;
 volatile uint64_t native_legacy_prepare_wait_us;
@@ -437,15 +436,8 @@ __attribute__((noinline)) void native_legacy_transfer_observed(IOReturn status, 
     native_legacy_transfer_status = status;
     native_legacy_transfer_request = (uintptr_t)request;
     native_legacy_transfer_bytes = bytes;
-    if (status == kIOReturnSuccess && !displayLogShown++) {
-        if (&switch_console_hold && switch_console_hold) {
-            IOLog("SwitchDisplay: first frame drawn (%llu bytes), not shown: the console keeps the screen until the "
-                  "data migration ends\n",
-                  bytes);
-        } else {
-            IOLog("SwitchDisplay: first frame on screen (%llu bytes)\n", bytes);
-        }
-    }
+    if (status == kIOReturnSuccess && !displayLogShown++)
+        IOLog("SwitchDisplay: first frame on screen (%llu bytes)\n", bytes);
     if (status != kIOReturnSuccess && displayLogFailed++ < 4) {
         IOLog("SwitchDisplay: frame copy failed status=%08x prepare=%u\n", (unsigned)status,
               native_legacy_prepare_reason);

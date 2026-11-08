@@ -155,8 +155,8 @@ extern "C" __attribute__((weak)) int vc_tape_attach(vm_offset_t, uint32_t, uint3
 extern "C" __attribute__((weak)) void vc_tape_detach(void)
 {}
 
-// XNU (kern_exec.c) while the one-time data migration runs: the console stays on screen and the UI's frames are drawn and
-// retired but not shown (presentBlock), so the user watches the migration's progress lines. Weak: absent, never held.
+// XNU (kern_exec.c) while the one-time data migration runs: the console stays on screen and the UI's frames retire undrawn
+// (kickHeld), so the user watches the migration's progress lines. Weak: absent, never held.
 extern "C" __attribute__((weak)) volatile int switch_console_hold;
 // XNU (spec_vnops.c, temporary): ends the boot I/O census at the first client frame; it prints from a thread call.
 extern "C" __attribute__((weak)) void switch_boot_io_report(void);
@@ -2578,33 +2578,17 @@ private:
 
     // Under the gate, a block-linear frame complete in drawSurface(): the first one switches window A to the rotated layout (and,
     // double-buffered, to surface 1), later ones flip when double-buffered; single-buffered they are already on screen.
-    // NOLINTNEXTLINE(misc-no-recursion): kickSwapQueue's kicking flag stops re-entry; a nested kick only loops
     void presentBlock()
     {
         if (gPanicRestore.panicking)
             return;
         if (!rotated && &switch_boot_io_report)
             switch_boot_io_report();  // once; later calls return at once
-        if (!rotated && &switch_console_hold && switch_console_hold) {
-            holdFrame();
-            return;
-        }
         if (!rotated) {
             startRotation();
         } else if (doubleBuffer) {
             flip();
         }
-    }
-
-    // Under the gate, a frame complete in drawSurface() while the console keeps the screen (switch_console_hold, the data
-    // migration): drawn, never shown, and no flip carries it. Retiring at the latch, its swap would wait for a latch that never
-    // comes (IOMFB's swap wait cancels the queue after 5 s and Core Animation never gets a page back), so it retires as shown.
-    // NOLINTNEXTLINE(misc-no-recursion): kickSwapQueue's kicking flag stops re-entry; a nested kick only loops
-    void holdFrame()
-    {
-        if (doubleBuffer)
-            ring.release();
-        retireUnshown(seqOf(flipRequest));
     }
 
     // A frame end (atFrameEnd) or vblank while a flip is out, under the gate. Which surface window A scans (its active START_ADDR)
@@ -3646,6 +3630,10 @@ public:
         }
         PlaneDecision pd;
         planeDecide(request, pd);
+        if (consoleHolds()) {
+            kickHeld(request, mach_absolute_time());
+            return;
+        }
         if (!pd.uiNew) {
             kickPlaneOnly(request, pd, mach_absolute_time());
             return;
@@ -3923,6 +3911,38 @@ public:
         transferred = true;
         native_legacy_transfer_observed(kIOReturnSuccess, request, length);
         finishTransfer(request);
+    }
+
+    // XNU's console keeps the screen until window A first shows a client frame, and the data migration holds it there
+    // (switch_console_hold). Released (native_legacy_prepare_scanout), the console stops drawing, so no kick may release it
+    // while the hold lasts.
+    bool consoleHolds() const
+    {
+        if (rotated || &switch_console_hold == nullptr)
+            return false;
+        return switch_console_hold != 0;
+    }
+
+    bool holdAnnounced = false;
+
+    // A swap kicked while the console holds the screen: nothing is drawn or flipped and the console keeps drawing; the swap
+    // retires as shown (with what is still out, retiring at the latch), so Core Animation keeps its pages.
+    // NOLINTNEXTLINE(misc-no-recursion): kickSwapQueue's kicking flag stops re-entry; a nested kick only loops
+    void kickHeld(const OriginalLegacySwapRequest *request, uint64_t kickAt)
+    {
+        if (!holdAnnounced) {
+            holdAnnounced = true;
+            IOLog("SwitchDisplay: the console keeps the screen while the data migration runs: client frames retire "
+                  "undrawn until it ends\n");
+        }
+        noteTaken(request, kickAt);
+        retireUnshown(seqOf(request));
+        if (!latchRetire) {
+            transferred = true;
+            finishTransfer(request, true);
+            return;
+        }
+        rekick = true;  // the next swap may already be queued behind this one: take it in the same kick
     }
 
     // A swap the kick has finished with (copied, filled or handed to the GPU), before it retires: its queue time and flip wait.
