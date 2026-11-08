@@ -682,7 +682,7 @@ public:
     bool createView(const Texture &of, uint32_t format, Texture &t);  // the same memory as another format
     // A view of part of a block-linear 2D texture, chain, array or cube: levels [baseLevel, +levels) of a chain, or layers
     // [baseLayer, +layers) of an array or cube, as a view of `type` (fx::kTexTwoD, kTexTwoDArray, kTexCube, kTexCubeArray). Its
-    // image is the part's first level and layer, which copies address; no pass renders into it.
+    // image is the part's first level and layer, which copies address and a pass renders into as a 2D view of one of each.
     bool createPartView(const Texture &of, uint32_t format, uint32_t type, uint32_t baseLevel, uint32_t levels,
                         uint32_t baseLayer, uint32_t layers, Texture &t);
     // Memoryless (a pass gives it a backing); Depth32Float_Stencil8 among them, as zeta (Texture::zeta)

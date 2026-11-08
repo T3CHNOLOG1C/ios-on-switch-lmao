@@ -1428,12 +1428,15 @@ bool Device::createPartView(const Texture &of, uint32_t format, uint32_t type, u
     Texture image;
     if (of.chain) {
         if (baseLayer || layers != 1 || baseLevel + levels > of.chain->layout.levels ||
-            !chainLevelImage(of, baseLevel, image))
+            (baseLevel && !chainLevelImage(of, baseLevel, image)))
             return false;
         c = of.chain->layout;
         va = of.chain->va;
-        image.cpu =
-            nullptr;  // (a later level's block height is the chain's clamp, not its own image's: the CPU goes by m2v)
+        if (!baseLevel)
+            image = of;
+        // (a later level's block height is the chain's clamp, not its own image's: the CPU goes by m2v)
+        image.cpu = nullptr;
+        image.layerBytes = c.arrayStride;
     } else {
         if (baseLevel || levels != 1 || baseLayer + layers > of.layers ||
             !fx::arrayLayout(of.width, of.height, of.layers, 1, of.bpp, c))
@@ -1451,7 +1454,7 @@ bool Device::createPartView(const Texture &of, uint32_t format, uint32_t type, u
     t.view = true;
     t.format = format;
     t.type = uint8_t(type);
-    t.renderable = false;
+    t.renderable = f->rt != 0 && type == fx::kTexTwoD && levels == 1 && layers == 1;
     t.shadowTarget = false;
     t.import = nullptr;
     t.span = {};

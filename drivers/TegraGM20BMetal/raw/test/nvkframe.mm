@@ -395,6 +395,26 @@ int main(int argc, char **argv)
                     printf("CUBE layout %s\n", back == cube ? "match" : "differs");
 #endif
                 }
+            } else if (t == frame::BLUR0 && getenv("FRAME_FBVIEW")) {
+                // FRAME_FBVIEW: BLUR0, which blur passes render into and sample, a 2D view of part of a private texture:
+                // slice (layer 1 of a 3-layer array), level (level 1 of a chain twice its size), level0 (level 0 of a chain)
+                const char *part = getenv("FRAME_FBVIEW");
+                const bool slice = !strcmp(part, "slice"), level = !strcmp(part, "level");
+                MTLTextureDescriptor *pd = [MTLTextureDescriptor new];
+                pd.textureType = slice ? MTLTextureType2DArray : MTLTextureType2D;
+                pd.pixelFormat = MTLPixelFormat(td.format);
+                pd.width = level ? td.w * 2 : td.w;
+                pd.height = level ? td.h * 2 : td.h;
+                pd.arrayLength = slice ? 3 : 1;
+                pd.mipmapLevelCount = slice ? 1 : 3;
+                pd.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+                pd.storageMode = MTLStorageModePrivate;
+                id<MTLTexture> parent = [dev newTextureWithDescriptor:pd];
+                tex[t] = [parent newTextureViewWithPixelFormat:pd.pixelFormat
+                                                   textureType:MTLTextureType2D
+                                                        levels:NSMakeRange(level ? 1 : 0, 1)
+                                                        slices:NSMakeRange(slice ? 1 : 0, 1)];
+                printf("FBVIEW %s %lux%lu\n", part, (unsigned long)tex[t].width, (unsigned long)tex[t].height);
             } else if (t == frame::IMAGE1 &&
                        frame::mipImage()) {  // every level, private: m2v's own image, or the raw path's chain
                 d.mipmapLevelCount = 1 + unsigned(std::log2(double(std::max(td.w, td.h))));
