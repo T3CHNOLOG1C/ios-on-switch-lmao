@@ -679,7 +679,9 @@ impl SM50Op for OpFMul {
             match &self.srcs[1].src_ref {
                 SrcRef::Zero | SrcRef::Reg(_) => {
                     e.set_opcode(0x5c68);
-                    e.set_reg_src(20..28, &self.srcs[1]);
+                    // ios-on-switch-lmao: its fneg is the shared bit 48, as
+                    // src0's is: set_reg_src asserted it had none
+                    e.set_reg_src_ref(20..28, &self.srcs[1].src_ref);
                 }
                 SrcRef::Imm32(imm32) => {
                     e.set_opcode(0x3868);
