@@ -44,6 +44,7 @@
 #include "SwitchFrameTimeline.h"
 #include "../../../../kits/SwitchRefusal/SwitchRefusalSite.h"
 #include "RawAlias.h"
+#include "RawResidency.h"
 #include "RawComplete.h"
 #include "raw_follow.h"
 #include "raw_gpu.h"
@@ -1930,6 +1931,7 @@ inline Cmd cmd(Op op, uint8_t stage = 0, uint16_t index = 0)
 @interface RMQueue : RMObject {
 @public
     dispatch_queue_t _completionQueue;
+    raw::ResidencySets _residency;
 }
 @end
 
@@ -1942,6 +1944,7 @@ struct RMSegment {
 @interface RMCommandBuffer : RMObject {
 @public
     uint64_t _protection;  // setProtectionOptions: (kept, no effect)
+    raw::ResidencySets _residency;
     // Its encoders: each one's first command (OpRender, OpBlit, OpCompute) carries index 1 where it goes to m2v (a refusal taken
     // while it was the active encoder: _encRefused, written into it as the next encoder begins or at commit, _encAt the
     // command's place). A refusal outside any encoder keeps the command buffer whole (_whole). One whose encoders are some raw's
@@ -3410,6 +3413,16 @@ static void giveRecording(RMCommandBuffer *b)
     [self takeReason:reason why:why];
 }
 
+- (void)useResidencySet:(id)set
+{
+    _residency.add(&set, 1);
+}
+
+- (void)useResidencySets:(const __unsafe_unretained id *)sets count:(NSUInteger)count
+{
+    _residency.add(sets, count);
+}
+
 - (id)rmTwin
 {
     return nil;
@@ -3916,6 +3929,26 @@ static void giveRecording(RMCommandBuffer *b)
 - (void)insertDebugCaptureBoundary
 {}
 
+- (void)addResidencySet:(id)set
+{
+    _residency.add(&set, 1);
+}
+
+- (void)addResidencySets:(const __unsafe_unretained id *)sets count:(NSUInteger)count
+{
+    _residency.add(sets, count);
+}
+
+- (void)removeResidencySet:(id)set
+{
+    _residency.remove(&set, 1);
+}
+
+- (void)removeResidencySets:(const __unsafe_unretained id *)sets count:(NSUInteger)count
+{
+    _residency.remove(sets, count);
+}
+
 - (void)setCompletionQueue:(dispatch_queue_t)queue
 {
     _completionQueue = queue;
@@ -4221,6 +4254,8 @@ static id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, 
     if (!m)
         return nil;
     m.label = cb.label;
+    cb->_queue->_residency.useOn(m);
+    cb->_residency.useOn(m);
     id enc = nil;
     // What the CPU wrote that this work reads, cleaned to memory before m2v's submission (m2v cleans an import only when it
     // makes it): the ranges a draw of a pack state reads, as raw::RenderEncoder::prepare cleans them (its uniform windows, its

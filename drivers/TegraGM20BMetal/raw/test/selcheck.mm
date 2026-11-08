@@ -10,6 +10,7 @@
 // usage: selcheck [pack]
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
+#import <objc/message.h>
 #import <objc/runtime.h>
 #include <unistd.h>
 #include <vector>
@@ -110,6 +111,13 @@ int main(int argc, char **argv)
             {"RMBuffer", "newLinearTextureWithDescriptor:offset:bytesPerRow:bytesPerImage:"},
             {"RMTexture", "waitUntilComplete"},
             {"RMBuffer", "waitUntilComplete"},
+            // residency sets (iOS 18 on, Core Animation 27's): everything is resident on the raw path
+            {"RMCommandBuffer", "useResidencySet:"},
+            {"RMCommandBuffer", "useResidencySets:count:"},
+            {"RMQueue", "addResidencySet:"},
+            {"RMQueue", "addResidencySets:count:"},
+            {"RMQueue", "removeResidencySet:"},
+            {"RMQueue", "removeResidencySets:count:"},
         };
         int bad = 0, own = 0, m2v = 0;
         for (const Use &u : uses) {
@@ -147,7 +155,11 @@ int main(int argc, char **argv)
                 usleep(getenv("SELCHECK_GAP_US") ? (useconds_t)atoi(getenv("SELCHECK_GAP_US")) : 1000);
             }
             id<MTLCommandQueue> q = [dev newCommandQueue];
+            // a command buffer with residency sets on it and its queue stays raw (m2v=0 below)
+            NSObject *set = [NSObject new];
+            ((void (*)(id, SEL, id))objc_msgSend)(q, sel_registerName("addResidencySet:"), set);
             id<MTLCommandBuffer> cb = [q commandBuffer];
+            ((void (*)(id, SEL, id))objc_msgSend)(cb, sel_registerName("useResidencySet:"), set);
             id<MTLBlitCommandEncoder> b = [cb blitCommandEncoder];
             [b copyFromTexture:keep[0]
                       sourceSlice:0
@@ -169,6 +181,10 @@ int main(int argc, char **argv)
             printf("pool growth on the allocating thread: %d\n", stalls);
             if (stalls != 0)
                 bad++;
+            if (!strstr(line, " m2v=0 ")) {
+                printf("RESIDENCY: a command buffer with residency sets went to m2v\n");
+                bad++;
+            }
         }
         return bad ? 1 : 0;
     }
