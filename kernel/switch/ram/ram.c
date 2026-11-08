@@ -18,6 +18,8 @@
 #include <switch/boot_layout.h>
 #include <switch/ram.h>
 
+#include "SwitchPanicSave.h"
+
 extern vm_offset_t first_avail;
 extern vm_offset_t virtual_space_start;
 extern pmap_paddr_t avail_start, avail_end;
@@ -137,6 +139,9 @@ static pmap_paddr_t switch_kernel_ram_start(void)
 
 void switch_ram_init(struct boot_args *args)
 {
+#if DEVELOPMENT || DEBUG
+    switch_panic_early_test(1);
+#endif
     DTEntry entry = NULL;
     const void *wire = NULL;
     unsigned int bytes = 0;
@@ -225,6 +230,9 @@ void switch_ram_account(uint64_t present)
 
 void switch_ram_bootstrap_done(void)
 {
+#if DEVELOPMENT || DEBUG
+    switch_panic_early_test(2);
+#endif
     if (switch_ledger.committed) {
         first_avail_phys = avail_start;
         sane_size -= avail_start - switch_accounted_bootstrap_end;
