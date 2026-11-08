@@ -28,8 +28,8 @@ extern "C" {
 #define AWDL_AW_TU             16u    // availability window
 #define AWDL_EAW_AWS           4u     // one channel-sequence slot (extended AW) = 4 AWs = 64 TU
 #define AWDL_SEQ_SLOTS         16u    // channel sequence length; one sequence = 1024 TU
-#define AWDL_EAW_TU            (AWDL_AW_TU * AWDL_EAW_AWS)
-#define AWDL_PSF_INTERVAL_TU   110u  // period of PSFs
+#define AWDL_EAW_TU            64u    // AWDL_AW_TU * AWDL_EAW_AWS
+#define AWDL_PSF_INTERVAL_TU   110u   // period of PSFs
 #define AWDL_MAX_PEERS         32u
 #define AWDL_PEER_TIMEOUT_US   3000000u  // a peer silent this long is lost
 #define AWDL_ELECTION_MAX_HOPS 10u

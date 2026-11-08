@@ -99,16 +99,17 @@ void send(const Job &job)
         }
         return;
     }
-    if (gCounters.sent++ == 0)
+    if (gCounters.sent++ == 0) {
         IOLog("SwitchWLAN: AWDL soft: first actframe accepted: chanspec %#x, dwell %u ms, %u bytes\n", chanspec,
               dwellMs, job.length);
+    }
 }
 
 void monitor(bool on)
 {
     const uint8_t value[4] = {static_cast<uint8_t>(on), 0, 0, 0};
     const int e = switch_wlan_ioctl_set(BCM_WLC_SET_MONITOR, value, sizeof(value));
-    gMonitorOn = on && !e;
+    gMonitorOn = on && e == 0;
     IOLog("SwitchWLAN: AWDL soft: WLC_SET_MONITOR %d answered %d%s%s\n", on ? 1 : 0,
           swlan_is_fwerr(e) ? swlan_fwerr_code(e) : e, swlan_is_fwerr(e) ? " " : "",
           swlan_is_fwerr(e) ? bcme_name(swlan_fwerr_code(e)) : "");
@@ -199,11 +200,12 @@ void actionFrame(const uint8_t addr[6], const uint8_t *data, size_t length)
     int32_t rssi = meta.version ? meta.rssi : -60;
     rssi = rssi > 0 ? 0 : rssi;
     rssi = rssi < -128 ? -128 : rssi;
-    if (gCounters.rxEvents++ == 0)
+    if (gCounters.rxEvents++ == 0) {
         IOLog("SwitchWLAN: AWDL soft: first AWDL action frame (WLC_E_ACTION_FRAME_RX, header v%u, chanspec %#x, "
               "%u bytes) from %02x:%02x:%02x:%02x:%02x:%02x\n",
               meta.version, meta.chanspec, static_cast<unsigned>(n), addr[0], addr[1], addr[2], addr[3], addr[4],
               addr[5]);
+    }
     deliver(frame, 24 + n, freq, static_cast<int8_t>(rssi), 0);
 }
 
@@ -297,6 +299,7 @@ extern "C" int switch_wlan_soft_stat(char *buf, size_t size)
     return n < 0 ? 0 : n;
 }
 
+// NOLINTNEXTLINE(misc-const-correctness): the context goes back to the stack's callback, which takes a void *
 extern "C" int swlan_awdl_rx_start(swlan_rx_fn fn, void *ctx)
 {
     if (!fn || !gLock)

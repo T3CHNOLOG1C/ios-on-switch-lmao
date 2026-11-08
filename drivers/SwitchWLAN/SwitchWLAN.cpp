@@ -254,7 +254,7 @@ OSDeclareDefaultStructors(SwitchWLAN)
 
     int awdlD11n() const
     {
-        return iotype_ == SWLAN_IOTYPE_D11N;
+        return iotype_ == SWLAN_IOTYPE_D11N ? 1 : 0;
     }
 
     void awdlCallbacks(swlan_fw_event_fn events, void *eventsContext, swlan_eth_rx_fn rx, void *rxContext,
