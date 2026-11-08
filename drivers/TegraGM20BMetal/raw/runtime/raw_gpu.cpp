@@ -2845,12 +2845,17 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     if (r.vertexSlot != 0xff) {
         const Bound &b = bufs_[1][r.vertexSlot];
         // the stream ends where the bound bytes end: a setBytes chunk (256-aligned, as m2v's upload blocks) or the buffer's end
-        const uint64_t limit =
-            b.buffer ? b.va + b.size - 1 : b.va + ((b.size + kUboChunk - 1) & ~uint64_t(kUboChunk - 1)) - 1;
-        if (b.va != vbVa_ || limit != vbLimit_) {
-            p.inc(VERTEX_STREAM_LOCATION, {uint32_t(b.va >> 32), uint32_t(b.va)});
+        uint64_t location = b.va, bytes = b.buffer ? b.size : (b.size + kUboChunk - 1) & ~uint64_t(kUboChunk - 1);
+        if (!location ||
+            !bytes) {  // none bound, or none of it left: NVK's empty stream (nvk_mme_bind_vb before Turing)
+            location = d.zero_.va;
+            bytes = 0;
+        }
+        const uint64_t limit = location + bytes - 1;
+        if (location != vbVa_ || limit != vbLimit_) {
+            p.inc(VERTEX_STREAM_LOCATION, {uint32_t(location >> 32), uint32_t(location)});
             p.inc(VERTEX_STREAM_LIMIT, {uint32_t(limit >> 32), uint32_t(limit)});
-            vbVa_ = b.va;
+            vbVa_ = location;
             vbLimit_ = limit;
         }
         if (b.buffer && !b.buffer->wc && r.vertexStride) {  // the vertices this draw reads, CPU-written (cached memory)

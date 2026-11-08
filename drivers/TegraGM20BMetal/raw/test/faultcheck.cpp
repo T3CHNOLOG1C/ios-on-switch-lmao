@@ -5,6 +5,8 @@
 //   parent then used and freed again.
 // - An instanced draw of thousands of instances stays in its push reservations (test/build.sh's harness builds stop a push
 //   that ran past one) and reaches the GPU whole.
+// - A draw whose vertex buffer is unbound fetches from NVK's empty stream (the zero page, its limit before its start), never
+//   from VA 0 with no limit.
 // usage: faultcheck <pack.bin>
 #include <cstdio>
 #include <cstdlib>
@@ -105,6 +107,42 @@ void instances(raw::Device &dev, Pass &pass, const Expect &expect)
     dev.destroyBuffer(indices);
 }
 
+uint64_t method64(uint32_t hi)
+{
+    return uint64_t(cap_reg3d(hi)) << 32 | cap_reg3d(hi + 4);
+}
+
+void unboundStream(raw::Device &dev, Pass &pass, const Expect &expect)
+{
+    constexpr uint32_t kStreamLocation = 0x1c04,
+                       kStreamLimit = 0x1f00;  // SET_VERTEX_STREAM_A_LOCATION_A, _LIMIT_A_A(0)
+    auto drawWith = [&](const raw::Buffer *vertices) {
+        raw::CommandBuffer *cb = dev.begin();
+        raw::RenderEncoder *e = cb ? cb->render(pass.desc) : nullptr;
+        if (!e)
+            return false;
+        e->setPipeline(pass.state);
+        e->setBuffer(1, pass.state->rec->vertexSlot, vertices, 0);
+        const char *why = nullptr;
+        const bool drawn = e->draw(3, 0, 3, 1, 0, &why);
+        e->end();
+        uint32_t seq = 0;
+        return drawn && cb->commit(seq) && dev.wait(seq);
+    };
+    expect(drawWith(nullptr), "a draw with its vertex buffer unbound");
+    uint64_t location = method64(kStreamLocation), limit = method64(kStreamLimit);
+    std::printf("unbound stream: location 0x%llx (%s), limit 0x%llx\n", (unsigned long long)location,
+                dev.vaOwner(location).c_str(), (unsigned long long)limit);
+    expect(dev.vaOwner(location) == "the zero page +0x0" && limit == location - 1,
+           "it fetches from NVK's empty stream: the zero page, its limit before its start");
+    raw::Buffer vertices;
+    expect(dev.createBuffer(4096, vertices) && drawWith(&vertices), "a draw with its vertex buffer bound");
+    location = method64(kStreamLocation);
+    limit = method64(kStreamLimit);
+    expect(location == vertices.va && limit == vertices.va + 4095, "it fetches the buffer's bytes");
+    dev.destroyBuffer(vertices);
+}
+
 }  // namespace
 
 int main(int argc, char **argv)
@@ -132,6 +170,7 @@ int main(int argc, char **argv)
         return 1;
     }
     instances(dev, pass, expect);
+    unboundStream(dev, pass, expect);
     if (failures) {
         std::printf("FAIL: faultcheck (%d)\n", failures);
         return 1;
