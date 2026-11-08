@@ -442,10 +442,17 @@ TEST(GM20BRawReopenSource, ReopenKeepsTheHeapAndReplaysTheContext)
 		     "p.m(WAIT_FOR_IDLE, 0);");
 	const std::string context = flat(definition(raw, "void Device::emitContext(Push &p)"));
 	EXPECT_THAT(context, HasSubstr("p.m(LOAD_CB_OFFSET, kRootInterlockTickets);"));
+	// the init template relocated to this device's own addresses (raw_pack.cpp relocated, shared with the runtime's capture)
+	EXPECT_THAT(context, HasSubstr("const InitAddresses here = {heap_.va, zero_.va, root_.va, "
+				       "tic_.va, tsc_.va, kTicCount - 1, kTscCount - 1};"));
+	EXPECT_THAT(context, HasSubstr("relocated(im[i], here)"));
+	const std::string relocated = flat(
+		definition(SourceText("../../TegraGM20BMetal/raw/runtime/raw_pack.cpp"),
+			   "uint32_t relocated(const PackInitMethod &m, const InitAddresses &a)"));
 	for (const char *reloc :
 	     {"case RelocHeapHi:", "case RelocHeapLo:", "case RelocTicHi:", "case RelocTicLo:",
 	      "case RelocTscHi:", "case RelocTscLo:", "case RelocRootHi:", "case RelocRootLo:"})
-		EXPECT_THAT(context, HasSubstr(reloc));
+		EXPECT_THAT(relocated, HasSubstr(reloc));
 	EXPECT_THAT(context, HasSubstr("p.inc(CB_SELECTOR_A,"));
 	const std::string begin = flat(definition(raw, "CommandBuffer *Device::begin()"));
 	expectBefore(begin, "reopen();", "p.m(INVALIDATE_SHADER_CACHES_NO_WFI,");
