@@ -8,6 +8,7 @@
 #include "raw_follow.h"
 #include "raw_gpu.h"
 #include "raw_target.h"
+#include "raw_tiled_cache.h"
 #include "TegraGM20BLayout.h"
 
 #include <CoreFoundation/CoreFoundation.h>
@@ -298,6 +299,7 @@ void Device::emitContext(Push &p)
     const uint32_t *base = pack_.section<uint32_t>(PackBaseline);
     for (uint64_t i = 0; i < pack_.bytes(PackBaseline) / 8; i++)
         p.m(base[2 * i], base[2 * i + 1]);
+    tiledCacheInit(p, k_.info());
     // the depth/stencil registers (the runtime's, as NVK leaves them for Metal's default state in a pass without the attachment)
     {
         DepthStencilRegs unknown;
@@ -2352,6 +2354,11 @@ bool CommandBuffer::commit(uint32_t &seqno)
             invalidatedBefore = d.heapInvalidated_;
             d.heapInvalidated_ = d.heapPlaced_;
         }
+    }
+    if (tiledCache(d.k_.info()) && !segments_.empty()) {
+        uint64_t va;
+        auto *tail = reinterpret_cast<uint32_t *>(d.alloc(d.push_, kTiledCacheFlushWords * 4, 4, va));
+        segment(tail, tiledCacheFlush(tail));
     }
     // CPU writes the GPU reads: to memory, by address (no set/way operation, nothing global)
     uint64_t cleaned = 0;

@@ -9,6 +9,8 @@
 // MOCK_GPU_LOG=<file>: every submission run, "ch seqno kick_us start_us end_us acquires", and the WaitFence calls by thread.
 // MOCK_IGNORE_ACQUIRES=1: the GPU runs submissions without their acquires (ordercheck.py's negative control).
 // MOCK_IMPORT_US=<n>: BoImport takes n us per 16 MiB (the kext's wiring; selcheck's pool test).
+// MOCK_TILED_CACHE=1: GetInfo says every GR context holds the tiled cache's table (TegraGM20BInfoTiledCache), as the kext
+// does unless booted with switch-no-tiled-cache. Off by default while NVK host builds without the bit stay in use.
 // Each IOServiceOpen is a connection of its own, as another task's would be (Order stays among its channels; MOCK_TASK_WINDOWS=1:
 // its own GPU VA window too), and ExecSurfaces (method 17; MOCK_NO_EXEC_SURFACES=1 hides it) orders as the kext's TegraGM20BFences.h: a
 // submission that lists an IOSurface's import waits on the GPU for every other channel's, any connection's, last submission
@@ -444,7 +446,8 @@ static kern_return_t mock_call(mach_port_t c, uint32_t sel, const void *in, size
                                                (getenv("MOCK_NO_KERNEL_MAP") ? 0 : TegraGM20BInfoKernelMap) |
                                                (getenv("MOCK_NO_ORDER") ? 0 : TegraGM20BInfoOrder) |
                                                (getenv("MOCK_NO_SURFACE_LAYOUT") ? 0 : TegraGM20BInfoSurfaceLayout) |
-                                               (getenv("MOCK_NO_KILL_RECORD") ? 0 : TegraGM20BInfoKillRecord),
+                                               (getenv("MOCK_NO_KILL_RECORD") ? 0 : TegraGM20BInfoKillRecord) |
+                                               (getenv("MOCK_TILED_CACHE") ? TegraGM20BInfoTiledCache : 0),
                                       .chipset = 0x12e,
                                       .gpc_count = 1,
                                       .tpc_count = 2,

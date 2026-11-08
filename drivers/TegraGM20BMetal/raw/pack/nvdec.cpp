@@ -49,6 +49,8 @@ enum : uint32_t {
     PIXEL_SHADER_BARRIER = 0x0de0,
     NO_OPERATION = 0x0100,
     INVALIDATE_TEXTURE_DATA_CACHE_PIXEL_ORDERED = 0x0f74,
+    TILED_CACHE_BARRIER = 0x0f7c,  // deko3d's engine_3d.def (raw/runtime/raw_tiled_cache.h)
+    TILED_CACHE_FLUSH = 0x0f80,
     ZT_A = 0x0fe0,
     ZT_B = 0x0fe4,
     CLEAR_SURFACE_CONTROL = 0x10f8,
@@ -155,7 +157,8 @@ bool ignored3d(uint32_t m)
         return true;  // control, MME RAM loads, WFI
     if (m == INVALIDATE_SHADER_CACHES || m == INVALIDATE_SHADER_CACHES_NO_WFI || m == INVALIDATE_TEXTURE_DATA_CACHE ||
         m == INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI || m == INVALIDATE_SAMPLER_CACHE_NO_WFI ||
-        m == INVALIDATE_TEXTURE_HEADER_CACHE_NO_WFI || m == FLUSH_PENDING_WRITES)
+        m == INVALIDATE_TEXTURE_HEADER_CACHE_NO_WFI || m == FLUSH_PENDING_WRITES || m == TILED_CACHE_BARRIER ||
+        m == TILED_CACHE_FLUSH)
         return true;
     if (m >= CLEAR_RECT_H && m <= COLOR_CLEAR_VALUE + 0xc)
         return true;  // clear rect/vertex array triggers/clear values
@@ -374,6 +377,12 @@ void Decoder::method(uint32_t subc, uint32_t mthd, uint32_t data, bool fromMme)
         break;
     case PIXEL_SHADER_BARRIER:
         barrier("PSB");
+        break;
+    case TILED_CACHE_BARRIER:
+        barrier("TCBAR");
+        break;
+    case TILED_CACHE_FLUSH:
+        barrier("TCFLUSH");
         break;
     case NO_OPERATION:
         // raw_gpu.cpp's marks (SWITCH_RAW_HARNESS_MARKS builds): a fetch barrier left out, a draw's run after its first
