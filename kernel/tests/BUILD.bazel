@@ -38,7 +38,9 @@
 #   xnu_ui_scale_sites_24B119_test  bsd/vm/switch_ui_scale_sites_24B119.h against 24B119's (translated) text mappings:
 #                            the same placement checks; the FrontBoardServices, MobileGestalt, CoreUI, ProgressUI and
 #                            CoverSheetKit edits decoded; the keyboard's iPad table giving the 10.2-inch iPad's idiom
-#                            below 768x1024 and every other screen's unchanged
+#                            below 768x1024 and every other screen's unchanged; the home grid the row of screen type
+#                            0x68, the one every scale's screen falls through to; the switcher's landscape-only card
+#                            scale keeping the shipped calls and exit
 #   xnu_page_ratio_test      16 KiB VM pages over the 4 KiB granule: pmap.c's write_pte_fast (both trees) writes a
 #                            VM page as four consecutive 4 KiB frames, repeats empty and compressed entries, refuses an
 #                            unaligned PTE

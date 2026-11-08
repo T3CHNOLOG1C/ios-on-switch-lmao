@@ -25,12 +25,24 @@
  *   the screen. The first entry's size becomes 0x0: every smaller screen is idiom 26, J181's class, whose keyboard
  *   _UIKeyboardGetDerivedKeyboardForSpecificOrientationAndLayoutClass derives to the screen's width. The table's one
  *   reader is that function; 720x1280 (scale 1) is 24 either way.
+ * - SpringBoardHome (.17), _defaultRootMetrics' row for screen type 0x68: 21H461's home grid, 3x5 portrait and 5x3
+ *   landscape on every page. _SBHScreenTypeLookup matches no screen type exactly at a fractional scale, and an iPad
+ *   without a Home button smaller than 768x1024 points then falls through SBDisplayMetrics' sizes to 0x68 (iPad
+ *   mini's row) at every scale. Every iPad type's row has the same 5x6 / 6x5 grid and 4x6 for pages with widgets,
+ *   so no answer from the ADT or MobileGestalt gives another grid. At 1 the screen is near iPad mini's and keeps it.
+ * - SpringBoard (.36), -[SBGridLayoutSwitcherModifier scale]: 21H461's switcher card scale. The iPad switcher still
+ *   has two rows of gridSwitcherPageScale (0.3) cards 63 points apart, too tall for 16:9 in landscape. Across a
+ *   wider-than-tall container the scale is the scale's grid_num / grid_den; portrait keeps 0.3. The width is fabs'd
+ *   as CGRectGetWidth did, and BSFloatIsZero(width) becomes fminnm: a zero width makes 0 / 0, which fminnm drops for
+ *   the width, 0.
  * 21H461's other sites are not here. 27's -[_UIBatteryView _fillLayerFrame:cornerRadius:] fills the body's own
  * frame (no inset), so SpringBoard's and Control Center's batteries have no gap to even out. +[PKIconImageCache
- * settingsIconCacheWithScale:] returns nil at every scale and 24B119 ships no iconCache artwork. The iPad switcher's
- * page scale moved to -[SBGridLayoutSwitcherModifier scale] (-[SBMixedGridSwitcherModifier _fullScreenCardScale] is
- * App Exposé's now), the home screen's grid to a table of 120 screen types (_getRootMetrics), and UIKit's own status
- * bar battery insets through UIRectInsetEdges, a call with no room beside it: not ported.
+ * settingsIconCacheWithScale:] returns nil at every scale and 24B119 ships no iconCache artwork. Control Center's
+ * battery (icon size 17, 21H461's 15) is 28x14 points with a 1.25 point line, and the 14 is an fmov immediate in
+ * both _batterySizeForIconSize: copies with two instructions to spare; 14.4 has no fmov encoding and no literal of
+ * it is in reach. -[_UIStatusBarBatteryView _fillLayerFrame:cornerRadius:] still insets by twice the line through
+ * UIRectInsetEdges, with only its fadd d4, d13, d13 to spare; 1.6, the whole-pixel inset at 1.25, has no fmov
+ * encoding and no literal of it is in reach either: not ported.
  */
 static const struct switch_us_site switch_us_sites_24B119[] = {
 	{   /* dyld_shared_cache_arm64e.11 of 24B119 (text 0x1a8400000, file 0) */
@@ -117,6 +129,34 @@ static const struct switch_us_site switch_us_sites_24B119[] = {
 			  { 0 } },
 		},
 		"UIKitCore", "keyboard class of the 10.2-inch iPad",
+	},
+	{   /* dyld_shared_cache_arm64e.17 of 24B119 (text 0x1c0400000, file 0) */
+		{ 0x4a, 0x4b, 0x97, 0x5a, 0xb4, 0x57, 0x33, 0x56, 0x93, 0xa8, 0x4f, 0x80, 0xc9, 0x09, 0x55, 0x7d },
+		0x1c61e4000ULL, 0x5de4000ULL, 0x3000ULL, 0, 2,
+		{
+			/* 0x1c61e7660: _defaultRootMetrics (0x1c61e6580) + 0x10e0, screen type 0x68: {5, 6, 6, 5} -> {3, 5, 5, 3} */
+			{ 0x5de7660ULL, 8, 0, 4, SWITCH_US_FIXED,
+			  { 0x05, 0x06, 0x06, 0x05, 0x00, 0x00, 0x00, 0x00 },
+			  { 0x03, 0x05, 0x05, 0x03 } },
+			/* 0x1c61e76a8: its grid for pages with widgets, {4, 6} -> {3, 5} */
+			{ 0x5de76a8ULL, 8, 0, 2, SWITCH_US_FIXED,
+			  { 0x04, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
+			  { 0x03, 0x05 } },
+		},
+		"SpringBoardHome", "home screen grid 3x5",
+	},
+	{   /* dyld_shared_cache_arm64e.36 of 24B119 (text 0x220400000, file 0) */
+		{ 0xd8, 0x79, 0x2a, 0xca, 0x66, 0xfc, 0x3c, 0xf6, 0xb5, 0x58, 0xc6, 0xf4, 0x75, 0x99, 0x92, 0x10 },
+		0x227ae0000ULL, 0x76e0000ULL, 0x0ULL, 0, 1,
+		{
+			/* 0x227ae0ad0, after bl containerViewBounds: bl CGRectGetWidth; mov v9.16b, v0.16b; bl BSFloatIsZero;
+			 * movi v0.2d, #0; tbnz w0, #0, +0x10; fmul d0, d8, d9; frinta d0, d0; fdiv d0, d0, d9 */
+			{ 0x76e0ad0ULL, 32, 0, 32, SWITCH_US_GRID_PAGE_SCALE,
+			  { 0x38, 0x4b, 0x19, 0x94, 0x09, 0x1c, 0xa0, 0x4e, 0xa2, 0xec, 0x19, 0x94, 0x00, 0xe4, 0x00, 0x6f,
+			    0x80, 0x00, 0x00, 0x37, 0x00, 0x09, 0x69, 0x1e, 0x00, 0x40, 0x66, 0x1e, 0x00, 0x18, 0x69, 0x1e },
+			  { 0 } },
+		},
+		"SpringBoard", "app switcher landscape card scale",
 	},
 };
 
