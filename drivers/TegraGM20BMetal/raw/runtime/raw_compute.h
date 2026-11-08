@@ -4,15 +4,17 @@
 // and sampler pools (raw_pack.h PackInit), so a dispatch is a QMD in the upload ring and SEND_PCAS: no compute state lives in
 // the channel between dispatches.
 //
-// A kernel is NVK's work for one Metal kernel at one threadgroup shape (m2v compiles the local size, and the threadgroup
-// memory it declares, into the program): NAK's program, the QMD NVK filled for it (nak_fill_qmd), which of its constant
-// buffers are NVK's root table and set 0, and where set 0 takes each Metal buffer, texture and sampler (raw_pack.h PackKernel). A dispatch
-// writes those as NVK's nvk_cmd_upload_qmd does: its own root table (cs group count, the set's address, the push words) and set
-// 0 in the upload ring, and a QMD of the template with the program's heap offset, the grid and the two addresses.
+// A kernel is NVK's work for one Metal kernel at one key (raw_compute_key.h: m2v compiles the threadgroup shape and memory
+// lengths into the program, and picks its variant by the textures and samplers bound): NAK's program, the QMD NVK filled for
+// it (nak_fill_qmd), which of its constant buffers are NVK's root table, set 0 and shader data, and where set 0 takes each
+// Metal buffer, texture and sampler (raw_pack.h PackKernel). A dispatch writes those as NVK's nvk_cmd_upload_qmd does: its
+// own root table (the cs group count, the set's address, the push words with m2v's DispatchRegion field) and set 0 in the
+// upload ring, and a QMD of the template with the program's heap offset, the grid and the constant buffers' addresses.
 //
 // Order. A compute encoder is ordered after the work encoded before it and before the work after it on the GPU, as Metal orders
-// a serial encoder: a wait for idle where it starts (the render and copy work before it has written), and where it ends a wait
-// for idle with the texture and constant caches invalidated (what the 3D and copy engines read next was written through L2).
+// a serial encoder: a wait for idle where it starts (the render and copy work before it has written), between its dispatches
+// a shader-data flush that waits for the one before, and where it ends a wait for idle with the texture and constant caches
+// invalidated (what the 3D and copy engines read next was written through L2).
 #pragma once
 #include <cstdint>
 #include <string>
