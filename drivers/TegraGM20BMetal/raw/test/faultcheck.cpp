@@ -12,6 +12,7 @@
 // - A commit whose later Exec the kernel refuses leaves nothing of its rings in flight, and the next command buffer a new
 //   channel.
 // - A wait that fails on a channel destroyed meanwhile marks no new channel of the same id lost.
+// - A command buffer larger than its push ring reaches the GPU whole (the ring grows under it).
 // - A channel the kernel killed is made again with its context before any command buffer is encoded for it: one whose
 //   ChannelCreate or context Exec the kernel refused gives no command buffer, and the next begin() tries again.
 // - Programs placed in the shader heap are behind an instruction-cache invalidate before any draw runs them, even when the
@@ -288,6 +289,38 @@ void lostReused(const Expect &expect)
     k.closeChannel(second);
 }
 
+// A command buffer larger than its push ring (a client's: 256 KiB): 10000 copies, each a word on from the last, in one blit
+// encoder. Its words are all there when it is submitted, so the word at the end is the first one's
+void outgrownRing(const char *pack, const Expect &expect)
+{
+    constexpr uint32_t kCopies = 10000;
+    raw::Device client;
+    std::string err;
+    raw::Buffer chain;
+    if (!client.open(pack, 0, err, raw::Device::Role::Client) || !client.createBuffer((kCopies + 1) * 4, chain)) {
+        expect(false, "a client device and a buffer");
+        return;
+    }
+    memset(chain.cpu, 0, chain.length);
+    reinterpret_cast<uint32_t *>(chain.cpu)[0] = 0x5eed1234;
+    raw::CommandBuffer *cb = client.begin();
+    if (!cb) {
+        expect(false, "a command buffer");
+        return;
+    }
+    cb->clean(chain.cpu, chain.length);
+    raw::BlitEncoder *e = cb->blit();
+    for (uint32_t i = 0; i < kCopies; i++)
+        e->copyBytes(chain.va + 4 * i, chain.va + 4 * (i + 1), 4);
+    e->end();
+    uint32_t seq = 0;
+    expect(cb->commit(seq) && client.wait(seq), "submitted and completed");
+    const uint32_t last = reinterpret_cast<const uint32_t *>(chain.cpu)[kCopies];
+    std::printf("outgrown ring: the last word 0x%08x\n", last);
+    expect(last == 0x5eed1234, "every copy ran, in order");
+    client.destroyBuffer(chain);
+}
+
 void reopenRefused(raw::Device &dev, const Expect &expect)
 {
     raw::Buffer a, b;
@@ -400,6 +433,7 @@ int main(int argc, char **argv)
     }
     setenv("RAWCAP_LOG", "/dev/null", 0);  // the mock decodes every submission
     setenv("MOCK_GPU_US", "20000", 0);
+    setenv("NVDEC_WRITETHROUGH", "1", 0);  // copies land in the memory behind them (outgrownRing reads them back)
     raw::Device dev;
     std::string err;
     if (!dev.open(argv[1], 0, err)) {
@@ -427,6 +461,7 @@ int main(int argc, char **argv)
     invalidateRefused(dev, expect);
     waitRefused(dev, expect);
     channelRefused(argv[1], expect);
+    outgrownRing(argv[1], expect);  // last: its device's channel is the mock's latest from here on
     if (failures) {
         std::printf("FAIL: faultcheck (%d)\n", failures);
         return 1;
