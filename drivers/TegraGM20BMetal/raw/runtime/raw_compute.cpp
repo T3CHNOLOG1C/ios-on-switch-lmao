@@ -114,9 +114,12 @@ ComputeEncoder::ComputeEncoder(CommandBuffer &cb, Device &dev) : cb_(cb), dev_(d
     uint64_t va;
     start_ = reinterpret_cast<uint32_t *>(dev_.alloc(dev_.push_, kEncoderWords * 4, 256, va));
     p_ = Push{start_, start_ + kEncoderWords};
-    // the scheduler's cached QMDs (the upload ring reuses their addresses) and the compute class's header caches, as NVK opens
-    // a command buffer's compute work (nvk_cmd_buffer_begin_compute)
+    // what the render and copy work before wrote, out of the SMs' data, constant and texture caches; the scheduler's cached
+    // QMDs (the upload ring reuses their addresses) and the compute class's header caches, as NVK opens a command buffer's
+    // compute work (nvk_cmd_buffer_begin_compute)
     p_.m(WAIT_FOR_IDLE, 0);
+    p_.m(INVALIDATE_SHADER_CACHES, kInvalidateData | kFlushData | kInvalidateConstant, SUBC_COMPUTE);
+    p_.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0, SUBC_COMPUTE);
     p_.m(INVALIDATE_SKED_CACHES, 0, SUBC_COMPUTE);
     p_.m(INVALIDATE_SAMPLER_CACHE_NO_WFI, 0, SUBC_COMPUTE);
     p_.m(INVALIDATE_TEXTURE_HEADER_CACHE_NO_WFI, 0, SUBC_COMPUTE);
@@ -167,7 +170,7 @@ void ComputeEncoder::setBufferOffset(uint32_t slot, uint64_t offset)
 void ComputeEncoder::barrier()
 {
     room(8);
-    p_.m(INVALIDATE_SHADER_CACHES, kInvalidateData | kFlushData, SUBC_COMPUTE);
+    p_.m(INVALIDATE_SHADER_CACHES, kInvalidateData | kFlushData | kInvalidateConstant, SUBC_COMPUTE);
     p_.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0, SUBC_COMPUTE);
 }
 
