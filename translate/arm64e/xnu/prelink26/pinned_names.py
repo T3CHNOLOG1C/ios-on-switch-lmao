@@ -380,6 +380,22 @@ NAMES = {
     0xFFFFFFF00A1AD270: '_task_id_token_port_name_to_task',
     0xFFFFFFF00A1AA9A8: '_task_is_app_suspended',
     0xFFFFFFF00A17E580: '_task_reference',
+    # IOMemoryDescriptor.cpp after setVMTags, in the GOT order of IOSurface and IOGPUFamily, whose 21H461 builds
+    # imported these names there: setContext with the default key (a branch into the keyed form),
+    # IOMemoryDescriptor::setOwnership (after IOGeneralMemoryDescriptor's), the three-argument getPageCounts,
+    # getDMAMapLength, getDescriptorID (setDescriptorID, then the reserved field).
+    0xFFFFFFF00A887B2C: '__ZN18IOMemoryDescriptor10setContextEP8OSObject',
+    0xFFFFFFF00A887BB8: '__ZN18IOMemoryDescriptor12setOwnershipEP4taskij',
+    0xFFFFFFF00A888034: '__ZN18IOMemoryDescriptor13getPageCountsEPyS0_S0_',
+    0xFFFFFFF00A887E18: '__ZN18IOMemoryDescriptor15getDMAMapLengthEPy',
+    0xFFFFFFF00A887B3C: '__ZN18IOMemoryDescriptor15getDescriptorIDEv',
+    # Each the only 21H461 import of its kext in its GOT gap: IOGPUFamily's IOPerfControlClient::copyClient, the
+    # serial driver's IORecursiveLockSleepDeadline.
+    0xFFFFFFF00A8F3050: '__ZN19IOPerfControlClient10copyClientEP9IOServicey',
+    0xFFFFFFF00A80E7D8: '_IORecursiveLockSleepDeadline',
+    # apfs between lck_mtx_lock and lck_mtx_unlock (IOLockLock and IOLockUnlock's own names): six arguments, the
+    # sleep action's flags tested first, the deadline in x5.
+    0xFFFFFFF00A13C1F0: '_lck_mtx_sleep_with_inheritor',
 }
 
 
