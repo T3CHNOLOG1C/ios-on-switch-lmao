@@ -569,11 +569,11 @@ int main(int argc, char **argv)
             md.storageMode = MTLStorageModePrivate;
             mipTarget = [dev newTextureWithDescriptor:md];
         }
-        // FRAME_MSAA=<text>: every frame ends with a pass drawing the first corpus state whose line holds <text> (a multisampled
-        // one: iOS 17's Pride poster lightsMesh, samples=2 RG11B10Float; FRAME_MSAA_CORPUS: the corpus, else the frame's) from the
-        // library at FRAME_MSAA_LIB, three times, into
-        // memoryless multisampled targets of its count (FRAME_MSAA_SAMPLES: of that many instead) and formats, neither loaded
-        // nor stored (FRAME_MSAA_STORE: its first target resolved into a texture of its size, MSAA_RESOLVED)
+        // FRAME_MSAA=<text>: every frame ends with a command buffer of one pass (NVK's resolve leaves its meta state to the draws
+        // after it in its command buffer) drawing, three times, the first corpus state whose line holds <text> (a multisampled
+        // one: iOS 17's Pride poster lightsMesh, samples=2 RG11B10Float; FRAME_MSAA_CORPUS: the corpus, else the frame's) from
+        // the library at FRAME_MSAA_LIB into memoryless multisampled targets of its count (FRAME_MSAA_SAMPLES: of that many
+        // instead) and formats (FRAME_MSAA_FORMAT: target 0 of that MTLPixelFormat instead), neither loaded nor stored (FRAME_MSAA_STORE: its first target resolved into a texture of its size)
         id<MTLRenderPipelineState> msaa = nil;
         id<MTLTexture> msaaTargets[8] = {}, msaaResolved = nil;
         if (const char *pick = getenv("FRAME_MSAA")) {
@@ -598,6 +598,8 @@ int main(int argc, char **argv)
             MTLRenderPipelineDescriptor *md = lib && !found.empty() ? descriptor(lib, found) : nil;
             if (const char *n = getenv("FRAME_MSAA_SAMPLES"); n && md)
                 md.rasterSampleCount = NSUInteger(atoi(n));
+            if (const char *f = getenv("FRAME_MSAA_FORMAT"); f && md)
+                md.colorAttachments[0].pixelFormat = MTLPixelFormat(atoi(f));
             msaa = md ? [dev newRenderPipelineStateWithDescriptor:md error:&libError] : nil;
             if (!msaa) {
                 fprintf(stderr, "FRAME_MSAA %s: no state (%s)\n", pick,
@@ -911,8 +913,12 @@ int main(int argc, char **argv)
                     caCommandBuffer(cb);
                     encodeExtra(cb, f);
                 }
-                if (msaa)
+                if (msaa) {
+                    [cb commit];
+                    cb = [queue commandBuffer];
+                    caCommandBuffer(cb);
                     encodeMsaa(cb, f);
+                }
                 [cb commit];
                 cpu.push_back((threadNs() - c0) / 1e6);
                 [cb waitUntilCompleted];

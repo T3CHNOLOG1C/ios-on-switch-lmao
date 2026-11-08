@@ -257,10 +257,23 @@ def build(work: Path, bridge: Path, metal_abi: Path) -> None:
             work / 'probecompute',
         ]
     )
-    own = ('ycbcr', 'xr')
+    own = ('ycbcr', 'xr', 'resolve')
+    exact = {'resolve': ['-fno-fast-math']}  # its sums in sample order and its NaN tests kept (resolve.metal)
     for name in own:
         run(
-            ['xcrun', '-sdk', 'iphoneos', 'metal', '-c', HERE / f'{name}.metal', '-I', HERE, '-o', work / f'{name}.air']
+            [
+                'xcrun',
+                '-sdk',
+                'iphoneos',
+                'metal',
+                '-c',
+                HERE / f'{name}.metal',
+                '-I',
+                HERE,
+                *exact.get(name, []),
+                '-o',
+                work / f'{name}.air',
+            ]
         )
     run(['xcrun', '-sdk', 'iphoneos', 'metallib', *(work / f'{name}.air' for name in own), '-o', work / 'own.metallib'])
 

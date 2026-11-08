@@ -345,6 +345,22 @@ public:
             textures_[slot] = t;
     }
 
+    // what the pass renders color `j` into (a memoryless attachment: its backing) and its render area, kept after end()
+    const Texture *target(uint32_t j) const
+    {
+        return j < 8 ? pass_.color[j].texture : nullptr;
+    }
+
+    uint32_t areaWidth() const
+    {
+        return areaW_;
+    }
+
+    uint32_t areaHeight() const
+    {
+        return areaH_;
+    }
+
     void setSampler(uint32_t slot, const Sampler *s)
     {
         if (slot < 16)
@@ -670,6 +686,8 @@ public:
     bool createStandIn(Texture &t);
     // The pack's conversion state of an extended-range texture's stand-in, null if the pack has none
     Pipeline *xrPipeline(XrForm form);
+    // The pack's resolve state into a target of `format` (raw_samples.h resolveState), null if the pack has none
+    Pipeline *resolvePipeline(uint32_t format);
     // s's header under address map `map` (Texture::addressMap), made now if it is not yet
     bool samplerVariant(Sampler &s, uint8_t map);
     // A two-plane 4:4:4 surface's texture of RGB8_444_2P (542): its planes at `luma`/`chroma` (offsets in the allocation,

@@ -2031,6 +2031,12 @@ Pipeline *Device::xrPipeline(XrForm form)
     return name ? pipeline(Pack::fnv(name, strlen(name))) : nullptr;
 }
 
+Pipeline *Device::resolvePipeline(uint32_t format)
+{
+    const char *name = resolveState(format);
+    return name ? pipeline(Pack::fnv(name, strlen(name))) : nullptr;
+}
+
 bool Device::createStandIn(Texture &t)
 {
     if (t.standIn || !xrPipeline(xrForm(t.format)))
