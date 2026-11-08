@@ -155,6 +155,7 @@ def build(work: Path, bridge: Path, metal_abi: Path) -> None:
     run(['xcrun', 'clang', *cflags, '-c', HERE / 'mock_iokit.c', '-o', work / 'mock_iokit.o'])
     run(['xcrun', 'clang++', *cflags, '-std=c++17', '-c', HERE / 'cap.cpp', '-o', work / 'cap.o'])
     run(['xcrun', 'clang++', *cflags, '-std=c++17', '-c', HERE / 'nvdec.cpp', '-o', work / 'nvdec.o'])
+    run(['xcrun', 'clang++', *cflags, '-std=c++17', '-c', HERE / 'nvdec_compute.cpp', '-o', work / 'nvdec_compute.o'])
     run(
         [
             'xcrun',
@@ -163,6 +164,7 @@ def build(work: Path, bridge: Path, metal_abi: Path) -> None:
             work / 'mock_iokit.o',
             work / 'cap.o',
             work / 'nvdec.o',
+            work / 'nvdec_compute.o',
             *objs,
             '-framework',
             'IOKit',

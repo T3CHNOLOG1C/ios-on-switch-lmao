@@ -48,6 +48,9 @@ namespace raw {
 
 class Device;
 class CommandBuffer;
+class ComputeEncoder;
+struct ComputeState;
+struct ComputeRecord;
 
 constexpr uint32_t kPteKindPitch = 0;
 
@@ -551,6 +554,7 @@ private:
     friend class Device;
     friend class RenderEncoder;
     friend class BlitEncoder;
+    friend class ComputeEncoder;
     Device *dev_ = nullptr;
     std::vector<TegraGM20BAbiPush> segments_;
     std::vector<std::pair<uintptr_t, uint64_t>> clean_, flush_;  // CPU ranges to clean / clean+invalidate before Exec
@@ -844,6 +848,8 @@ public:
         std::atomic<uint64_t> selfOverlapSplit{0}, selfOverlapRuns{0}, selfOverlapUnbounded{0}, selfOverlapNs{0};
         // channels made again after the kernel killed one
         std::atomic<uint64_t> reopens{0};
+        // compute launches encoded (raw_compute.h)
+        std::atomic<uint64_t> dispatches{0};
     } stats;
 
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
@@ -881,6 +887,8 @@ private:
     friend class CommandBuffer;
     friend class RenderEncoder;
     friend class BlitEncoder;
+    friend class ComputeEncoder;
+    friend const ComputeState *placeCompute(Device &dev, const ComputeRecord &r);
 
     struct Ring {
         Bo bo;
