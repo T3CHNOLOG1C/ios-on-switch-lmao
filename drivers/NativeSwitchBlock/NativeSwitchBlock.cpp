@@ -690,7 +690,6 @@ class NativeSwitchBlock : public IOService {
     // waits for and sleeps on irqEvent; the filter disables them again (lowering the line) and wakes it.
     IOWorkLoop *irqLoop = nullptr;
     IOFilterInterruptEventSource *irqSource = nullptr;
-    bool irqMode = false;
     int irqEvent = 0;
     // Bus state: what the card runs at, its RCA after our re-initialization, the last STATUS a bring-up
     // command saw, and whether SDR104 tuning is in effect (a failed transfer is re-tuned before its retry)
@@ -753,9 +752,11 @@ class NativeSwitchBlock : public IOService {
     }
 
     bool waitIdle(bool dat0, uint64_t timeoutNs);
-    bool startInterrupt();
+    void startInterrupt();
     static bool interruptFilter(OSObject *, IOFilterInterruptEventSource *);
     bool waitSignal(uint32_t signals, uint64_t timeoutNs);
+    uint32_t awaitStatus(uint32_t awaited, uint64_t limitNs);
+    [[noreturn]] void interruptLost(uint32_t awaited);
     void resetLines();
     void recover(bool data);
     int command(uint32_t lba, uint32_t sectors, bool write, unsigned descriptors, uint32_t *status, bool cmd23 = false);
@@ -885,7 +886,7 @@ public:
     // unmap asks. A card without it erases the unmapped AUs later, in idle time (SwitchSdTrim.h).
     bool canUnmap() const
     {
-        return haveSsr && irqMode && (sdStatus.discard || (trimBits != nullptr));
+        return haveSsr && (sdStatus.discard || (trimBits != nullptr));
     }
 
     void reportState(const char *why);
@@ -995,6 +996,10 @@ IOReturn NativeSwitchBlockDevice::doAsyncReadWrite(IOMemoryDescriptor *buffer, U
     return kIOReturnSuccess;
 }
 
+// The inhibit bits and DAT0 raise no interrupt of their own: SDHCI's interrupt status has none for a line level, and
+// Linux's mmc_poll_for_busy reads PRESENT_STATE too. Every caller has already slept on the command or transfer complete
+// that ends them (an R1b's busy ends in transfer complete), so this returns at its first read unless the card or the
+// controller is stuck.
 bool NativeSwitchBlock::waitIdle(bool dat0, uint64_t timeoutNs)
 {
     const uint64_t start = switch_now_ns();
@@ -1038,7 +1043,34 @@ bool NativeSwitchBlock::waitSignal(uint32_t signals, uint64_t timeoutNs)
     return result == THREAD_AWAKENED;
 }
 
-bool NativeSwitchBlock::startInterrupt()
+// A wait that ran out with an awaited bit latched in STATUS: the controller raised it, the CPU never took the interrupt.
+void NativeSwitchBlock::interruptLost(uint32_t awaited)
+{
+    char gic[192];
+    switch_interrupt_describe(kInterrupt, gic, sizeof(gic));
+    panic("SwitchSD: SDMMC1 interrupt lost: STATUS %#x awaited %#x, %s", r32(STATUS), awaited, gic);
+}
+
+// Sleeps until STATUS shows one of `awaited` or an error, at most limitNs; returns the STATUS it read last. STATUS is
+// read before each sleep, so a bit that latched meanwhile takes no interrupt.
+uint32_t NativeSwitchBlock::awaitStatus(uint32_t awaited, uint64_t limitNs)
+{
+    const uint32_t signals = awaited | ERROR_SIGNALS;
+    const uint64_t start = switch_now_ns();
+    for (;;) {
+        const uint32_t s = r32(STATUS);
+        if (s & (awaited | INT_ERRORS))
+            return s;
+        const uint64_t elapsed = switch_now_ns() - start;
+        if (elapsed >= limitNs)
+            return s;
+        const uint64_t left = limitNs - elapsed;
+        if (!waitSignal(signals, left < kInterruptCheckNs ? left : kInterruptCheckNs) && (r32(STATUS) & signals))
+            interruptLost(signals);
+    }
+}
+
+void NativeSwitchBlock::startInterrupt()
 {
     IOService *nub = switch_interrupt_nub(kInterrupt, false);
     irqLoop = IOWorkLoop::workLoop();
@@ -1050,7 +1082,6 @@ bool NativeSwitchBlock::startInterrupt()
         panic("SwitchSD: cannot attach the SDMMC1 interrupt (INTID %u)", kInterrupt);
     }
     irqSource->enable();
-    return true;
 }
 
 // Software-reset the CMD and DAT state machines (hekate _sdmmc_reset_cmd_data); STATUS is left alone.
@@ -1076,13 +1107,10 @@ void NativeSwitchBlock::recover(bool data)
     switch_dcache_sync();
     w16(COMMAND, 0x0cdb);
     noteCommand(12);
-    for (const uint64_t start = switch_now_ns(); switch_now_ns() - start < 100000000;) {
-        const uint32_t s = r32(STATUS);
-        if (s & (INT_COMMAND | INT_ERROR))
-            break;
-    }
+    // CMD12 is an R1b: transfer complete marks the end of the card's busy.
+    const uint32_t s = awaitStatus(INT_TRANSFER, 2000000000);
     w32(STATUS, 0xffffffff);
-    if (!waitIdle(true, 2000000000)) {
+    if (!(s & INT_TRANSFER) || (s & INT_ERRORS)) {
         resetLines();
         w32(STATUS, 0xffffffff);
     }
@@ -1186,20 +1214,11 @@ int NativeSwitchBlock::complete(uint32_t sectors, bool write, unsigned descripto
         if (elapsed >= limit)
             return (s & INT_COMMAND) ? 6 : 7;
         waited = true;
-        if (irqMode) {
-            // Sleep until the transfer completes or fails. A wait that times out with an awaited
-            // bit latched means the interrupt does not reach the CPU.
-            const uint64_t left = limit - elapsed;
-            if (!waitSignal(awaited, left < kInterruptCheckNs ? left : kInterruptCheckNs) && (r32(STATUS) & awaited)) {
-                char gic[192];
-                switch_interrupt_describe(kInterrupt, gic, sizeof(gic));
-                panic("SwitchSD: SDMMC1 interrupt lost: STATUS %#x awaited %#x, %s", r32(STATUS), awaited, gic);
-            }
-            continue;
-        }
-        // Spin through ordinary reads; yield the CPU for long writes and slow reads.
-        if (elapsed > (write ? 1000000ULL : 3000000ULL))
-            IOSleep(1);
+        // Sleep until the transfer completes or fails. A wait that times out with an awaited bit latched means the
+        // interrupt does not reach the CPU.
+        const uint64_t left = limit - elapsed;
+        if (!waitSignal(awaited, left < kInterruptCheckNs ? left : kInterruptCheckNs) && (r32(STATUS) & awaited))
+            interruptLost(awaited);
     }
     if (early)
         *early = !waited;
@@ -1400,7 +1419,7 @@ int NativeSwitchBlock::erase(uint64_t first, uint64_t last, uint32_t argument, u
 // After setup(), with the SD Status known: a card without discard keeps its unmapped AUs for idle-time erases.
 void NativeSwitchBlock::prepareTrim()
 {
-    if (!haveSsr || !irqMode || sdStatus.discard || !sdStatus.auSectors)
+    if (!haveSsr || sdStatus.discard || !sdStatus.auSectors)
         return;
     const uint64_t words = switchSdTrimWords(firstSector, sectorCount, sdStatus.auSectors);
     trimBytes = words * sizeof(uint64_t);
@@ -2084,30 +2103,13 @@ int NativeSwitchBlock::cqCommand(uint32_t index, uint32_t argument, uint32_t fla
     w16(COMMAND, static_cast<uint16_t>(index << 8 | flags | (data != kRegNone ? CMD_DATA : 0)));
     noteCommand(static_cast<uint8_t>(index));
     const uint32_t done = data != kRegNone || (flags & 3) == 3 ? INT_TRANSFER : INT_COMMAND;
-    const uint32_t awaited = done | ERROR_SIGNALS;
-    const uint64_t start = switch_now_ns();
     const uint64_t limit = limitNs;
+    const uint32_t s = awaitStatus(done, limit);
     int step = 0;
-    uint32_t s = 0;
-    for (;;) {
-        s = r32(STATUS);
-        if (s & INT_ERRORS) {
-            step = (s & INT_COMMAND) ? 3 : 2;
-            break;
-        }
-        if (s & done)
-            break;
-        const uint64_t elapsed = switch_now_ns() - start;
-        if (elapsed >= limit) {
-            step = (s & INT_COMMAND) ? 6 : 7;
-            break;
-        }
-        const uint64_t left = limit - elapsed;
-        if (!waitSignal(awaited, left < kInterruptCheckNs ? left : kInterruptCheckNs) && (r32(STATUS) & awaited)) {
-            char gic[192];
-            switch_interrupt_describe(kInterrupt, gic, sizeof(gic));
-            panic("SwitchSD: SDMMC1 interrupt lost: STATUS %#x awaited %#x, %s", r32(STATUS), awaited, gic);
-        }
+    if (s & INT_ERRORS) {
+        step = (s & INT_COMMAND) ? 3 : 2;
+    } else if (!(s & done)) {
+        step = (s & INT_COMMAND) ? 6 : 7;
     }
     if (!step && !(s & INT_COMMAND))
         step = 4;
@@ -2868,11 +2870,11 @@ void NativeSwitchBlock::worker(void *context, wait_result_t)
 
 void NativeSwitchBlock::logStats()
 {
-    IOLog("SwitchSD: reads=%llu (%llu KiB) writes=%llu (%llu KiB) errors=%llu max=%lluus last=%u/0x%x %s irq=%llu "
+    IOLog("SwitchSD: reads=%llu (%llu KiB) writes=%llu (%llu KiB) errors=%llu max=%lluus last=%u/0x%x irq=%llu "
           "cmds=%llu callbacks=%llums\n",
           stats.reads, stats.readBytes >> 10, stats.writes, stats.writeBytes >> 10, stats.errors,
-          stats.maxLatencyNs / 1000, stats.lastError, stats.lastStatus, irqMode ? "interrupt" : "polled",
-          stats.interrupts, stats.commands, stats.completeNs / 1000000);
+          stats.maxLatencyNs / 1000, stats.lastError, stats.lastStatus, stats.interrupts, stats.commands,
+          stats.completeNs / 1000000);
     logThroughput();
 }
 
@@ -3052,13 +3054,10 @@ int NativeSwitchBlock::cardCommand(uint32_t index, uint32_t arg, uint32_t flags,
     switch_dcache_sync();
     w16(COMMAND, static_cast<uint16_t>(index << 8 | flags | (data ? CMD_DATA : 0)));
     noteCommand(static_cast<uint8_t>(index));
-    const uint32_t done = INT_COMMAND | (data ? INT_TRANSFER : 0);
-    const uint64_t start = switch_now_ns();
-    const uint64_t limit = data ? 1000000000ULL : 100000000ULL;
-    uint32_t s = 0;
-    do {
-        s = r32(STATUS);
-    } while (!(s & INT_ERRORS) && (s & done) != done && switch_now_ns() - start < limit);
+    // Data and R1b commands end in transfer complete (an R1b's when the card's busy ends), which follows command complete.
+    const bool transfers = data != 0 || (flags & 3) == 3;
+    const uint32_t done = INT_COMMAND | (transfers ? INT_TRANSFER : 0);
+    const uint32_t s = awaitStatus(transfers ? INT_TRANSFER : INT_COMMAND, transfers ? 1000000000ULL : 100000000ULL);
     initStatus = s;
     if ((s & INT_ERRORS) || (s & done) != done) {
         recover(false);
@@ -3417,14 +3416,12 @@ void NativeSwitchBlock::tuneStep()
     resetLines();
     w16(CLOCK, r16(CLOCK) | 4);
     (void)r16(CLOCK);
-    for (const uint64_t start = switch_now_ns(); switch_now_ns() - start < 5000000;) {
-        if (r16(STATUS) & INT_READ_READY) {
-            w16(STATUS, INT_READ_READY);
-            w32(STATUS_ENABLE, r32(STATUS_ENABLE) & ~INT_READ_READY);
-            (void)r16(CLOCK);
-            IODelay(1);  // 8 card clocks
-            return;
-        }
+    if (awaitStatus(INT_READ_READY, 5000000) & INT_READ_READY) {
+        w16(STATUS, INT_READ_READY);
+        w32(STATUS_ENABLE, r32(STATUS_ENABLE) & ~INT_READ_READY);
+        (void)r16(CLOCK);
+        IODelay(1);  // 8 card clocks
+        return;
     }
     resetLines();
     w32(STATUS_ENABLE, r32(STATUS_ENABLE) & ~INT_READ_READY);
@@ -4089,8 +4086,6 @@ const char *NativeSwitchBlock::checkCq(uint64_t *queuedNs, uint64_t *serialNs, u
     cqControlAddress = switchSdCqControlAddress(extInfo.perf);
     if (!cqControlAddress)
         return "its control byte crosses a page";
-    if (!irqMode)
-        return "no SDMMC1 interrupt";
     regMemory = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
         kernel_task,
         static_cast<IOOptionBits>(kIODirectionInOut) | static_cast<IOOptionBits>(kIOMemoryPhysicallyContiguous),
@@ -4296,7 +4291,7 @@ bool NativeSwitchBlock::setup()
     w32(STATUS_ENABLE, 0x03ff800bu);
     w32(STATUS, 0xffffffff);
     switch_dcache_sync();
-    irqMode = startInterrupt();
+    startInterrupt();
     // What a scatter-gather (ADMA2) path straight into the requests' pages would rest on: CAPABILITIES bit 19 (ADMA2),
     // 28 (64-bit addressing, v3) and 27 (64-bit addressing, v4). The log only, once.
     const uint32_t caps = r32(CAPABILITIES);
