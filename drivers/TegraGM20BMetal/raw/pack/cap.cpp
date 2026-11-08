@@ -38,6 +38,8 @@ std::map<uint32_t, std::unique_ptr<nvdec::Decoder>>
 uint32_t gLastChannel;
 const uint8_t *host(uint64_t va, uint64_t bytes);
 
+extern "C" uint32_t mock_iokit_va_kind(uint64_t va);  // mock_comp.h
+
 extern "C" void cap_describe(uint64_t va)
 {
     auto it = gBinds.upper_bound(va);
@@ -180,6 +182,7 @@ extern "C" void pushcount_exec(const struct TegraGM20BAbiExec *e)
                 gLog));
             d->scrub = cap_scrub;
             d->describe = cap_describe;
+            d->vaKind = mock_iokit_va_kind;
             if (const char *f = getenv("RAWCAP_PROGRAMS"))
                 if (!d->loadPrograms(f))
                     fprintf(stderr, "cap: cannot read programs %s\n", f);
@@ -235,6 +238,22 @@ cap_shader_invalidates(void)  // INVALIDATE_SHADER_CACHES (flush and invalidate,
     return gC.shaderInval;
 }
 
+extern "C" uint64_t cap_constant_invalidates(void)
+{
+    std::lock_guard<std::mutex> l(gLock);
+    return gC.constantInval;
+}
+
+// Draws of every channel so far that read a constant buffer the copy engine wrote with no constant-cache invalidate after
+extern "C" uint64_t cap_stale_constant_reads(void)
+{
+    std::lock_guard<std::mutex> l(gLock);
+    uint64_t n = 0;
+    for (auto &c : gChannels)
+        n += c.second->staleConstantReads;
+    return n;
+}
+
 // `bytes` at GPU VA `va` as the GPU reads them; false where they are not in one bound range
 extern "C" bool cap_read(uint64_t va, void *out, uint64_t bytes)
 {
@@ -259,16 +278,17 @@ extern "C" void pushcount_report(const char *what)
     const double n = c.submits ? double(c.submits) : 1.0;
     fprintf(stderr,
             "push %s: %llu submits; per submit: %.1f passes, %.1f RTs (%.1f pitch), %.1f draws, %.1f WFI, %.1f texinv, "
-            "%.1f shinv, %.1f clears, %.1f CE, %.1f disp; %llu bad\n",
+            "%.1f shinv, %.1f cbinv, %.1f clears, %.1f CE, %.1f disp; %llu bad\n",
             what, (unsigned long long)c.submits, c.passes / n, c.targets / n, c.linearTargets / n, c.draws / n,
-            c.wfi / n, c.texInval / n, c.shaderInval / n, c.clears / n, c.ceCopies / n, c.dispatches / n,
-            (unsigned long long)c.unparsed);
+            c.wfi / n, c.texInval / n, c.shaderInval / n, c.constantInval / n, c.clears / n, c.ceCopies / n,
+            c.dispatches / n, (unsigned long long)c.unparsed);
     for (auto &c : gChannels)
         fprintf(stderr,
                 "nvdec channel %u: %llu submits, %llu draws, %llu clears, %llu macro calls (%llu unknown), %llu bad "
-                "headers\n",
+                "headers, %llu stale constant reads\n",
                 c.first, (unsigned long long)c.second->submits, (unsigned long long)c.second->draws,
                 (unsigned long long)c.second->clears, (unsigned long long)c.second->macroCalls,
-                (unsigned long long)c.second->unknownMacros, (unsigned long long)c.second->badHeaders);
+                (unsigned long long)c.second->unknownMacros, (unsigned long long)c.second->badHeaders,
+                (unsigned long long)c.second->staleConstantReads);
     gC = PushCounts{};
 }

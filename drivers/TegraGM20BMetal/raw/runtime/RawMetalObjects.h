@@ -181,6 +181,7 @@ enum Op : uint8_t {
     OpWaitEvent,
     OpDrawIndexed,
     OpVisibility,
+    OpFillBuffer,
 };
 
 // one record: `stage` 1 vertex, 2 fragment; `obj` unretained (the command buffer keeps it); `x` into the extras
@@ -209,6 +210,34 @@ inline Cmd cmd(Op op, uint8_t stage = 0, uint16_t index = 0)
 }
 @end
 
+// What the raw encode reads of a render pass, taken from the descriptor's copy as its encoder is made (the copy itself is what
+// m2v's replay encodes): no Metal getter, no attachment object Metal makes on a first read, per encode. Objects unretained: the
+// command buffer's owners hold them.
+struct RMPass {
+    struct Color {
+        __unsafe_unretained id texture;
+        NSUInteger level;
+        MTLLoadAction load;
+        MTLStoreAction store;
+        MTLClearColor clear;
+    } color[8];
+
+    __unsafe_unretained id depth;
+    MTLLoadAction depthLoad, stencilLoad;
+    double clearDepth;
+    uint32_t clearStencil;
+    NSUInteger width, height;
+};
+
+// A command buffer's setBytes data, written once where the GPU reads it: write-combined pool chunks the raw encode binds in place
+// (m2v's replay reads them back), each copy 256-byte aligned and zero to the next 256 bytes as an upload chunk is. The chunks go
+// with the recording (giveRecording), so they outlive every submission that reads them.
+struct RMBytes {
+    std::vector<raw::Buffer> chunks;  // va 0: heap memory (the GPU pool had none; the command buffer is m2v's)
+    size_t at = 0;                    // the chunk being filled
+    uint32_t used = 0;                // its bytes taken
+};
+
 // A part of a command buffer submitted on its own (RMCommandBuffer::_segs): tape [from, to), on the raw path or m2v
 struct RMSegment {
     uint32_t from, to;
@@ -218,6 +247,8 @@ struct RMSegment {
 @interface RMCommandBuffer : RMObject {
 @public
     uint64_t _protection;  // setProtectionOptions: (kept, no effect)
+    NSMutableDictionary *_userDictionary;
+    uint64_t _traceId;
     raw::ResidencySets _residency;
     // Its encoders: each one's first command (OpRender, OpBlit, OpCompute) carries index 1 where it goes to m2v (a refusal taken
     // while it was the active encoder: _encRefused, written into it as the next encoder begins or at commit, _encAt the
@@ -234,7 +265,8 @@ struct RMSegment {
         _sampledShadows;  // it binds a texture sampled through a pool image (raw::Texture::sampled): encodeRaw refreshes them
     bool _standIns;  // it binds an extended-range texture (raw::Texture::standIn): encodeRaw draws its stand-in
     std::vector<Cmd> _tape;
-    std::vector<uint8_t> _bytes;
+    std::vector<RMPass> _passes;  // OpRender's (Cmd::x)
+    RMBytes _bytes;               // OpBytes': chunk Cmd::c, offset Cmd::a, length Cmd::b
     std::vector<uint64_t> _extra;
     std::vector<id> _owners;  // everything the tape names, retained until completion
     RMReason _reason;
@@ -253,7 +285,7 @@ struct RMSegment {
     std::condition_variable _changed;
     uint32_t _seqno;
     double _gpuStart, _gpuEnd;
-    id _active;               // the encoder being recorded
+    __weak id _active;        // the encoder being recorded (weak: it holds the command buffer, its caller holds it)
     uint64_t _preds;          // every refusal predicate it hit (1 << RMPred)
     uint64_t _predA, _predB;  // the first one's values
     uint8_t _pred0;           // the first one
@@ -303,6 +335,7 @@ static inline void hit(RMCommandBuffer *cb, RMPred p, uint64_t a = 0, uint64_t b
     uint32_t _formats[8];  // the pass's color attachments' formats as the raw path holds them (0: none)
     uint32_t _count;       // its attachment count (the last attachment's index + 1)
     uint32_t _zeta;        // its depth/stencil attachment's format as the raw path holds it (0: none)
+    uint32_t _passAt;      // its pass's RMPass (the command buffer's _passes)
     raw::DepthStencilDesc _ds;
     MTLRenderPassDescriptor *_pass;  // the command buffer's copy, which the raw encode and m2v's replay read
 }

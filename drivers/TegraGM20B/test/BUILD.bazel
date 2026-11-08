@@ -1,6 +1,8 @@
 # drivers/TegraGM20B on the host:
 #   gm20b_comp_test          TegraGM20BComp.h against nvgpu's gm20b: the compbit backing store's size, lines and base for
 #                            every plausible CBC_PARAM, which page lists and binds may compress, a compressed bind's PTEs
+#   gm20b_tiled_cache_test   TegraGM20BTiledCache.h: the tile coalescer's table in the golden context is deko3d's masked
+#                            writes folded over sw_ctx's zero
 #   gm20b_coherency_test     TegraGM20BCoherency.cpp: which IOSurface lock/unlock traps clean or invalidate an import,
 #                            across imports of one surface and their release, and traps racing a release; each surface's
 #                            layout decision (TegraGM20BTiled.cpp) and its contents tiled in place; CPU locks of a
@@ -55,6 +57,15 @@ host_test(
         "gm20b_comp_test.cpp",
         "//drivers/TegraGM20B:TegraGM20BComp.h",
     ],
+)
+
+host_test(
+    name = "gm20b_tiled_cache_test",
+    srcs = [
+        "gm20b_tiled_cache_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BTiledCache.h",
+    ],
+    cxx_std = "c++17",
 )
 
 host_test(

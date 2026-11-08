@@ -166,7 +166,7 @@ switch_nvk_program_freed(struct nvk_device *dev,
  * the nvk_cbuf_type, and a UBO descriptor's set-0 offset / 16 in bits 3-7; a
  * UBO elsewhere is 7, which no raw draw binds.
  */
-static uint8_t
+uint8_t
 switch_nvk_cbuf_code(const struct nvk_cbuf *cbuf)
 {
    if (cbuf->type != NVK_CBUF_TYPE_UBO_DESC)

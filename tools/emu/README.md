@@ -8,25 +8,26 @@ device's.
 ```sh
 bazel run //tools/emu:boot -- --kind=ios27                   # build //:boot for iOS 27, boot it for 120 s
 bazel run //tools/emu:boot -- --kind=ios17 --sd none --seconds 60 --bootargs -v
-bazel run //tools/emu:check -- --kind=ios17 --until launchd  # a gate: 0 at the milestone, 1 on a panic, 2 on timeout
+bazel run //tools/emu:check -- --kind=ios17 --until launchd  # a gate: 0 milestone, 1 panic, 2 timeout, 3 no kernel log
 bazel run //tools/emu:build                                  # only the emulator: prints its path
 ```
 
-`check` watches the live kernel log and the panic record every 3 s and stops at the first of the milestone
-(`cores`, `display`, `sd`, `root`, `launchd`), a panic or `--timeout`. It prints the panic line or the last kernel
-lines, and keeps the run directory. `launchd` is reached at the first kernel line that names a process other than
-`init` (pid 1 before its exec) or `kernel_task`, such as launchd's dyld asking for the shared region (`[1(launchd)]`)
-or a mount requested by a job launchd spawned.
+`check` watches the live kernel log and the panic record every 3 s and stops at the first of the milestone (`cores`,
+`display`, `sd`, `root`, `launchd`, `early-boot`), a panic or `--timeout`. It prints the panic line or the last kernel
+lines, and keeps the run directory. `launchd` is reached at the first kernel line that names a process other than `init`
+(pid 1 before its exec) or `kernel_task`, such as launchd's dyld asking for the shared region (`[1(launchd)]`) or a
+mount requested by a job launchd spawned. If the kernel runs for 10 polls and no log line comes out, `check` stops with
+exit 3 and prints what the reader found: no msgbuf header, or one whose ring is still empty.
 
 `--kind` builds `//:boot` with `--//ipsw:kind` in the output base `bazel run` itself uses. `--bazel-flag` passes flags
 to that build (for example `--bazel-flag=--config=agent`). `--package DIR` boots an existing `//:boot` output instead,
-and `--kernel` names its prelinked kernel for the live log. Guest time follows executed instructions, one
+and `--kernel` names its prelinked kernel, whose `_msgbufp` locates the live log. A release kernel has no `_msgbufp`, so
+without one check finds the msgbuf header by scanning the kernel's memory. Guest time follows executed instructions, one
 nanosecond each (`-icount shift=0`, one host thread for all four cores), so neither a busy Mac nor TCG's own speed can
 expire a driver's timeout before the work it waits for has run. Kernel log times are then instruction-scaled seconds,
 close to the A57's CPU time, not wall time. With one thread per core (`--mttcg`) at load 50, or with guest time kept to
 the wall clock (`shift=auto`), drivers panicked on interrupts that had not been lost. `--mttcg` is faster on an idle
-Mac. The run directory is `out/emu/<kind>-<time>` unless `--out`
-names one:
+Mac. The run directory is `out/emu/<kind>-<time>` unless `--out` names one:
 
 | File | What |
 |---|---|

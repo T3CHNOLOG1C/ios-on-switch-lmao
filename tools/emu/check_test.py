@@ -6,6 +6,7 @@ import unittest
 from tools.emu import check
 
 LAUNCHD = re.compile(check.MILESTONES['launchd'])
+EARLY_BOOT = re.compile(check.MILESTONES['early-boot'])
 
 
 class LaunchdMilestoneTest(unittest.TestCase):
@@ -36,6 +37,32 @@ class LaunchdMilestoneTest(unittest.TestCase):
             '(pid 34); parent: launchd (pid 1)'
         )
         self.assertIsNotNone(LAUNCHD.search(line))
+
+
+class EarlyBootMilestoneTest(unittest.TestCase):
+    def test_launchd_dying_after_its_first_dyld_calls_does_not_count(self):
+        for line in (
+            (
+                '[     2.544877] shared_region: 0xe003d428dd7aa83b [1(launchd)] check_np(0x16f131e88) '
+                'vm_shared_region_start_address() returned 0x1'
+            ),
+            (
+                '[     2.547348] pid 1 exited -- exit reason namespace 6 subcode 0x1, description Library not '
+                'loaded: /usr/lib/libSystem.B.dylib'
+            ),
+            (
+                '[     4.132320] [System Event] [79340552] [INFO] [Subsystem: launchd] '
+                '[Event: workload-properties-init] Doing boot task'
+            ),
+        ):
+            self.assertIsNone(EARLY_BOOT.search(line), line)
+
+    def test_early_boot_complete_counts_after_other_output_on_the_line(self):
+        line = (
+            '[     4.129727] virtual bool CoreAnalyticsMessenger::attach(IOService *)::81:attaching[System Event] '
+            '[85089740] [INFO] [Subsystem: launchd] [Event: boot] Early boot complete. Continuing system boot.'
+        )
+        self.assertIsNotNone(EARLY_BOOT.search(line))
 
 
 if __name__ == '__main__':

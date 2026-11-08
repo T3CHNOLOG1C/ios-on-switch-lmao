@@ -7,7 +7,8 @@
 // allocate none of it
 struct RMRecording {
     std::vector<Cmd> tape;
-    std::vector<uint8_t> bytes;
+    std::vector<RMPass> passes;
+    RMBytes bytes;
     std::vector<uint64_t> extra;
     std::vector<id> owners;
 };
@@ -22,7 +23,8 @@ static void takeRecording(RMCommandBuffer *b)
         if (!gRecordings.empty()) {
             RMRecording &r = gRecordings.back();
             b->_tape.swap(r.tape);
-            b->_bytes.swap(r.bytes);
+            b->_passes.swap(r.passes);
+            std::swap(b->_bytes, r.bytes);
             b->_extra.swap(r.extra);
             b->_owners.swap(r.owners);
             gRecordings.pop_back();
@@ -31,27 +33,49 @@ static void takeRecording(RMCommandBuffer *b)
     }
     b->_tape.reserve(512);
     b->_owners.reserve(256);
-    b->_bytes.reserve(16384);
+}
+
+static void dropBytes(RMBytes &s)
+{
+    for (raw::Buffer &k : s.chunks)
+        if (k.va)
+            gRM->raw->destroyBuffer(k);
+        else
+            free(k.cpu);
+    s = {};
 }
 
 static void giveRecording(RMCommandBuffer *b)
 {
     constexpr size_t kKept = 4,
                      kKeptBytes = 1 << 20;  // (a command buffer of a few megabytes of setBytes: its own, freed)
-    if (b->_bytes.capacity() + b->_tape.capacity() * sizeof(Cmd) + b->_extra.capacity() * 8 > kKeptBytes)
+    uint64_t bytes = 0;
+    for (const raw::Buffer &k : b->_bytes.chunks)
+        bytes += k.va ? k.length : kKeptBytes;  // (heap chunks are not kept)
+    if (bytes + b->_tape.capacity() * sizeof(Cmd) + b->_extra.capacity() * 8 > kKeptBytes) {
+        dropBytes(b->_bytes);
         return;
+    }
     RMRecording r;
     r.tape.swap(b->_tape);
-    r.bytes.swap(b->_bytes);
+    r.passes.swap(b->_passes);
+    std::swap(r.bytes, b->_bytes);
     r.extra.swap(b->_extra);
     r.owners.swap(b->_owners);
     r.tape.clear();
-    r.bytes.clear();
+    r.passes.clear();
+    r.bytes.at = 0;
+    r.bytes.used = 0;
     r.extra.clear();
     r.owners.clear();
-    std::lock_guard<std::mutex> l(gRecordingsLock);
-    if (gRecordings.size() < kKept)
-        gRecordings.push_back(std::move(r));
+    {
+        std::lock_guard<std::mutex> l(gRecordingsLock);
+        if (gRecordings.size() < kKept) {
+            gRecordings.push_back(std::move(r));
+            return;
+        }
+    }
+    dropBytes(r.bytes);
 }
 
 @implementation RMCommandBuffer
@@ -98,6 +122,24 @@ static void giveRecording(RMCommandBuffer *b)
 {
     _whole = true;
     [self takeReason:reason why:why];
+}
+
+// Answered here, not recorded as invocations (each one sent the whole command buffer to m2v)
+- (NSMutableDictionary *)userDictionary
+{
+    std::lock_guard<std::mutex> l(_lock);
+    if (!_userDictionary)
+        _userDictionary = [NSMutableDictionary dictionary];
+    return _userDictionary;
+}
+
+- (uint64_t)globalTraceObjectID
+{
+    static std::atomic<uint64_t> ids{0};
+    std::lock_guard<std::mutex> l(_lock);
+    if (!_traceId)
+        _traceId = ++ids;
+    return _traceId;
 }
 
 - (void)useResidencySet:(id)set

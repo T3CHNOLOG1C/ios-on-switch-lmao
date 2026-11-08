@@ -10,10 +10,13 @@
 // - A pass with an empty color slot below a target disables the slot, as NVK does, and counts through the target.
 // - A freed texture header is the null descriptor, never zeroes (a buffer texture at VA 0).
 // - A memory barrier inside a pass flushes the shaders' data writes, as the barrier between passes does.
+// - A buffer the copy engine fills is read as a constant buffer by a later pass of the same command buffer behind a
+//   constant-cache invalidate (nvdec's stale constant reads: none).
 // - A commit whose later Exec the kernel refuses leaves nothing of its rings in flight, and the next command buffer a new
 //   channel.
 // - A wait that fails on a channel destroyed meanwhile marks no new channel of the same id lost.
 // - A command buffer larger than its push ring reaches the GPU whole (the ring grows under it).
+// - A fill writes its byte over its range, at any alignment and length, and nothing around it.
 // - A channel the kernel killed is made again with its context before any command buffer is encoded for it: one whose
 //   ChannelCreate or context Exec the kernel refused gives no command buffer, and the next begin() tries again.
 // - Programs placed in the shader heap are behind an instruction-cache invalidate before any draw runs them, even when the
@@ -37,6 +40,8 @@ extern "C" uint32_t cap_reg3d(uint32_t mthd);
 extern "C" bool cap_read(uint64_t va, void *out, uint64_t bytes);
 extern "C" uint64_t cap_instruction_invalidates(void);
 extern "C" uint64_t cap_shader_invalidates(void);
+extern "C" uint64_t cap_constant_invalidates(void);
+extern "C" uint64_t cap_stale_constant_reads(void);
 extern "C" void mock_iokit_kill_next(uint32_t error);
 extern "C" void mock_iokit_fail_next(unsigned method, unsigned count, int kr);
 extern "C" void mock_iokit_fail_after(unsigned method, unsigned skip, unsigned count, int kr);
@@ -80,17 +85,19 @@ void views(raw::Device &dev, const Expect &expect)
     dev.destroyTexture(parent);
 }
 
-// A pass over targets of the formats of a pack state that fetches vertices and tests no depth, and that state
+// A pass over targets of the formats of a pack state that fetches vertices and tests no depth (`ubo`: and reads a uniform
+// buffer as a constant buffer), and that state
 struct Pass {
     raw::Pipeline *state = nullptr;
     raw::Texture targets[8];
     raw::PassDesc desc;
 
-    bool make(raw::Device &dev)
+    bool make(raw::Device &dev, bool ubo = false)
     {
         const raw::PackPipeline *recs = dev.pack().section<raw::PackPipeline>(raw::PackPipelines);
         for (uint32_t i = 0; i < dev.pack().header()->pipelines && !state; i++)
-            if (raw::Pipeline *p = dev.pipeline(recs[i].keyHash); p && !p->depthFormat && p->rec->vertexSlot < 31)
+            if (raw::Pipeline *p = dev.pipeline(recs[i].keyHash);
+                p && !p->depthFormat && p->rec->vertexSlot < 31 && (!ubo || p->uboCount))
                 state = p;
         if (!state)
             return false;
@@ -182,6 +189,43 @@ void barrierFlush(raw::Device &dev, Pass &pass, const Expect &expect)
     std::printf("shader cache flushes: %llu without the barrier, %llu with\n", (unsigned long long)plain,
                 (unsigned long long)barrier);
     expect(plain != ~0ull && barrier == plain + 1, "the barrier flushes the shaders' data");
+}
+
+// The copy engine fills a buffer, then a pass's draw reads it as a constant buffer: the submission's prologue invalidated the
+// constant caches before the fill, the pass's prologue does after it
+void constantAfterFill(raw::Device &dev, const Expect &expect)
+{
+    Pass pass;
+    raw::Buffer b;
+    if (!pass.make(dev, true) || !dev.createBuffer(4096, b)) {
+        expect(false, "a state reading a uniform buffer as a constant buffer, and a buffer");
+        return;
+    }
+    const uint64_t invalidates = cap_constant_invalidates(), stale = cap_stale_constant_reads();
+    raw::CommandBuffer *cb = dev.begin();
+    bool drawn = false;
+    if (cb) {
+        raw::BlitEncoder *fill = cb->blit();
+        fill->fillBytes(b.va, 4096, 0x5a);
+        fill->end();
+        if (raw::RenderEncoder *e = cb->render(pass.desc)) {
+            const char *why = nullptr;
+            e->setPipeline(pass.state);
+            for (uint8_t u = 0; u < pass.state->uboCount; u++) {
+                const raw::PackEntry &x = pass.state->rec->entry[pass.state->ubos[u].entry];
+                e->setBuffer(x.stage, x.slot, &b, 0);
+            }
+            drawn = e->draw(3, 0, 3, 1, 0, &why);
+            e->end();
+        }
+    }
+    uint32_t seq = 0;
+    expect(drawn && cb->commit(seq) && dev.wait(seq), "a fill, then a draw reading the buffer as a constant buffer");
+    const uint64_t n = cap_constant_invalidates() - invalidates, s = cap_stale_constant_reads() - stale;
+    std::printf("constant-cache invalidates %llu, stale constant reads %llu\n", (unsigned long long)n,
+                (unsigned long long)s);
+    expect(n == 2 && s == 0, "the constant caches invalidated after the fill, before the draw");
+    dev.destroyBuffer(b);
 }
 
 uint64_t method64(uint32_t hi)
@@ -349,6 +393,82 @@ void outgrownRing(const char *pack, const Expect &expect)
     client.destroyBuffer(chain);
 }
 
+// Fills of a byte value over ranges of every alignment, one of them past the copy engine's line (32768 words): the range
+// holds the value, every byte around it what it held
+void fills(raw::Device &dev, const Expect &expect)
+{
+    constexpr uint64_t kBytes = 400000;
+    raw::Buffer b;
+    if (!dev.createBuffer(kBytes, b)) {
+        expect(false, "a buffer");
+        return;
+    }
+
+    const struct {
+        uint64_t at, bytes;
+        uint8_t value;
+    } cases[] = {{3, 1, 0x11}, {1, 2, 0x22}, {9, 4, 0x33}, {16, 64, 0x44}, {101, 7, 0x55}, {1001, 300001, 0x66}};
+
+    bool all = true;
+    for (const auto &f : cases) {
+        memset(b.cpu, 0xee, kBytes);
+        raw::CommandBuffer *cb = dev.begin();
+        if (!cb) {
+            all = false;
+            break;
+        }
+        cb->clean(b.cpu, kBytes, true);
+        raw::BlitEncoder *e = cb->blit();
+        e->fillBytes(b.va + f.at, f.bytes, f.value);
+        e->end();
+        uint32_t seq = 0;
+        if (!cb->commit(seq) || !dev.wait(seq)) {
+            all = false;
+            break;
+        }
+        uint64_t wrong = 0;
+        for (uint64_t i = 0; i < kBytes; i++)
+            wrong += b.cpu[i] != (i >= f.at && i < f.at + f.bytes ? f.value : 0xee);
+        std::printf("fill of %llu bytes at %llu: %llu bytes wrong\n", (unsigned long long)f.bytes,
+                    (unsigned long long)f.at, (unsigned long long)wrong);
+        all = all && !wrong;
+    }
+    expect(all, "every fill wrote its range and nothing else");
+    dev.destroyBuffer(b);
+}
+
+// The same, with no memory for a larger ring (the BoAlloc refused): written to scratch blocks that stay put while written,
+// and the commit refused (ASan: no write to a block freed under it)
+void overflowRing(const char *pack, const Expect &expect)
+{
+    raw::Device client;
+    std::string err;
+    raw::Buffer chain;
+    if (!client.open(pack, 0, err, raw::Device::Role::Client) || !client.createBuffer(4096, chain)) {
+        expect(false, "a client device and a buffer");
+        return;
+    }
+    raw::CommandBuffer *cb = client.begin();
+    if (!cb) {
+        expect(false, "a command buffer");
+        return;
+    }
+    mock_iokit_fail_next(TegraGM20BMethodBoAlloc, 1000, kIOReturnNoMemory);
+    raw::BlitEncoder *e = cb->blit();
+    for (uint32_t i = 0; i < 10000; i++)
+        e->copyBytes(chain.va, chain.va + 4, 4);
+    e->end();
+    uint32_t seq = 0;
+    const bool committed = cb->commit(seq);
+    mock_iokit_fail_next(TegraGM20BMethodBoAlloc, 0, 0);
+    if (!committed)
+        cb->abandon();
+    expect(!committed, "the commit of a command buffer with no ring to hold it is refused");
+    const uint32_t next = copy(client, chain, chain);
+    expect(next && client.wait(next), "the next command buffer runs");
+    client.destroyBuffer(chain);
+}
+
 void reopenRefused(raw::Device &dev, const Expect &expect)
 {
     raw::Buffer a, b;
@@ -483,14 +603,17 @@ int main(int argc, char **argv)
     unboundStream(dev, pass, expect);
     holeTarget(dev, pass, expect);
     barrierFlush(dev, pass, expect);
+    constantAfterFill(dev, expect);
     freedHeader(dev, expect);
     partialCommit(dev, expect);
     lostReused(expect);
+    fills(dev, expect);
     reopenRefused(dev, expect);
     invalidateRefused(dev, expect);
     waitRefused(dev, expect);
     channelRefused(argv[1], expect);
     outgrownRing(argv[1], expect);  // last: its device's channel is the mock's latest from here on
+    overflowRing(argv[1], expect);
     if (failures) {
         std::printf("FAIL: faultcheck (%d)\n", failures);
         return 1;
