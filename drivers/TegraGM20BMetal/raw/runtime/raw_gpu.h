@@ -636,6 +636,11 @@ public:
         return (k_.info().flags & TegraGM20BInfoPriority) != 0;
     }
 
+    const TegraGM20BAbiInfo &kernelInfo() const
+    {
+        return k_.info();
+    }
+
     // `writes`: the texture is rendered into or stored to. A surface the kernel decides block-linear (the first texture over
     // it writes it: TegraGM20BLayout.h) has block-linear textures only, at the decided shape (false: another one)
     bool createSurfaceTexture(uint64_t surfaceId, void *base, uint64_t allocBytes, const void *surface, uint64_t offset,
