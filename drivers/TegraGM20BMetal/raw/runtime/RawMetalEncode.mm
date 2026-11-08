@@ -134,9 +134,9 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
             if (c.op == OpRender) {
                 std::fill(std::begin(bound), std::end(bound), nil);
                 pipe = nil;
-                MTLRenderPassDescriptor *pass = (__bridge MTLRenderPassDescriptor *)c.obj;
+                const RMPass &pass = cb->_passes[c.x];
                 for (unsigned j = 0; j < 8; j++)
-                    if (RMTexture *t = (RMTexture *)pass.colorAttachments[j].texture; t && t->_raw.planarStandIn)
+                    if (RMTexture *t = (RMTexture *)pass.color[j].texture; t && t->_raw.planarStandIn)
                         rendered.push_back(t);
             } else if (c.op == OpPipeline) {
                 pipe = [(__bridge id)c.obj isKindOfClass:[RMPipeline class]] ? (__bridge RMPipeline *)c.obj : nil;
@@ -310,14 +310,14 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
         const Cmd &c = cb->_tape[at];
         switch (c.op) {
         case OpRender: {
-            MTLRenderPassDescriptor *pass = (__bridge MTLRenderPassDescriptor *)c.obj;
+            const RMPass &pass = cb->_passes[c.x];
             if (cb->_sampledShadows)
                 refresh(at);
             if (cb->_standIns && !standIns(at))
                 return false;
             raw::PassDesc p;
             for (unsigned j = 0; j < 8; j++) {
-                MTLRenderPassColorAttachmentDescriptor *a = pass.colorAttachments[j];
+                const RMPass::Color &a = pass.color[j];
                 RMTexture *t = (RMTexture *)a.texture;
                 if (!t)
                     continue;
@@ -327,8 +327,8 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
                 if (t->_raw.planarStandIn) {
                     // Metal's DontCare load keeps the planes' codes where no draw writes, and the store writes every texel
                     // (raw/test/standinoracle.mm): such a pass loads them too
-                    const bool stores = a.storeAction != MTLStoreActionDontCare;
-                    if (a.loadAction == MTLLoadActionLoad || (a.loadAction == MTLLoadActionDontCare && stores))
+                    const bool stores = a.store != MTLStoreActionDontCare;
+                    if (a.load == MTLLoadActionLoad || (a.load == MTLLoadActionDontCare && stores))
                         standInLoads.push_back(t);
                     if (stores)
                         standInStores.push_back(t);
@@ -348,27 +348,27 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
                 p.color[j].texture = a.level                 ? &levelTargets[j]
                                      : t->_raw.planarStandIn ? t->_raw.planarStandIn
                                                              : &t->_raw;
-                p.color[j].load = a.loadAction == MTLLoadActionClear  ? raw::ColorAttachment::Clear
-                                  : a.loadAction == MTLLoadActionLoad ? raw::ColorAttachment::Load
-                                                                      : raw::ColorAttachment::DontCare;
+                p.color[j].load = a.load == MTLLoadActionClear  ? raw::ColorAttachment::Clear
+                                  : a.load == MTLLoadActionLoad ? raw::ColorAttachment::Load
+                                                                : raw::ColorAttachment::DontCare;
                 p.color[j].store =
-                    a.storeAction == MTLStoreActionStore || a.storeAction == MTLStoreActionStoreAndMultisampleResolve;
-                const MTLClearColor k = a.clearColor;
+                    a.store == MTLStoreActionStore || a.store == MTLStoreActionStoreAndMultisampleResolve;
+                const MTLClearColor k = a.clear;
                 p.color[j].clear[0] = float(k.red);
                 p.color[j].clear[1] = float(k.green);
                 p.color[j].clear[2] = float(k.blue);
                 p.color[j].clear[3] = float(k.alpha);
                 p.count = j + 1;
             }
-            if (RMTexture *z = (RMTexture *)pass.depthAttachment.texture) {  // (rawDepthStencil: decided at record)
+            if (RMTexture *z = (RMTexture *)pass.depth) {  // (rawDepthStencil: decided at record)
                 p.depthStencil.texture = &z->_raw;
-                p.depthStencil.clearDepth = pass.depthAttachment.loadAction == MTLLoadActionClear;
-                p.depthStencil.clearStencil = pass.stencilAttachment.loadAction == MTLLoadActionClear;
-                p.depthStencil.depth = float(std::clamp(pass.depthAttachment.clearDepth, 0.0, 1.0));
-                p.depthStencil.stencil = pass.stencilAttachment.clearStencil;
+                p.depthStencil.clearDepth = pass.depthLoad == MTLLoadActionClear;
+                p.depthStencil.clearStencil = pass.stencilLoad == MTLLoadActionClear;
+                p.depthStencil.depth = float(std::clamp(pass.clearDepth, 0.0, 1.0));
+                p.depthStencil.stencil = pass.clearStencil;
             }
-            p.width = uint32_t(std::min<NSUInteger>(pass.renderTargetWidth, UINT32_MAX));
-            p.height = uint32_t(std::min<NSUInteger>(pass.renderTargetHeight, UINT32_MAX));
+            p.width = uint32_t(std::min<NSUInteger>(pass.width, UINT32_MAX));
+            p.height = uint32_t(std::min<NSUInteger>(pass.height, UINT32_MAX));
             for (RMTexture *t : standInLoads)
                 if (standInPass(t, false))
                     return false;
