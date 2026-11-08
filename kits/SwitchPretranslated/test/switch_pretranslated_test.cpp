@@ -337,7 +337,6 @@ namespace {
 struct switch_pt_trust_facts trusted()
 {
     struct switch_pt_trust_facts facts = {};
-    facts.redirected = true;
     facts.listed = true;
     facts.regular = true;
     facts.mode = 0755;
@@ -346,7 +345,7 @@ struct switch_pt_trust_facts trusted()
     return facts;
 }
 
-TEST(Trust, ARedirectedListedRootFileWithAPinnedCdhash)
+TEST(Trust, AListedRootFileWithAPinnedCdhash)
 {
     const struct switch_pt_trust_facts facts = trusted();
     EXPECT_TRUE(switch_pt_trusted(&facts));
@@ -358,9 +357,6 @@ TEST(Trust, ARedirectedListedRootFileWithAPinnedCdhash)
 TEST(Trust, EachMissingFactRefuses)
 {
     const std::vector<void (*)(struct switch_pt_trust_facts &)> breaks = {
-        [](struct switch_pt_trust_facts &f) {
-            f.redirected = false;
-        },
         [](struct switch_pt_trust_facts &f) {
             f.listed = false;
         },

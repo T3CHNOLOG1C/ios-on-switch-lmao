@@ -159,6 +159,7 @@ void describeSupplies(char *buffer, size_t size)
              gpio3, ame, fpsGpio3, err);
 }
 
+#if DEVELOPMENT || DEBUG
 // The bus itself, for the probe line after a sensor that never answered (only this driver uses I2C2, from this work
 // loop, and TegraI2C has just recovered it from a NACK, so it is idle):
 //   * SCL (PJ2) and SDA (PJ3) read as GPIO inputs (tegra_gpio_sample: released throughout; 1 = pulled up), with the
@@ -196,6 +197,7 @@ void describeBus(char *buffer, size_t size)
              scl, sda, sclConfig, sdaConfig, controls[0], controls[1], controls[2], controls[3], pmc[0], pmc[1], pmc[2],
              pmc[3], found, acks);
 }
+#endif
 }  // namespace
 
 // NOLINTNEXTLINE(misc-use-internal-linkage): OSDefineMetaClassAndStructors needs the class's external linkage
@@ -401,9 +403,10 @@ void SwitchALS::noteStats(uint32_t level, uint32_t visible, uint32_t ir)
 }
 #endif
 
-// Work loop: a transfer to the sensor failed. kErrorLimit in a row turn it off, with one line on the supplies, one on
-// the bus and the controller's last failure (TegraI2C), and, if it never answered, one on the lines, the PMC's rails
-// and whoever answers on I2C2 (describeBus). The sampling is stopped first, so the probe runs on an idle bus.
+// Work loop: a transfer to the sensor failed. kErrorLimit in a row turn it off with one line on the supplies. Debug
+// kernels add one on the bus and the controller's last failure (TegraI2C) and, if it never answered, one on the lines,
+// the PMC's rails and whoever answers on I2C2 (describeBus, a read of every address). The sampling is stopped first, so
+// the probe runs on an idle bus.
 // NOLINTNEXTLINE(misc-no-recursion): giveUp() sets broken first, so its update() only stops the sensor
 void SwitchALS::failed(int err)
 {
@@ -419,12 +422,14 @@ void SwitchALS::failed(int err)
     IOLog("SwitchALS: off: BH1730 on I2C2 0x29 %s: I2C error %d (%s) %u times in a row, LDO6 on for %llu ms; %s\n",
           identified ? "stopped answering" : "never answered", err, err == TEGRA_I2C_ENACK ? "no ACK" : "bus fault",
           errors, msSince(supplyAt), line);
+#if DEVELOPMENT || DEBUG
     tegra_i2c_describe(kBus, line, sizeof(line));
     IOLog("SwitchALS: %s\n", line);
     if (identified)
         return;
     describeBus(line, sizeof(line));
     IOLog("SwitchALS: probe: %s\n", line);
+#endif
 }
 
 // Work loop, every kSampleUS while running. A sensor update() could not set up is set up here.

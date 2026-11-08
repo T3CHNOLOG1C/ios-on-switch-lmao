@@ -31,7 +31,7 @@
 // pages (TegraNVDECPresent, drivers/TegraVIC/TegraVICPresent.h), and the thread sleeps on VIC's syncpoint interrupt.
 // The CPU neither de-swizzles nor touches the pixels, and the IOSurface is in DRAM with no CPU line of it dirty when
 // it goes out: the GPU, which does not snoop the CPU's caches, reads what VIC wrote. Where VIC does not take a picture
-// (its block-linear input unproven this boot, an odd size, a surface it cannot address: the first refusal is one line)
+// (present off this boot, an odd size, a surface it cannot address: the first refusal is one line)
 // the CPU de-swizzles it and then cleans the buffer's lines to DRAM (sys_dcache_flush). The CPU copy costs 2.47 ms a
 // 720p60 H.264 picture, most of mediaplaybackd's CPU time.
 // Frames go out as soon as they are decoded, in decode order, as Apple's H.264 decoders do even under
