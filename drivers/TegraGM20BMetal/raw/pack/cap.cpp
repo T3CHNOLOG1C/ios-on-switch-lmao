@@ -38,6 +38,8 @@ std::map<uint32_t, std::unique_ptr<nvdec::Decoder>>
 uint32_t gLastChannel;
 const uint8_t *host(uint64_t va, uint64_t bytes);
 
+extern "C" uint32_t mock_iokit_va_kind(uint64_t va);  // mock_comp.h
+
 extern "C" void cap_describe(uint64_t va)
 {
     auto it = gBinds.upper_bound(va);
@@ -180,6 +182,7 @@ extern "C" void pushcount_exec(const struct TegraGM20BAbiExec *e)
                 gLog));
             d->scrub = cap_scrub;
             d->describe = cap_describe;
+            d->vaKind = mock_iokit_va_kind;
             if (const char *f = getenv("RAWCAP_PROGRAMS"))
                 if (!d->loadPrograms(f))
                     fprintf(stderr, "cap: cannot read programs %s\n", f);

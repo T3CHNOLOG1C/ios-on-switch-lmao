@@ -59,6 +59,12 @@ public:
     uint32_t surfaceLayout(const Bo &bo, uint32_t width, uint32_t height, uint32_t bpp, uint32_t bytesPerRow,
                            bool writes);
     bool bindImport(void *addr, Bo &bo, uint32_t kind);
+    // BoAlloc of physically contiguous memory aligned to 2^alignLog2, never CPU-mapped: the kernel gives such memory comptags
+    // (raw_comp.h). The slow part (a contiguous search in the kernel), safe beside the other calls; the kern_return_t.
+    int allocContiguous(uint64_t bytes, uint32_t alignLog2, Bo &bo);
+    // Binds it whole at a VA aligned as its memory with compressible `kind`; false with `noLines` when the kernel had no
+    // comptags left for it (kIOReturnNoResources), with the BO left unbound. Under the caller's lock (the VA list).
+    bool bindCompressed(Bo &bo, uint32_t kind, bool &noLines);
     // GPU VA held for binds made into it later (bindImportAt), whole granules; 0: none left. releaseVa gives it back.
     uint64_t reserveVa(uint64_t bytes);
     void releaseVa(uint64_t va, uint64_t bytes);

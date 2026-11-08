@@ -278,6 +278,7 @@ Device::~Device()
     grow_.notify_all();
     if (grower_.joinable())
         grower_.join();
+    compStop();
 }
 
 uint32_t Device::contextWords() const
@@ -1862,12 +1863,28 @@ bool Device::createYcbcrTexture(uint64_t surfaceId, void *base, uint64_t allocBy
 Texture *Device::backing(const Texture &m, uint32_t tag, bool blockLinear)
 {
     blockLinear |= m.zeta;
+    const uint32_t kind = compKind(m, tag, blockLinear);
+    Backing *plain = nullptr;
     for (Backing *b : backings_)
-        if (b->texture.width == m.width && b->texture.height == m.height && b->texture.format == m.format &&
-            b->tag == tag && b->texture.blockLinear == blockLinear) {
-            b->lastCommit = commitCount_;
-            return &b->texture;
+        if (!b->retired && b->texture.width == m.width && b->texture.height == m.height &&
+            b->texture.format == m.format && b->tag == tag && b->texture.blockLinear == blockLinear) {
+            if (b->texture.comptags || !kind) {
+                b->lastCommit = commitCount_;
+                return &b->texture;
+            }
+            plain = b;
         }
+    if (Backing *c = kind ? compBacking(m, tag, kind) : nullptr) {
+        if (plain)
+            plain->retired = true;
+        c->lastCommit = commitCount_;
+        backings_.push_back(c);
+        return &c->texture;
+    }
+    if (plain) {
+        plain->lastCommit = commitCount_;
+        return &plain->texture;
+    }
     Backing *b = new Backing;
     Texture &t = b->texture;
     if (m.zeta) {
@@ -1939,6 +1956,7 @@ void Device::freeBacking(Texture &t)
 // Backings no pass used for 600 command buffers (~10 s of frames) and whose last use completed go back to the pool.
 void Device::trimBackings()
 {
+    compTrim();
     for (auto it = spares_.begin(); it != spares_.end();) {
         if (commitCount_ - it->freedAt > 600) {
             freeChunk(chunks_[it->chunk]);
@@ -1950,7 +1968,10 @@ void Device::trimBackings()
     for (auto it = backings_.begin(); it != backings_.end();) {
         Backing *b = *it;
         if (commitCount_ - b->lastCommit > 600 && (!b->lastUse || done(b->lastUse))) {
-            freeBacking(b->texture);
+            if (b->comp.handle)
+                compFree(*b);
+            else
+                freeBacking(b->texture);
             delete b;
             it = backings_.erase(it);
             continue;
@@ -3405,7 +3426,7 @@ void RenderEncoder::end()
             continue;
         const Texture *t = pass_.color[c.target].texture;
         targetWords(p, COLOR_TARGET, *t);
-        p.m(COLOR_COMPRESSION, 0);
+        p.m(COLOR_COMPRESSION, t->comptags);
         uint32_t map = 0;
         for (uint32_t k = 0; k < 8; k++)
             map |= k << (4 + 3 * k);
@@ -3415,6 +3436,7 @@ void RenderEncoder::end()
         uint32_t v[4] = {};
         clearWords(pass_.color[c.target].texture->format, c.value, v,
                    !called_ && pass_.color[c.target].texture->compressed);
+        d.countZbc(*t, !c.x0 && !c.y0 && c.x1 >= t->width && c.y1 >= t->height, zbcBootColor(t->format, v));
         p.inc(COLOR_CLEAR_VALUE, {v[0], v[1], v[2], v[3]});
         p.inc(CLEAR_RECT_H, {c.x1 << 16 | c.x0, c.y1 << 16 | c.y0});
         p.m(CLEAR_SURFACE_CONTROL, 0x10);  // USE_CLEAR_RECT
@@ -3434,7 +3456,7 @@ void RenderEncoder::end()
         if (!t)
             continue;
         targetWords(p, COLOR_TARGET + 0x40 * j, *t);
-        p.m(COLOR_COMPRESSION + 4 * j, 0);
+        p.m(COLOR_COMPRESSION + 4 * j, t->comptags);
         count++;
     }
     // targets map to themselves (NVK writes all eight slots of the map; the hardware reads the first `count`)
@@ -3447,12 +3469,15 @@ void RenderEncoder::end()
     // NVK clears depth and stencil with the first color the pass clears over its render area, else on their own
     uint32_t zsBits = zs.texture ? zetaClearBits(zs.clearDepth, zs.clearStencil) : 0;
     zetaClearValues(p, zsBits & 1, zs.depth, zsBits & 2, zs.stencil);
+    if (zsBits & 1)
+        d.countZbc(*zs.texture, areaW_ >= zs.texture->width && areaH_ >= zs.texture->height, zbcBootDepth(zs.depth));
     for (const Clear &c : cl) {
         if (c.own)
             continue;
         uint32_t v[4] = {};
-        clearWords(pass_.color[c.target].texture->format, c.value, v,
-                   !called_ && pass_.color[c.target].texture->compressed);
+        const Texture *t = pass_.color[c.target].texture;
+        clearWords(t->format, c.value, v, !called_ && t->compressed);
+        d.countZbc(*t, !c.x0 && !c.y0 && c.x1 >= t->width && c.y1 >= t->height, zbcBootColor(t->format, v));
         const bool area = !c.x0 && !c.y0 && c.x1 == areaW_ && c.y1 == areaH_;
         p.inc(COLOR_CLEAR_VALUE, {v[0], v[1], v[2], v[3]});
         p.inc(CLEAR_RECT_H, {c.x1 << 16 | c.x0, c.y1 << 16 | c.y0});

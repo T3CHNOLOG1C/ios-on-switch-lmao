@@ -18,6 +18,8 @@
 #                     lower one, and keep their own for a timeshare committer
 #   raw_tiled_cache_test  raw/runtime/raw_tiled_cache.h: with the kernel's tiled-cache bit, deko3d's configuration then the
 #                     enable at context init and one flush per command buffer; nothing without it
+#   raw_comp_test     raw/runtime/raw_comp.h: the compressible kinds the raw path binds are the kernel kind table's (nouveau
+#                     gm200_mmu_kind) and demote as it says; the boot ZBC values read alike by Metal and NV format
 #   stage_test        stage-tegra-gm20b-metal.py on a directory standing in for the Data volume
 #   raw_ycbcr_test    raw/runtime/raw_ycbcr.cpp: the two-plane YCbCr textures the raw path converts (m2v's rules) and the
 #                     conversion's shape; its texels against Metal's reads are raw/test/ycbcroracle.mm's (this Mac's GPU)
@@ -151,6 +153,25 @@ host_test(
         "drivers/TegraGM20B",
     ],
     cxx_std = "c++17",
+)
+
+host_test(
+    name = "raw_comp_test",
+    srcs = [
+        "raw_comp_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20BMetal:raw/pack/nvdec_comp.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_comp.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_surfaces.h",
+    ],
+    copts = [
+        "-iquote",
+        "drivers/TegraGM20B",
+    ],
+    cxx_std = "c++17",
+    data = ["//drivers/TegraGM20B:nouveau/nvkm/subdev/mmu/gm200.c"],
+    defines = ['GM200_C=\\"$(rootpath //drivers/TegraGM20B:nouveau/nvkm/subdev/mmu/gm200.c)\\"'],
 )
 
 py_test(
