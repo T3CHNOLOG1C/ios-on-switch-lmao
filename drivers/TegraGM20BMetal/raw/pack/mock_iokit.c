@@ -59,6 +59,7 @@ enum {
 };
 
 struct bo {
+    uint64_t handle; /* 0: a free slot */
     int fd;
     uint64_t bytes;
     void *import;
@@ -68,8 +69,11 @@ struct bo {
     uint8_t kind_set;
     uint64_t lines; /* comptag lines it holds (mock_comp.h) */
 };
+/* Live BOs by slot. A handle is a serial above the slot (serial << 16 | slot): never reused, as the kext's; a slot (and the
+ * map token, which is the slot) is, once its BO is freed */
 static struct bo bos[kMaxBo];
-static atomic_uint nbo = 1;
+static pthread_mutex_t bo_lock = PTHREAD_MUTEX_INITIALIZER;
+static uint64_t bo_serial;
 static uint32_t submitted[16];
 static uint32_t *fence;   /* the fence page, a TegraGM20BAbiFence per channel at slot*16 */
 static uint32_t dead[16]; /* method 11's error of a killed channel */
@@ -78,6 +82,33 @@ static uint64_t dead_va[16]; /* and its fault VA */
 static uint32_t engines[16];
 static uint8_t live[16]; /* slots in use: a connection gets its lowest free one, its seqnos continuing (the kext's) */
 static uint32_t kill_next;
+
+/* The slot of live handle `h`, or 0 */
+static unsigned slot_of(uint64_t h)
+{
+    const unsigned slot = (unsigned)(h & (kMaxBo - 1));
+    return slot && bos[slot].handle == h ? slot : 0;
+}
+
+/* `o` in a free slot, under a new handle: its slot, or 0 with every slot live */
+static unsigned bo_new(struct bo o)
+{
+    static unsigned cursor = 1;
+    unsigned slot = 0;
+    pthread_mutex_lock(&bo_lock);
+    for (unsigned n = 1; n < kMaxBo && !slot; n++) {
+        if (!bos[cursor].handle)
+            slot = cursor;
+        cursor = cursor + 1 < kMaxBo ? cursor + 1 : 1;
+    }
+    if (slot) {
+        o.handle = ++bo_serial << 16 | slot;
+        bos[slot] = o;
+    }
+    pthread_mutex_unlock(&bo_lock);
+    return slot;
+}
+
 static uint64_t kill_next_va;
 static atomic_ulong calls[16];
 static atomic_uint fail_left[16]; /* mock_iokit_fail_next's, by method */
@@ -488,15 +519,23 @@ static kern_return_t mock_call(mach_port_t c, uint32_t sel, const void *in, size
         const struct TegraGM20BAbiBoAlloc *a = in;
         if ((a->flags & TegraGM20BBoContiguous) && getenv("MOCK_CONTIG_US"))
             usleep((useconds_t)atoi(getenv("MOCK_CONTIG_US")));
-        unsigned h = atomic_fetch_add(&nbo, 1);
+        static atomic_uint names;
         char name[64];
-        snprintf(name, sizeof(name), "/nvkmock.%d.%u", getpid(), h);
+        snprintf(name, sizeof(name), "/nvkmock.%d.%u", getpid(), atomic_fetch_add(&names, 1));
         int fd = shm_open(name, O_RDWR | O_CREAT | O_EXCL, 0600);
         shm_unlink(name);
-        if (fd < 0 || ftruncate(fd, (off_t)a->bytes))
+        if (fd < 0 || ftruncate(fd, (off_t)a->bytes)) {
+            if (fd >= 0)
+                close(fd);
             return kIOReturnNoMemory;
-        bos[h] = (struct bo){fd, a->bytes, NULL, 0, a->flags, a->align_log2};
-        struct TegraGM20BAbiBoAllocReply r = {.handle = h, .map_token = h};
+        }
+        const unsigned h =
+            bo_new((struct bo){.fd = fd, .bytes = a->bytes, .flags = a->flags, .align_log2 = a->align_log2});
+        if (!h) {
+            close(fd);
+            return kIOReturnNoMemory;
+        }
+        struct TegraGM20BAbiBoAllocReply r = {.handle = bos[h].handle, .map_token = h};
         memcpy(out, &r, sizeof(r));
         return KERN_SUCCESS;
     }
@@ -510,36 +549,44 @@ static kern_return_t mock_call(mach_port_t c, uint32_t sel, const void *in, size
             slow = getenv("MOCK_IMPORT_US") ? getenv("MOCK_IMPORT_US") : "";
         if (*slow)
             usleep((useconds_t)((uint64_t)atoi(slow) * a->bytes / (16u << 20)));
-        unsigned h = atomic_fetch_add(&nbo, 1);
-        bos[h] = (struct bo){-1, a->bytes, (void *)(uintptr_t)a->address, a->surface_id};
-        struct TegraGM20BAbiBoAllocReply r = {.handle = h, .map_token = 0};
+        const unsigned h = bo_new((struct bo){
+            .fd = -1, .bytes = a->bytes, .import = (void *)(uintptr_t)a->address, .surface = a->surface_id});
+        if (!h)
+            return kIOReturnNoMemory;
+        struct TegraGM20BAbiBoAllocReply r = {.handle = bos[h].handle, .map_token = 0};
         memcpy(out, &r, sizeof(r));
         return KERN_SUCCESS;
     }
     case TegraGM20BMethodSurfaceLayout: {
         const struct TegraGM20BAbiSurfaceLayout *a = in;
-        if (getenv("MOCK_NO_SURFACE_LAYOUT") || a->handle >= kMaxBo || !bos[a->handle].surface)
+        const unsigned h = slot_of(a->handle);
+        if (getenv("MOCK_NO_SURFACE_LAYOUT") || !bos[h].surface)
             return kIOReturnBadArgument;
-        struct TegraGM20BAbiSurfaceLayoutReply r = {.layout = surface_layout(&bos[a->handle], a)};
+        struct TegraGM20BAbiSurfaceLayoutReply r = {.layout = surface_layout(&bos[h], a)};
         memcpy(out, &r, sizeof(r));
         return KERN_SUCCESS;
     }
     case TegraGM20BMethodBoFree: {
         const struct TegraGM20BAbiBoFree *a = in;
-        if (a->handle < kMaxBo && bos[a->handle].fd >= 0)
-            close(bos[a->handle].fd);
-        comp_unbind(0, 0, (unsigned)a->handle);
-        if (a->handle < kMaxBo)
-            bos[a->handle] = (struct bo){0};
+        const unsigned h = slot_of(a->handle);
+        if (!h)
+            return KERN_SUCCESS;
+        if (bos[h].fd >= 0)
+            close(bos[h].fd);
+        comp_unbind(0, 0, h);
+        pthread_mutex_lock(&bo_lock);
+        bos[h] = (struct bo){0};
+        pthread_mutex_unlock(&bo_lock);
         return KERN_SUCCESS;
     }
     case TegraGM20BMethodVmBind: {
         const struct TegraGM20BAbiVmBind *b = in;
         for (uint32_t i = 0; i < b->count && i < TegraGM20BMaxBindOps; i++) {
             const struct TegraGM20BAbiBindOp *op = &b->ops[i];
-            struct bo *o = (op->op == TegraGM20BBindMap && op->handle < kMaxBo) ? &bos[op->handle] : NULL;
+            const unsigned h = op->op == TegraGM20BBindMap ? slot_of(op->handle) : 0;
+            struct bo *o = h ? &bos[h] : NULL;
             if (o) {
-                const kern_return_t kr = comp_bind((unsigned)op->handle, o, op);
+                const kern_return_t kr = comp_bind(h, o, op);
                 if (kr != KERN_SUCCESS)
                     return kr;
             } else if (op->op == TegraGM20BBindUnmap) {
@@ -655,8 +702,8 @@ static kern_return_t mock_call(mach_port_t c, uint32_t sel, const void *in, size
         struct listed *l = &lists[e->channel & 15];
         *l = (struct listed){.given = 1};
         for (uint32_t i = 0; i < e->count && !(e->flags & TegraGM20BExecSurfacesAll); i++) {
-            const uint64_t h = e->uses[i].handle;
-            const uint32_t surface = h < kMaxBo && bos[h].import ? bos[h].surface : 0;
+            const unsigned h = slot_of(e->uses[i].handle);
+            const uint32_t surface = bos[h].import ? bos[h].surface : 0;
             if (!surface)
                 continue; /* not a live import of a surface */
             if (e->uses[i].access & TegraGM20BSurfaceWrite)

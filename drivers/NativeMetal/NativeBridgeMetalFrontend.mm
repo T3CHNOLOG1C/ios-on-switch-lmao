@@ -4481,7 +4481,8 @@ extern "C" bool native_bridge_metal_capture(id commandBuffer,
     static const auto contextOf = capture::nvk<capture::Context>("switch_nvk_capture_context");
     static const bool complete = segments && contextOf && capture::nvk<capture::Map>("switch_nvk_capture_map") &&
                                  capture::nvk<capture::Program>("switch_nvk_capture_program");
-    if (![commandBuffer isKindOfClass:[NBCommandBuffer class]] || !complete)
+    if (![commandBuffer isKindOfClass:[NBCommandBuffer class]] || !complete ||
+        ((NBCommandBuffer *)commandBuffer).encodeFailure)
         return false;
     NBCommandBuffer *cb = (NBCommandBuffer *)commandBuffer;
     NSMutableArray<NSNumber *> *raws = [NSMutableArray array];
@@ -4510,6 +4511,14 @@ extern "C" bool native_bridge_metal_capture(id commandBuffer,
         return false;
     return !context || contextOf(raws[0].unsignedLongLongValue, &context->shaderHeap, &context->zeroPage, &context->cb0,
                                  &context->images, &context->imageMax, &context->samplers, &context->samplerMax);
+}
+
+extern "C" const char *native_bridge_metal_encode_refusal(id commandBuffer)
+{
+    if (![commandBuffer isKindOfClass:[NBCommandBuffer class]])
+        return nullptr;
+    NSString *why = ((NBCommandBuffer *)commandBuffer).encodeFailure;
+    return why ? why.UTF8String : nullptr;
 }
 
 extern "C" const void *native_bridge_metal_capture_map(id commandBuffer, uint64_t va, uint64_t bytes)
