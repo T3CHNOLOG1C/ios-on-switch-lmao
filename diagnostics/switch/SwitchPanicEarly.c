@@ -38,7 +38,7 @@ static void flush_tlb(void)
 }
 
 /* The L2 table of the bootstrap V=P L1 entry covering pa, or NULL: valid once TTBR0 holds the bootstrap root. */
-static volatile uint64_t *v_p_l2(volatile uint64_t *l1, uint64_t pa)
+static volatile uint64_t *v_p_l2(const volatile uint64_t *l1, uint64_t pa)
 {
     const uint64_t entry = l1[pa >> L1_SHIFT];
     if ((entry & (ARM_TTE_VALID | ARM_TTE_TYPE_TABLE)) != (ARM_TTE_VALID | ARM_TTE_TYPE_TABLE))
@@ -93,7 +93,8 @@ void switch_panic_early(const char *format, va_list *args, unsigned long caller)
     va_end(copy);
     uint64_t kernel_ttbr0 = 0;
     __asm__ volatile("mrs %0, ttbr0_el1" : "=r"(kernel_ttbr0));
-    int framebuffer = 0, mmio = 0;
+    int framebuffer = 0;
+    int mmio = 0;
     if (!map_bootstrap(&framebuffer, &mmio) || !mmio) {
         __asm__ volatile("msr ttbr0_el1, %0" ::"r"(kernel_ttbr0) : "memory");
         flush_tlb();
@@ -114,7 +115,8 @@ void switch_panic_early_test(unsigned int where)
         return;
     uint64_t kernel_ttbr0 = 0;
     __asm__ volatile("mrs %0, ttbr0_el1" : "=r"(kernel_ttbr0));
-    int framebuffer = 0, mmio = 0;
+    int framebuffer = 0;
+    int mmio = 0;
     const int pending =
         map_bootstrap(&framebuffer, &mmio) && switch_panic_save_early_pending((volatile uint8_t *)(uintptr_t)PSTORE_PA);
     __asm__ volatile("msr ttbr0_el1, %0" ::"r"(kernel_ttbr0) : "memory");
