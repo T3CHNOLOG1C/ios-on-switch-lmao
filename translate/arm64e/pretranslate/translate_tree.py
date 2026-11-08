@@ -27,7 +27,7 @@ from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import NamedTuple
 
-from tools.common import hashing
+from tools.common import files, hashing
 from tools.trustcache.trustcache import trust_module
 
 CACHE_DIR = 'System/Library/Caches/com.apple.dyld'
@@ -144,9 +144,7 @@ class Memo(NamedTuple):
         if dst.is_file():
             shutil.copyfile(dst, data)
             sha_out = hashing.sha256_file(data)
-        partial = record.with_suffix('.partial')
-        partial.write_text(json.dumps(dict(result, _sha_out=sha_out)))
-        os.replace(partial, record)
+        files.write_text(record, json.dumps(dict(result, _sha_out=sha_out)))
         return result
 
 

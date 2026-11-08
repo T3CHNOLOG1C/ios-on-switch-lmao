@@ -45,6 +45,7 @@ py_library(
     ],
     imports = ["../.."],
     deps = [
+        "//tools/common:files",
         "//tools/common:hashing",
         "//tools/common:paths",
         "//tools/common:sudo",

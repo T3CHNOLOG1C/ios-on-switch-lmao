@@ -21,6 +21,7 @@ py_binary(
     name = "translate_tree",
     srcs = ["translate_tree.py"],
     deps = [
+        "//tools/common:files",
         "//tools/common:hashing",
         "//tools/trustcache",
     ],
@@ -31,6 +32,7 @@ py_test(
     srcs = ["translate_tree_test.py"],
     data = ["translate_tree.py"],
     deps = [
+        "//tools/common:files",
         "//tools/common:hashing",
         "//tools/trustcache",
     ],

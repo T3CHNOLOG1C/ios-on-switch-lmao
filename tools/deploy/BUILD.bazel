@@ -22,6 +22,7 @@ py_library(
     ],
     imports = ["../.."],
     deps = [
+        "//tools/common:files",
         "//tools/common:paths",
         "//tools/install:lib",
     ],

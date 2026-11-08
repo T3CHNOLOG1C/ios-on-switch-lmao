@@ -13,7 +13,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from tools.common import hashing
+from tools.common import files, hashing
 from tools.install import host, owners as ownership, progress
 
 SKIP = ('.fseventsd', '.Spotlight-V100', '.Trashes')
@@ -104,14 +104,13 @@ def stage_cryptexes(
             log(f'preboot: {relative} unchanged')
             continue
         target.parent.mkdir(parents=True, exist_ok=True)
-        partial = target.with_name('.partial-' + target.name)
-        with progress.step(f'preboot: staging {source.name}', 2 * source.stat().st_size):
+        with (
+            files.replacing(target) as partial,
+            progress.step(f'preboot: staging {source.name}', 2 * source.stat().st_size),
+        ):
             host.copy_file_parallel(source, partial)
-            digest = hashing.sha256_file(partial, progress.advance)
-        if digest != want:
-            partial.unlink()
-            raise host.HostError(f'{relative}: copy does not match its sha256')
-        os.replace(partial, target)
+            if hashing.sha256_file(partial, progress.advance) != want:
+                raise host.HostError(f'{relative}: copy does not match its sha256')
         target.chmod(0o644)
         if owners:
             owners.set(preboot, 0, 0, 0o755)

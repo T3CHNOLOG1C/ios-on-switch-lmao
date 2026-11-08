@@ -6,11 +6,10 @@ directory for the next run; populate works on an APFS clone of it, which pack em
 
 import argparse
 import json
-import os
 import shutil
 from pathlib import Path
 
-from tools.common import hashing
+from tools.common import files, hashing
 from tools.install import (
     card as cards,
     compose,
@@ -127,9 +126,7 @@ class Stages:
     def save(self, **changes: object) -> None:
         saved = {k: v for k, v in self.state().items() if v is not None}
         saved.update(changes)
-        partial = disks.partial(self.scratch / STATE)
-        partial.write_text(json.dumps(saved, indent=2) + '\n')
-        os.replace(partial, self.scratch / STATE)
+        files.write_text(self.scratch / STATE, json.dumps(saved, indent=2) + '\n')
 
     def clean(self) -> None:
         """Detach what an earlier run left attached, drop its partial files and the leftovers nothing makes now."""
@@ -164,9 +161,8 @@ class Stages:
     def compose(self, key: str) -> None:
         for image in (self.composed, self.populated):
             image.unlink(missing_ok=True)
-        partial = disks.partial(self.composed)
-        offset, _ = compose.compose(partial, self.args.os_dmg, NOMINAL, self.spec, self.log)
-        os.replace(partial, self.composed)
+        with files.replacing(self.composed) as partial:
+            offset, _ = compose.compose(partial, self.args.os_dmg, NOMINAL, self.spec, self.log)
         self.save(compose=key, populate=None, offset=offset)
 
     def deltas(self) -> pretranslate.Deltas | None:
@@ -195,8 +191,12 @@ class Stages:
 
     def populate(self, key: str) -> None:
         self.populated.unlink(missing_ok=True)
-        partial = disks.partial(self.populated)
-        host.run('cp', '-c', str(self.composed), str(partial), log=self.log)
+        with files.replacing(self.populated) as partial:
+            host.run('cp', '-c', str(self.composed), str(partial), log=self.log)
+            self._fill(partial)
+        self.save(populate=key)
+
+    def _fill(self, partial: Path) -> None:
         deltas = self.deltas()
         if deltas:
             deltas.keep()
@@ -214,8 +214,6 @@ class Stages:
             shader_seed=getattr(self.args, 'shader_seed', None),
         )
         fill.fill(partial, self.state()['offset'], inputs, self.log)
-        os.replace(partial, self.populated)
-        self.save(populate=key)
 
     def measure(self, tool: str, image: Path) -> dict:
         """apfs_tool's measure of the container in `image`, in bytes."""

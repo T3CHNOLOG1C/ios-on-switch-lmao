@@ -28,7 +28,7 @@ from typing import NoReturn
 
 if __package__ in (None, ''):
     sys.path.insert(0, str(Path(os.path.abspath(__file__)).parents[2]))
-from tools.common import paths, sudo
+from tools.common import files, paths, sudo
 from tools.install import (
     card as cards,
     compose,
@@ -332,12 +332,7 @@ def read(path: Path) -> bytes:
 
 def replace(path: Path, data: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    partial = path.with_name('.switch-partial-' + path.name)
-    with open(partial, 'wb') as f:
-        f.write(data)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(partial, path)
+    files.write_bytes(path, data, sync=True)
     double = path.with_name('._' + path.name)
     if double.exists():
         double.unlink()

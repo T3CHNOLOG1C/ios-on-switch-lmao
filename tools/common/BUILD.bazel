@@ -43,3 +43,15 @@ py_test(
     srcs = ["sudo_test.py"],
     deps = [":sudo"],
 )
+
+py_library(
+    name = "files",
+    srcs = ["files.py"],
+    imports = ["../.."],
+)
+
+py_test(
+    name = "files_test",
+    srcs = ["files_test.py"],
+    deps = [":files"],
+)

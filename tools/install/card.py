@@ -27,7 +27,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
-from tools.common import hashing
+from tools.common import files, hashing
 from tools.install import disks, gpt, host, renamed, target as targets
 
 LINUX_MBR = 0x83
@@ -340,9 +340,7 @@ def _copy_changed(fat_root: Path, wanted: dict[str, Path], dry_run: bool) -> lis
         changed.append(relative)
         if not dry_run:
             target.parent.mkdir(parents=True, exist_ok=True)
-            partial = target.with_name('.switch-partial-' + target.name)
-            shutil.copyfile(source, partial)
-            os.replace(partial, target)
+            files.copy(source, target)
     return changed
 
 

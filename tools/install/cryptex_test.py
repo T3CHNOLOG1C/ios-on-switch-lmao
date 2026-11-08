@@ -18,6 +18,7 @@ import unittest
 import uuid
 from pathlib import Path
 
+from tools.common import files
 from tools.install import cryptex, delta, disks, host, owners
 
 MIB = 1 << 20
@@ -102,7 +103,7 @@ class Rebuild(unittest.TestCase):
         entries = delta.load(self.delta / 'm.json')
         volume_uuid = uuid.UUID('ADB8FD34-DA7E-4538-9AAF-4F05EBB09057')
         cryptex.rebuild(cryptex.Job(str(self.source), entries, self.out, APFS_TOOL, 'stand-in', volume_uuid), LOG)
-        self.assertFalse(disks.partial(self.out).exists())
+        self.assertFalse(files.partial(self.out).exists())
         self.assertTrue(all(e['source'].is_file() for e in entries), 'the delta is a Bazel input: never consumed')
         self.assertGreater(self.out.stat().st_size, 0)
         with disks.attached(self.out, LOG, writable=False) as image:

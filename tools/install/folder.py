@@ -17,6 +17,7 @@ import shutil
 from pathlib import Path
 
 from tools.common import hashing
+from tools.common.files import replacing
 from tools.install import card as cards, host, manifest, progress, renamed
 
 SII_DIR = cards.BOOT_ENTRY
@@ -139,9 +140,15 @@ def copy_plan(out: Path, fat_root: Path, name: str) -> tuple[list[tuple[str, int
 
 
 def _copy_range(source: Path, target: Path, start: int, end: int) -> None:
-    whole = start == 0 and end == source.stat().st_size
-    partial = target.with_name('.switch-partial-' + target.name) if whole else target
-    with open(source, 'rb') as src, open(partial, 'wb' if whole else 'r+b') as dst:
+    if start == 0 and end == source.stat().st_size:
+        with replacing(target) as partial:
+            _copy_bytes(source, partial, start, end, 'wb')
+    else:
+        _copy_bytes(source, target, start, end, 'r+b')
+
+
+def _copy_bytes(source: Path, target: Path, start: int, end: int, mode: str) -> None:
+    with open(source, 'rb') as src, open(target, mode) as dst:
         src.seek(start)
         dst.seek(start)
         while start < end:
@@ -151,8 +158,6 @@ def _copy_range(source: Path, target: Path, start: int, end: int) -> None:
             progress.advance(len(data))
         dst.flush()
         os.fsync(dst.fileno())
-    if whole:
-        os.replace(partial, target)
 
 
 def merge(out: Path, fat_root: Path, names: list[str], log: host.Log) -> tuple[list[str], list[str]]:

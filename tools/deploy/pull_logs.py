@@ -44,7 +44,7 @@ from pathlib import Path
 
 if __package__ in (None, ''):
     sys.path.insert(0, str(Path(os.path.abspath(__file__)).parents[2]))
-from tools.common import paths
+from tools.common import files, paths
 from tools.deploy import mkarchive
 from tools.install import (
     card as cards,
@@ -89,9 +89,7 @@ def mirror(src: Path, dst: Path) -> tuple[int, int]:
         if held and held.st_size == stat.st_size and int(held.st_mtime) == int(stat.st_mtime):
             continue
         target.parent.mkdir(parents=True, exist_ok=True)
-        partial = target.with_name(target.name + '.partial')
-        shutil.copy2(path, partial)
-        partial.replace(target)
+        files.copy(path, target, keep_times=True)
         copied, size = copied + 1, size + stat.st_size
     for path in sorted(dst.rglob('*')) if dst.is_dir() else []:
         if path.is_file() and path.relative_to(dst) not in wanted:

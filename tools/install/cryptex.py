@@ -20,7 +20,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
-from tools.common import hashing
+from tools.common import files, hashing
 from tools.install import apfs, apfs_tree, compose, delta, disks, host, owners, progress, room
 
 SEALER = '/System/Library/Filesystems/apfs.fs/Contents/Resources/apfs_prepare_cryptex'
@@ -181,9 +181,13 @@ class Job:
 
 def rebuild(job: Job, log: host.Log) -> None:
     """Write the job's cryptex: its owners given back, sealed, fitted, made beside `out` and renamed into place."""
-    source, entries, out, what = job.source, job.entries, job.out, job.what
-    image = disks.partial(out)
-    image.unlink(missing_ok=True)
+    with files.replacing(job.out) as image:
+        fitted = _rebuild(job, image, log)
+    log(f'{job.what}: translated, sealed and fitted to {progress.size(fitted)} as {job.out}')
+
+
+def _rebuild(job: Job, image: Path, log: host.Log) -> int:
+    source, entries, what = job.source, job.entries, job.what
     by_inode = _fill(source, entries, image, log, what)
     fd = os.open(image, os.O_RDWR)
     try:
@@ -197,8 +201,6 @@ def rebuild(job: Job, log: host.Log) -> None:
     with disks.attached(image, log, raw=True) as target, progress.step(f'{what}: sealing', 100, progress.PERCENT):
         host.watch(SEALER, '-p', '/dev/' + target.volumes[0], parse=progress.sealer, log=log)
     _check_sealed(image, by_inode, job.volume_uuid, log, what)
-    fitted = room.fit(
+    return room.fit(
         image, job.apfs_tool, lambda clone: _check_sealed(clone, by_inode, job.volume_uuid, log, what), log, what
     )
-    os.replace(image, out)
-    log(f'{what}: translated, sealed and fitted to {progress.size(fitted)} as {out}')

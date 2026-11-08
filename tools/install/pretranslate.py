@@ -17,7 +17,7 @@ import stat
 from collections.abc import Callable
 from pathlib import Path
 
-from tools.common import hashing
+from tools.common import files, hashing
 from tools.install import delta, host, overlay_index, owners as ownership, progress, renamed
 
 OVERLAY = renamed.DATA_FOLDER + '/pretranslated'
@@ -39,13 +39,11 @@ def _place(root: Path, e: dict, original: os.stat_result) -> Path:
     """Copy e's translated file to its System path below root, with the System file's mode."""
     target = root / e['path'].lstrip('/')
     target.parent.mkdir(parents=True, exist_ok=True)
-    partial = target.with_name('.partial-' + target.name)
-    shutil.copyfile(e['source'], partial)
-    progress.advance(partial.stat().st_size)
-    if hashing.sha256_file(partial, progress.advance) != e['sha256_out']:
-        partial.unlink()
-        raise host.HostError(f'{e["path"]}: the translated file does not match its manifest')
-    os.replace(partial, target)
+    with files.replacing(target) as partial:
+        shutil.copyfile(e['source'], partial)
+        progress.advance(partial.stat().st_size)
+        if hashing.sha256_file(partial, progress.advance) != e['sha256_out']:
+            raise host.HostError(f'{e["path"]}: the translated file does not match its manifest')
     target.chmod(original.st_mode & 0o7777)
     return target
 
