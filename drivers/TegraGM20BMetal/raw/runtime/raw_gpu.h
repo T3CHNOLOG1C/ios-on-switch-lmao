@@ -592,8 +592,10 @@ public:
     // the 2D engine's mip-chain self-test. False: the kernel refused it (`channelError()`), and the device submits nothing.
     bool ensureChannel();
 
-    const std::string &channelError() const
+    // Why the kernel last refused the channel or its context (ensureChannel, or begin() making a killed channel again)
+    std::string channelError()
     {
+        std::lock_guard<std::mutex> l(channelLock_);
         return channelError_;
     }
 
@@ -792,7 +794,7 @@ public:
         if (!ensureChannel())
             return KERN_FAILURE;
         for (int attempt = 0;; attempt++) {
-            if (k_.lost(channel_) && !reopen())
+            if ((contextless_ || k_.lost(channel_)) && !reopen())
                 return KERN_FAILURE;
             const int kr = k_.order(channel_, TegraGM20BOrderAfterTask, 0, waits);
             if (kr != kIOReturnNotResponding || attempt)
@@ -804,7 +806,7 @@ public:
     int orderOthersAfter(uint32_t &waits)
     {
         waits = 0;
-        if (!channelReady_.load(std::memory_order_acquire) || k_.lost(channel_))
+        if (!channelReady_.load(std::memory_order_acquire) || contextless_ || k_.lost(channel_))
             return KERN_SUCCESS;
         const int kr = k_.order(channel_, TegraGM20BOrderBeforeTask, lastSeqno_, waits);
         return kr == kIOReturnNotResponding ? KERN_SUCCESS : kr;
@@ -933,6 +935,9 @@ private:
     std::atomic<bool> channelReady_{false};
     bool channelFailed_ = false;
     std::string channelError_;
+    // The channel died and the one made since has no context yet (reopen gave up before the context's Exec): begin() makes it
+    // again before it gives out a command buffer. channel_ is 0 while the kernel holds none of this device's.
+    bool contextless_ = false;
     std::vector<uint32_t> freeTic_, freeTsc_;
     uint32_t nextTic_ = 1, nextTsc_ = 1, neutralTsc_ = 0;
     // the pack's, by record index, each made at its first lookup (a process uses a few of the pack's thousands); a node

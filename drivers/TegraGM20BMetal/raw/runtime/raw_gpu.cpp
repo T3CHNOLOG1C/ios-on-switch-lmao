@@ -418,28 +418,33 @@ bool Device::ensureChannel()
     return true;
 }
 
-// channelLock_ held: the rings, the channel and its context, then the 2D engine's state and its mip-chain self-test (raw/fx)
+// channelLock_ held: the rings, the channel and its context, then the 2D engine's state and its mip-chain self-test (raw/fx).
+// False: what it made is given back, so a later call starts over.
 bool Device::openChannel(std::string &err)
 {
-    if (!k_.alloc(sizes_.push, true, push_.bo) || !k_.alloc(sizes_.upload, true, upload_.bo) ||
-        !k_.channel(kEngines, channel_, fence_)) {
+    auto undo = [&](bool created) {
         err = k_.error();
+        if (created)
+            k_.closeChannel(channel_);
         k_.free(push_.bo);
         k_.free(upload_.bo);
+        push_ = Ring();
+        upload_ = Ring();
         channel_ = 0;
         fence_ = &kNoFence;
         return false;
-    }
+    };
+    if (!k_.alloc(sizes_.push, true, push_.bo) || !k_.alloc(sizes_.upload, true, upload_.bo) ||
+        !k_.channel(kEngines, channel_, fence_))
+        return undo(false);
     uint64_t va;
     uint32_t *start = reinterpret_cast<uint32_t *>(alloc(push_, contextWords() * 4, 256, va));
     Push p{start, start + contextWords()};
     emitContext(p);
     TegraGM20BAbiPush seg = {va, uint32_t(p.at - start), 0};
     uint32_t seq = 0;
-    if (!k_.exec(channel_, &seg, 1, 0, seq)) {
-        err = k_.error();
-        return false;
-    }
+    if (!k_.exec(channel_, &seg, 1, 0, seq))
+        return undo(true);
     lastSeqno_ = seq;
     retire(push_, seq);
     selfTest();
@@ -2007,16 +2012,28 @@ std::string Device::vaOwner(uint64_t va)
 
 bool Device::reopen()
 {
-    noteLost();
-    Killed live = {};
-    if (liveKill(live)) {
-        k_.markLost(channel_);
-        std::lock_guard<std::mutex> l(killedLock_);
-        killedKept_[killedNext_++ % killedKept_.size()] = live;
+    if (!contextless_) {  // the first try for this death: what the channel had failed, its kill record is kept
+        noteLost();
+        Killed live = {};
+        if (liveKill(live)) {
+            k_.markLost(channel_);
+            std::lock_guard<std::mutex> l(killedLock_);
+            killedKept_[killedNext_++ % killedKept_.size()] = live;
+        }
+        contextless_ = true;
     }
-    k_.closeChannel(channel_);
-    if (!k_.channel(kEngines, channel_, fence_))
+    // Closed once: the connection is NVK's, whose next channel may take the slot number
+    if (channel_)
+        k_.closeChannel(channel_);
+    channel_ = 0;
+    fence_ = &kNoFence;
+    auto refused = [&] {
+        std::lock_guard<std::mutex> l(channelLock_);
+        channelError_ = k_.error();
         return false;
+    };
+    if (!k_.channel(kEngines, channel_, fence_))
+        return refused();
     stats.reopens++;
     push_.inflight.clear();
     upload_.inflight.clear();
@@ -2046,9 +2063,10 @@ bool Device::reopen()
     TegraGM20BAbiPush seg = {va, uint32_t(p.at - start), 0};
     uint32_t seq = 0;
     if (!k_.exec(channel_, &seg, 1, 0, seq))
-        return false;
+        return refused();
     lastSeqno_ = seq;
     retire(push_, seq);
+    contextless_ = false;
     return true;
 }
 
@@ -2072,8 +2090,8 @@ CommandBuffer *Device::begin()
     if (!ensureChannel())
         return nullptr;
     Killed live = {};
-    if (k_.lost(channel_) || liveKill(live))
-        reopen();
+    if ((contextless_ || k_.lost(channel_) || liveKill(live)) && !reopen())
+        return nullptr;
     for (auto it = grownOut_.begin(); it != grownOut_.end();)
         if (done(it->second)) {
             k_.free(it->first);
@@ -2258,10 +2276,14 @@ BlitEncoder *CommandBuffer::blit()
 bool CommandBuffer::commit(uint32_t &seqno)
 {
     Device &d = *dev_;
+    bool invalidates = false;
+    uint64_t invalidatedBefore = 0;
     {
         std::lock_guard<std::mutex> l(d.lock_);
         if (shaderInvalidate_ && d.heapPlaced_ != d.heapInvalidated_) {
             *shaderInvalidate_ = kInvalidateConstant | kInvalidateInstruction;
+            invalidates = true;
+            invalidatedBefore = d.heapInvalidated_;
             d.heapInvalidated_ = d.heapPlaced_;
         }
     }
@@ -2288,8 +2310,13 @@ bool CommandBuffer::commit(uint32_t &seqno)
     uint32_t seq = 0;
     for (size_t at = 0; at < segments_.size(); at += kMaxSegments) {
         const uint32_t n = uint32_t(std::min<size_t>(kMaxSegments, segments_.size() - at));
-        if (!d.k_.exec(d.channel_, segments_.data() + at, n, d.lastSeqno_, seq, &surfaces_))
+        if (!d.k_.exec(d.channel_, segments_.data() + at, n, d.lastSeqno_, seq, &surfaces_)) {
+            if (!at && invalidates) {  // its prologue never reached the GPU: the next submission's invalidates
+                std::lock_guard<std::mutex> l(d.lock_);
+                d.heapInvalidated_ = invalidatedBefore;
+            }
             return false;
+        }
         d.lastSeqno_ = seq;
     }
     seqno = seq;

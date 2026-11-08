@@ -7,16 +7,25 @@
 //   that ran past one) and reaches the GPU whole.
 // - A draw whose vertex buffer is unbound fetches from NVK's empty stream (the zero page, its limit before its start), never
 //   from VA 0 with no limit.
+// - A channel the kernel killed is made again with its context before any command buffer is encoded for it: one whose
+//   ChannelCreate or context Exec the kernel refused gives no command buffer, and the next begin() tries again.
+// - Programs placed in the shader heap are behind an instruction-cache invalidate before any draw runs them, even when the
+//   kernel refused the submission whose prologue was to invalidate it.
 // usage: faultcheck <pack.bin>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <functional>
 #include <string>
+#include <tuple>
 #include "../runtime/raw_gpu.h"
 
 extern "C" uint64_t cap_draws(void);
 extern "C" uint32_t cap_reg3d(uint32_t mthd);
+extern "C" uint64_t cap_instruction_invalidates(void);
+extern "C" void mock_iokit_kill_next(uint32_t error);
+extern "C" void mock_iokit_fail_next(unsigned method, unsigned count, int kr);
+extern "C" unsigned long mock_iokit_calls(unsigned method);
 
 namespace {
 
@@ -143,6 +152,76 @@ void unboundStream(raw::Device &dev, Pass &pass, const Expect &expect)
     dev.destroyBuffer(vertices);
 }
 
+// One copy in a command buffer of its own, committed: its seqno, 0 when the device gave no command buffer or the commit failed
+uint32_t copy(raw::Device &dev, const raw::Buffer &from, const raw::Buffer &to)
+{
+    raw::CommandBuffer *cb = dev.begin();
+    if (!cb)
+        return 0;
+    raw::BlitEncoder *e = cb->blit();
+    e->copyBytes(from.va, to.va, from.length);
+    e->end();
+    uint32_t seqno = 0;
+    if (!cb->commit(seqno)) {
+        cb->abandon();
+        return 0;
+    }
+    return seqno;
+}
+
+void reopenRefused(raw::Device &dev, const Expect &expect)
+{
+    raw::Buffer a, b;
+    if (!dev.createBuffer(4096, a) || !dev.createBuffer(4096, b)) {
+        expect(false, "two buffers");
+        return;
+    }
+    auto kill = [&] {
+        mock_iokit_kill_next(1);
+        const uint32_t killed = copy(dev, a, b);
+        return killed && !dev.wait(killed);
+    };
+    for (const auto &[method, kr, what] :
+         {std::tuple{unsigned(TegraGM20BMethodExec), int(kIOReturnNoMemory), "the context's Exec"},
+          std::tuple{unsigned(TegraGM20BMethodChannelCreate), int(kIOReturnNoResources), "ChannelCreate"}}) {
+        expect(kill(), "a command buffer the kernel killed with its channel");
+        const unsigned long creates = mock_iokit_calls(TegraGM20BMethodChannelCreate);
+        mock_iokit_fail_next(method, 1, kr);
+        const bool refused = !dev.begin();
+        std::printf("%s refused: begin() %s\n", what, refused ? "gave none" : "gave a command buffer");
+        expect(refused, "no command buffer while the kernel refuses the channel or its context");
+        const uint32_t next = copy(dev, a, b);
+        expect(next && dev.wait(next) && mock_iokit_calls(TegraGM20BMethodChannelCreate) == creates + 2,
+               "the next begin() makes the channel again, and its command buffer completes");
+    }
+    dev.destroyBuffer(a);
+    dev.destroyBuffer(b);
+}
+
+void invalidateRefused(raw::Device &dev, const Expect &expect)
+{
+    raw::Buffer a, b;
+    if (!dev.createBuffer(4096, a) || !dev.createBuffer(4096, b)) {
+        expect(false, "two buffers");
+        return;
+    }
+    const uint32_t settled = copy(dev, a, b);
+    expect(settled && dev.wait(settled), "a submission after the heap's last placement");
+    const uint64_t before = cap_instruction_invalidates();
+    const raw::PackPipeline *recs = dev.pack().section<raw::PackPipeline>(raw::PackPipelines);
+    for (uint32_t i = 0; i < dev.pack().header()->pipelines; i++)
+        dev.pipeline(recs[i].keyHash);  // every state's programs placed
+    mock_iokit_fail_next(TegraGM20BMethodExec, 1, kIOReturnNoMemory);
+    expect(!copy(dev, a, b), "a submission the kernel refused");
+    const uint32_t next = copy(dev, a, b);
+    expect(next && dev.wait(next), "the next one");
+    const uint64_t invalidates = cap_instruction_invalidates() - before;
+    std::printf("instruction-cache invalidates since the placement: %llu\n", (unsigned long long)invalidates);
+    expect(invalidates == 1, "the next one's prologue invalidates the instruction caches");
+    dev.destroyBuffer(a);
+    dev.destroyBuffer(b);
+}
+
 }  // namespace
 
 int main(int argc, char **argv)
@@ -171,6 +250,8 @@ int main(int argc, char **argv)
     }
     instances(dev, pass, expect);
     unboundStream(dev, pass, expect);
+    reopenRefused(dev, expect);
+    invalidateRefused(dev, expect);
     if (failures) {
         std::printf("FAIL: faultcheck (%d)\n", failures);
         return 1;
