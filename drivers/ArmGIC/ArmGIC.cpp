@@ -33,6 +33,7 @@
 #include <libkern/c++/OSSymbol.h>
 #include "ArmGIC.h"
 #include "SwitchInterrupts.h"
+#include "../../kits/SwitchDT/SwitchDTProperty.h"
 #include "../../kits/SwitchIdle/switch_idle.h"
 #include "../../kits/SwitchMMIO/SwitchMMIO.h"
 
@@ -328,16 +329,9 @@ bool ArmGIC::mapDistributor(uint64_t *physical)
 {
     const IORegistryEntry *soc = IORegistryEntry::fromPath("/arm-io", gIODTPlane);
     const IORegistryEntry *gic = IORegistryEntry::fromPath("/arm-io/intc", gIODTPlane);
-    const OSData *ranges = soc ? OSDynamicCast(OSData, soc->getProperty("ranges")) : nullptr;
-    const OSData *reg = gic ? OSDynamicCast(OSData, gic->getProperty("reg")) : nullptr;
     uint64_t bus[3] = {};
     uint64_t regions[4] = {};
-    const bool found = (ranges != nullptr) && ranges->getLength() == sizeof(bus) && (reg != nullptr) &&
-                       reg->getLength() == sizeof(regions);
-    if (found) {
-        memcpy(bus, ranges->getBytesNoCopy(), sizeof(bus));
-        memcpy(regions, reg->getBytesNoCopy(), sizeof(regions));
-    }
+    const bool found = switch_dt_value(soc, "ranges", &bus) && switch_dt_value(gic, "reg", &regions);
     OSSafeReleaseNULL(soc);
     OSSafeReleaseNULL(gic);
     if (!found || regions[1] < 0x1000 || regions[0] < bus[0] || bus[2] < 0x1000 ||
