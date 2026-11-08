@@ -34,6 +34,11 @@ struct switch_apfs_layout {
 // 0, or nonzero for a container it cannot fit. `work` is SWITCH_APFS_WORK_BYTES.
 int switch_apfs_measure(const struct switch_apfs_io *io, void *work, struct switch_apfs_layout *layout);
 
+// The free queue node limits (sfq_tree_node_limit) the kernel requires, exactly, of a container of `blocks` (its main
+// queue's) and of an internal pool of `pool_blocks` (the pool's queue's); fsck_apfs does not check them.
+uint16_t switch_apfs_main_queue_limit(uint64_t blocks);
+uint16_t switch_apfs_pool_queue_limit(uint64_t pool_blocks);
+
 // Shrinks the container to `blocks` (from switch_apfs_measure's minimum up to its size; its size changes nothing).
 // Every check runs before the first write, so a nonzero return has written nothing.
 int switch_apfs_fit(const struct switch_apfs_io *io, void *work, uint64_t blocks);

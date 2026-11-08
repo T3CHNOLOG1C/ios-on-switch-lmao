@@ -213,6 +213,16 @@ py_test(
     deps = [":lib"],
 )
 
+# room.fit and apfs_tool on containers newfs_apfs made (a cryptex's kind), checked by macOS: hdiutil, diskutil and
+# fsck_apfs work inside darwin-sandbox, so it runs with every test; it skips itself where there is no diskutil.
+py_test(
+    name = "room_apfs_test",
+    srcs = ["room_apfs_test.py"],
+    args = ["$(rootpath //boot/installer:apfs_tool)"],
+    data = ["//boot/installer:apfs_tool"],
+    deps = [":lib"],
+)
+
 # Populate as the user on a small composed container: hdiutil and diskutil, macOS, outside the sandbox.
 py_test(
     name = "fill_apfs_test",
