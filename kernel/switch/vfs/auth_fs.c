@@ -16,6 +16,7 @@
 #include <sys/vnode_internal.h>
 #include <sys/ubc_internal.h>
 #include <sys/trust_caches.h>
+#include <libkern/amfi/amfi.h>
 #include <pexpert/device_tree.h>
 
 #include <switch/auth_fs.h>
@@ -26,16 +27,18 @@
 
 extern mount_t native_owner_cryptex_mount[2];
 
+/* The trust caches are AMFI's objects, laid out by its own TrustCache library: only its interface reads them. */
 bool switch_trust_module_uuid(const uint8_t *cdhash, uint8_t uuid[SWITCH_UUID_SIZE])
 {
     TrustCacheQueryToken_t token;
-    if (query_trust_cache(kTCQueryTypeAll, cdhash, &token) != KERN_SUCCESS || token.trustCache == NULL ||
-        token.trustCache->module == NULL) {
+    if (query_trust_cache(kTCQueryTypeAll, cdhash, &token) != KERN_SUCCESS) {
         return false;
     }
-    /* Every module version starts with its version (u32), then its UUID. */
-    memcpy(uuid, (const uint8_t *)token.trustCache->module + sizeof(uint32_t), SWITCH_UUID_SIZE);
-    return true;
+#if XNU_12377_121_6
+    return amfi->TrustCache.queryGetUUID(&token, uuid).error == kTCReturnSuccess;
+#else
+    return amfi->TrustCache.version >= 3 && amfi->TrustCache.getUUID(token.trustCache, uuid).error == kTCReturnSuccess;
+#endif
 }
 
 static bool switch_signed_by(vnode_t vp, const uint8_t *uuids, unsigned int size)
