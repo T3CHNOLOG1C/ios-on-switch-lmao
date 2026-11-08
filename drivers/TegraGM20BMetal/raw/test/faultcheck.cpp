@@ -11,6 +11,7 @@
 // - A freed texture header is the null descriptor, never zeroes (a buffer texture at VA 0).
 // - A commit whose later Exec the kernel refuses leaves nothing of its rings in flight, and the next command buffer a new
 //   channel.
+// - A wait that fails on a channel destroyed meanwhile marks no new channel of the same id lost.
 // - A channel the kernel killed is made again with its context before any command buffer is encoded for it: one whose
 //   ChannelCreate or context Exec the kernel refused gives no command buffer, and the next begin() tries again.
 // - Programs placed in the shader heap are behind an instruction-cache invalidate before any draw runs them, even when the
@@ -23,6 +24,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <functional>
+#include <thread>
 #include <string>
 #include <tuple>
 #include <unistd.h>
@@ -263,6 +265,29 @@ void partialCommit(raw::Device &dev, const Expect &expect)
     dev.destroyBuffer(b);
 }
 
+// A wait on a channel that answers NotResponding only after the channel was destroyed and its id given to a new one (a
+// completion thread's wait across the submit thread's reopen) marks nothing lost: the new channel is not the dead one
+void lostReused(const Expect &expect)
+{
+    raw::Kernel k;
+    std::string err;
+    uint32_t first = 0, second = 0;
+    const volatile uint32_t *fence = nullptr;
+    if (!k.open(err) || !k.channel(1, first, fence)) {
+        expect(false, "a connection and a channel");
+        return;
+    }
+    std::thread waiter([&] {
+        k.wait(first, 1000);  // never reached: answers when the channel's slot is made again
+    });
+    usleep(20000);
+    k.closeChannel(first);
+    expect(k.channel(1, second, fence) && second == first, "a new channel in the first one's slot");
+    waiter.join();
+    expect(!k.lost(second), "the new channel is not lost");
+    k.closeChannel(second);
+}
+
 void reopenRefused(raw::Device &dev, const Expect &expect)
 {
     raw::Buffer a, b;
@@ -397,6 +422,7 @@ int main(int argc, char **argv)
     holeTarget(dev, pass, expect);
     freedHeader(dev, expect);
     partialCommit(dev, expect);
+    lostReused(expect);
     reopenRefused(dev, expect);
     invalidateRefused(dev, expect);
     waitRefused(dev, expect);

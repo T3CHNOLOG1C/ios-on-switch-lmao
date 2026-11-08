@@ -1969,7 +1969,7 @@ void Device::trimBackings()
 bool Device::waitFence(uint32_t seqno)
 {
     constexpr unsigned kRefusals = 3;
-    const uint32_t ch = channel_;
+    const uint32_t ch = channel_, opened = k_.opened();
     for (unsigned refused = 0; !done(seqno);) {
         if (k_.wait(ch, seqno))
             break;
@@ -1979,7 +1979,7 @@ bool Device::waitFence(uint32_t seqno)
             break;
         }
         if (st.error) {
-            k_.markLost(ch);
+            k_.markLost(ch, opened);
             noteLost();
             break;
         }
@@ -1994,7 +1994,7 @@ bool Device::waitFence(uint32_t seqno)
                 killedKept_[killedNext_++ % killedKept_.size()] = {
                     st.completed + 1, __atomic_load_n(&lastSeqno_, __ATOMIC_RELAXED), kWaitRefused};
             }
-            k_.markLost(ch);  // begin() makes it again
+            k_.markLost(ch, opened);  // begin() makes it again
             noteLost();
             return false;
         }
@@ -2086,7 +2086,7 @@ bool Device::reopen()
         noteLost();
         Killed live = {};
         if (liveKill(live)) {
-            k_.markLost(channel_);
+            k_.markLost(channel_, k_.opened());
             std::lock_guard<std::mutex> l(killedLock_);
             killedKept_[killedNext_++ % killedKept_.size()] = live;
         }
