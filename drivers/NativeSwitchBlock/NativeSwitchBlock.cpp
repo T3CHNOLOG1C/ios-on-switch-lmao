@@ -46,6 +46,8 @@
 #include "../ArmGIC/SwitchInterrupts.h"
 #include "../TegraI2C/TegraI2C.h"
 #include "../TegraGPIO/TegraGPIO.h"
+#include "../../kits/SwitchDMA/SwitchDcache.h"
+#include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
 #include "../../kits/SwitchRefusal/SwitchRefusal.h"
 #include "../SwitchBrightness/SwitchBrightness.h"
 #include "../SwitchPower/SwitchPower.h"
@@ -59,7 +61,6 @@
 #include "SwitchCq.h"
 
 extern "C" {
-vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 // The ADMA2 path's page checks and cache maintenance (osfmk/arm/pmap/pmap.c, arm64/arm_vm_init.c): whether a page is
 // managed RAM, its cache attributes (VM_WIMG_DEFAULT 0x2, osfmk/arm/memory_types.h: write-back cacheable), and its
 // address in the kernel's physical aperture.
@@ -355,16 +356,6 @@ bool partitionNamed(const uint8_t *entry, const char *name)
     return i == 36 || ((field[2 * static_cast<size_t>(i)] == 0u) && (field[2 * i + 1] == 0u));
 }
 
-inline uint32_t rd(const volatile uint8_t *base, uint32_t o)
-{
-    return *reinterpret_cast<const volatile uint32_t *>(base + o);
-}
-
-inline void wr(volatile uint8_t *base, uint32_t o, uint32_t v)
-{
-    *reinterpret_cast<volatile uint32_t *>(base + o) = v;
-}
-
 struct Request {
     Request *next;
     IOMemoryDescriptor *buffer;
@@ -574,7 +565,7 @@ class NativeSwitchBlock : public IOService {
     // NOLINTNEXTLINE(misc-explicit-constructor): IOKit's structors macro declares the metaclass constructor
     OSDeclareDefaultStructors(NativeSwitchBlock) volatile uint8_t *regs = nullptr;
     volatile uint8_t *car = nullptr, *apb = nullptr, *pmc = nullptr;  // SDR104 bring-up only
-    volatile uint32_t *mc = nullptr;                                  // memory controller (SMMU state for SDMMC1)
+    volatile uint8_t *mc = nullptr;                                   // memory controller (SMMU state for SDMMC1)
     IOBufferMemoryDescriptor *bounceMemory = nullptr;
     uint8_t *bounce = nullptr;
     uint64_t bouncePA = 0;
@@ -732,37 +723,32 @@ class NativeSwitchBlock : public IOService {
 
     uint8_t r8(uint32_t o)
     {
-        return regs[o];
+        return switch_mmio_read8(regs, o);
     }
 
     uint16_t r16(uint32_t o)
     {
-        return *reinterpret_cast<volatile uint16_t *>(regs + o);
+        return switch_mmio_read16(regs, o);
     }
 
     uint32_t r32(uint32_t o)
     {
-        return *reinterpret_cast<volatile uint32_t *>(regs + o);
+        return switch_mmio_read32(regs, o);
     }
 
     void w8(uint32_t o, uint8_t v)
     {
-        regs[o] = v;
+        switch_mmio_write8(regs, o, v);
     }
 
     void w16(uint32_t o, uint16_t v)
     {
-        *reinterpret_cast<volatile uint16_t *>(regs + o) = v;
+        switch_mmio_write16(regs, o, v);
     }
 
     void w32(uint32_t o, uint32_t v)
     {
-        *reinterpret_cast<volatile uint32_t *>(regs + o) = v;
-    }
-
-    static void barrier()
-    {
-        __asm__ volatile("dsb sy" ::: "memory");
+        switch_mmio_write32(regs, o, v);
     }
 
     static bool stage(IOMemoryDescriptor *memory, uint32_t from, uint8_t *at, uint32_t length, bool toClient)
@@ -1093,7 +1079,7 @@ void NativeSwitchBlock::recover(bool data)
         return;
     w16(TRANSFER, 0);
     w32(ARGUMENT, 0);
-    barrier();
+    switch_dcache_sync();
     w16(COMMAND, 0x0cdb);
     noteCommand(12);
     for (const uint64_t start = nowNs(); nowNs() - start < 100000000;) {
@@ -1153,7 +1139,7 @@ int NativeSwitchBlock::issue(uint32_t lba, uint32_t sectors, bool write, unsigne
     if (frame.argument2)
         w32(ARGUMENT2, frame.argument2);
     w16(TRANSFER, frame.transfer);
-    barrier();
+    switch_dcache_sync();
     w16(COMMAND, frame.command);
     noteCommand(frame.autoStop ? 12 : static_cast<uint8_t>(frame.command >> 8));  // r18-sdcq: an Auto CMD12 ends it
     return 0;
@@ -1248,15 +1234,13 @@ int NativeSwitchBlock::transfer(uint64_t lba, uint32_t sectors, bool write, uint
     if (write && bytes != bounce)
         memcpy(bounce, bytes, length);
     // Clean (write) or clean+invalidate (read) before the device owns the lines.
-    for (uintptr_t at = reinterpret_cast<uintptr_t>(bounce), end = at + length; at < end; at += 64)
-        __asm__ volatile("dc civac, %0" ::"r"(at) : "memory");
-    barrier();
+    switch_dcache_clean_invalidate_lines(bounce, length);
+    switch_dcache_sync();
     if (const int step = run(lba, sectors, write, 0))
         return step;
     if (!write) {
-        for (uintptr_t at = reinterpret_cast<uintptr_t>(bounce), end = at + length; at < end; at += 64)
-            __asm__ volatile("dc ivac, %0" ::"r"(at) : "memory");
-        barrier();
+        switch_dcache_invalidate_lines(bounce, length);
+        switch_dcache_sync();
         if (bytes != bounce)
             memcpy(bytes, bounce, length);
     }
@@ -1307,10 +1291,8 @@ int NativeSwitchBlock::retry(int step, uint32_t status, uint64_t lba, uint32_t s
     if (tuned)
         retune(false);
     if (write && !descriptors) {
-        for (uintptr_t at = reinterpret_cast<uintptr_t>(bounce), end = at + static_cast<uintptr_t>(sectors) * kSector;
-             at < end; at += 64)
-            __asm__ volatile("dc civac, %0" ::"r"(at) : "memory");
-        barrier();
+        switch_dcache_clean_invalidate_lines(bounce, static_cast<uintptr_t>(sectors) * kSector);
+        switch_dcache_sync();
     }
     step = command(static_cast<uint32_t>(lba), sectors, write, descriptors, &status);
     if (step && !failed(step, status, lba, sectors, write, descriptors, true) && tuned && speed + 1 < kSpeedCount)
@@ -1539,26 +1521,13 @@ static bool cacheableRam(uint64_t page)
 // what the card wrote) or invalidate (after a read: drops what the A57 prefetched meanwhile). The table only holds whole
 // lines of managed RAM (SwitchAdma.h), so no other data shares a line and phystokv covers every page.
 // r14-sdcq: entries into [skip, skip + skipBytes) (the gap sink, which the CPU never touches) are left out.
-template <int Op> static void syncLines(const SwitchAdmaTable &table, uint64_t skip = 0, uint64_t skipBytes = 0)
+static void syncLines(switch_dcache_op op, const SwitchAdmaTable &table, uint64_t skip = 0, uint64_t skipBytes = 0)
 {
     for (uint32_t i = 0; i < table.count; ++i) {
-        uint64_t pa = switchAdmaAddress(table.entries[i]);
+        const uint64_t pa = switchAdmaAddress(table.entries[i]);
         if (pa - skip < skipBytes)
             continue;
-        for (const uint64_t end = pa + table.entries[i].length; pa < end;) {
-            const uint64_t page = (pa | (kAdmaPage - 1)) + 1;
-            const uint64_t stop = page < end ? page : end;
-            for (uintptr_t at = phystokv(pa), last = at + (stop - pa); at < last; at += kAdmaLine) {
-                if (Op == 0) {
-                    __asm__ volatile("dc cvac, %0" ::"r"(at) : "memory");
-                } else if (Op == 1) {
-                    __asm__ volatile("dc civac, %0" ::"r"(at) : "memory");
-                } else {
-                    __asm__ volatile("dc ivac, %0" ::"r"(at) : "memory");
-                }
-            }
-            pa = stop;
-        }
+        switch_dcache_phys_lines(op, pa, table.entries[i].length);
     }
 }
 
@@ -1629,10 +1598,7 @@ SwitchAdmaRefusal NativeSwitchBlock::buildTable(Request *first, uint32_t sectors
 void NativeSwitchBlock::prepareDirect(bool write, bool poison)
 {
     const uint64_t began = nowNs();
-    for (uintptr_t at = reinterpret_cast<uintptr_t>(table.entries),
-                   end = at + table.count * sizeof(SwitchAdmaDescriptor);
-         at < end; at += kAdmaLine)
-        __asm__ volatile("dc cvac, %0" ::"r"(at) : "memory");
+    switch_dcache_clean_lines(table.entries, table.count * sizeof(SwitchAdmaDescriptor));
     for (uint32_t i = 0; poison && !write && i < table.count; ++i) {
         uint64_t pa = switchAdmaAddress(table.entries[i]);
         for (const uint64_t end = pa + table.entries[i].length; pa < end;) {
@@ -1644,11 +1610,12 @@ void NativeSwitchBlock::prepareDirect(bool write, bool poison)
         }
     }
     if (write) {
-        syncLines<0>(table);
+        syncLines(SWITCH_DCACHE_CLEAN, table);
     } else {
-        syncLines<1>(table, sinkPA, sinkPA ? static_cast<uint64_t>(kGapSectors) * kSector : 0);
+        syncLines(SWITCH_DCACHE_CLEAN_INVALIDATE, table, sinkPA,
+                  sinkPA ? static_cast<uint64_t>(kGapSectors) * kSector : 0);
     }
-    barrier();
+    switch_dcache_sync();
     stats.syncNs += nowNs() - began;
 }
 
@@ -1671,8 +1638,8 @@ void NativeSwitchBlock::finishDirect(bool write)
     if (write)
         return;
     const uint64_t began = nowNs();
-    syncLines<2>(table, sinkPA, sinkPA ? static_cast<uint64_t>(kGapSectors) * kSector : 0);
-    barrier();
+    syncLines(SWITCH_DCACHE_INVALIDATE, table, sinkPA, sinkPA ? static_cast<uint64_t>(kGapSectors) * kSector : 0);
+    switch_dcache_sync();
     stats.syncNs += nowNs() - began;
 }
 
@@ -2103,9 +2070,8 @@ int NativeSwitchBlock::cqCommand(uint32_t index, uint32_t argument, uint32_t fla
         return 1;
     w32(STATUS, 0xffffffff);
     if (data != kRegNone) {
-        for (uintptr_t at = reinterpret_cast<uintptr_t>(regBuffer), end = at + kSector; at < end; at += kAdmaLine)
-            __asm__ volatile("dc civac, %0" ::"r"(at) : "memory");
-        barrier();
+        switch_dcache_clean_invalidate_lines(regBuffer, kSector);
+        switch_dcache_sync();
         w8(HOST_CONTROL, r8(HOST_CONTROL) & ~DMA_SELECT);
         w32(DMA_LOW, static_cast<uint32_t>(regPA));
         w32(DMA_HIGH, static_cast<uint32_t>(regPA >> 32));
@@ -2120,7 +2086,7 @@ int NativeSwitchBlock::cqCommand(uint32_t index, uint32_t argument, uint32_t fla
         transfer = 0x01;
     }
     w16(TRANSFER, transfer);
-    barrier();
+    switch_dcache_sync();
     w16(COMMAND, static_cast<uint16_t>(index << 8 | flags | (data != kRegNone ? CMD_DATA : 0)));
     noteCommand(static_cast<uint8_t>(index));
     const uint32_t done = data != kRegNone || (flags & 3) == 3 ? INT_TRANSFER : INT_COMMAND;
@@ -2171,9 +2137,8 @@ int NativeSwitchBlock::cqCommand(uint32_t index, uint32_t argument, uint32_t fla
     *response = r32(RESPONSE);
     w32(STATUS, INT_COMMAND | INT_TRANSFER);
     if (data == kRegRead) {
-        for (uintptr_t at = reinterpret_cast<uintptr_t>(regBuffer), end = at + kSector; at < end; at += kAdmaLine)
-            __asm__ volatile("dc ivac, %0" ::"r"(at) : "memory");
-        barrier();
+        switch_dcache_invalidate_lines(regBuffer, kSector);
+        switch_dcache_sync();
     }
     return 0;
 }
@@ -2318,7 +2283,7 @@ void NativeSwitchBlock::resetCard()
     const bool uhs = lowVoltageBus && enablePllc4();
     if (lowVoltageBus && !uhs) {
         panic("SwitchSD: PLLC4 does not lock after the card's power cycle (PLLC4_BASE 0x%08x)",
-              rd(car, CAR_PLLC4_BASE));
+              switch_mmio_read32(car, CAR_PLLC4_BASE));
     }
     (void)reinitialize(PLLP_KHZ * 2 / (kPllpDivider48MHz + 2), 0xc0 | kLdo3V3, uhs, true);
     uint8_t again[kSector] = {};
@@ -2469,10 +2434,8 @@ void NativeSwitchBlock::beginTask(Batch &b, uint32_t argument)
     if (b.direct) {
         prepareDirect(false, false);
     } else {
-        for (uintptr_t at = reinterpret_cast<uintptr_t>(bounce), end = at + static_cast<uintptr_t>(b.sectors) * kSector;
-             at < end; at += kAdmaLine)
-            __asm__ volatile("dc civac, %0" ::"r"(at) : "memory");
-        barrier();
+        switch_dcache_clean_invalidate_lines(bounce, static_cast<uintptr_t>(b.sectors) * kSector);
+        switch_dcache_sync();
     }
     b.issueStep =
         issue(static_cast<uint32_t>(first->lba), b.sectors, false, b.direct ? table.count : 0, false, argument);
@@ -2520,10 +2483,8 @@ int NativeSwitchBlock::endTask(Batch &b, uint32_t *r1)
         stats.direct += b.count;
         stats.descriptors += table.count;
     } else {
-        for (uintptr_t at = reinterpret_cast<uintptr_t>(bounce), end = at + static_cast<uintptr_t>(b.sectors) * kSector;
-             at < end; at += kAdmaLine)
-            __asm__ volatile("dc ivac, %0" ::"r"(at) : "memory");
-        barrier();
+        switch_dcache_invalidate_lines(bounce, static_cast<uintptr_t>(b.sectors) * kSector);
+        switch_dcache_sync();
         if (!stageChain(b.first, 0, b.sectors * kSector, bounce, true))
             result = kIOReturnIOError;
         stats.bounced[b.why] += b.count;
@@ -3084,9 +3045,8 @@ int NativeSwitchBlock::cardCommand(uint32_t index, uint32_t arg, uint32_t flags,
     }
     w32(STATUS, 0xffffffff);
     if (data) {
-        for (uintptr_t at = reinterpret_cast<uintptr_t>(bounce), end = at + data; at < end; at += 64)
-            __asm__ volatile("dc civac, %0" ::"r"(at) : "memory");
-        barrier();
+        switch_dcache_clean_invalidate_lines(bounce, data);
+        switch_dcache_sync();
         w8(HOST_CONTROL, r8(HOST_CONTROL) & ~DMA_SELECT);  // SDMA (the data path may have left ADMA2 selected)
         w32(DMA_LOW, static_cast<uint32_t>(bouncePA));
         w32(DMA_HIGH, static_cast<uint32_t>(bouncePA >> 32));
@@ -3095,7 +3055,7 @@ int NativeSwitchBlock::cardCommand(uint32_t index, uint32_t arg, uint32_t flags,
     }
     w16(TRANSFER, data ? 0x11 : 0);  // DMA | read, one block; nothing for a command without data
     w32(ARGUMENT, arg);
-    barrier();
+    switch_dcache_sync();
     w16(COMMAND, static_cast<uint16_t>(index << 8 | flags | (data ? CMD_DATA : 0)));
     noteCommand(static_cast<uint8_t>(index));
     const uint32_t done = INT_COMMAND | (data ? INT_TRANSFER : 0);
@@ -3116,9 +3076,8 @@ int NativeSwitchBlock::cardCommand(uint32_t index, uint32_t arg, uint32_t flags,
     if ((flags & 3) == 3 && !waitIdle(true, 1000000000))
         return 4;  // R1b: card busy on DAT0
     if (data) {
-        for (uintptr_t at = reinterpret_cast<uintptr_t>(bounce), end = at + data; at < end; at += 64)
-            __asm__ volatile("dc ivac, %0" ::"r"(at) : "memory");
-        barrier();
+        switch_dcache_invalidate_lines(bounce, data);
+        switch_dcache_sync();
     }
     return 0;
 }
@@ -3332,10 +3291,10 @@ void NativeSwitchBlock::setTiming(int uhs, bool highSpeed, int source, uint32_t 
     }
     (void)r16(CLOCK);
     if (source >= 0) {
-        wr(car, CAR_CLK_ENB_L_CLR, CAR_SDMMC1);
-        wr(car, CAR_CLK_SOURCE_SDMMC1, static_cast<uint32_t>(source) << 29 | (carDivider & 0xff));
-        wr(car, CAR_CLK_ENB_L_SET, CAR_SDMMC1);
-        (void)rd(car, CAR_RST_DEVICES_L);
+        switch_mmio_write32(car, CAR_CLK_ENB_L_CLR, CAR_SDMMC1);
+        switch_mmio_write32(car, CAR_CLK_SOURCE_SDMMC1, static_cast<uint32_t>(source) << 29 | (carDivider & 0xff));
+        switch_mmio_write32(car, CAR_CLK_ENB_L_SET, CAR_SDMMC1);
+        (void)switch_mmio_read32(car, CAR_RST_DEVICES_L);
     }
     const uint16_t next = static_cast<uint16_t>((clock & ~0xffc4u) | (divider & 0xff) << 8 | (divider >> 8 & 3) << 6);
     w16(CLOCK, next);
@@ -3368,8 +3327,9 @@ bool NativeSwitchBlock::calibratePads()
         done = ((r32(AUTOCAL_STATUS) & 0x80000000u) == 0u);
     if (!done) {
         w32(AUTOCAL_CONFIG, r32(AUTOCAL_CONFIG) & ~(1u << 29));
-        wr(apb, APB_SDMMC1_PAD_CONFIG, (rd(apb, APB_SDMMC1_PAD_CONFIG) & 0xf8080fffu) | 0x808u << 12);
-        (void)rd(apb, APB_SDMMC1_PAD_CONFIG);
+        switch_mmio_write32(apb, APB_SDMMC1_PAD_CONFIG,
+                            (switch_mmio_read32(apb, APB_SDMMC1_PAD_CONFIG) & 0xf8080fffu) | 0x808u << 12);
+        (void)switch_mmio_read32(apb, APB_SDMMC1_PAD_CONFIG);
     }
     w32(PAD_CONTROL, r32(PAD_CONTROL) & ~0x80000000u);
     if (clock & 4)
@@ -3401,10 +3361,12 @@ bool NativeSwitchBlock::switchTo1V8(uint8_t ldo2)
               error, check);
     }
     IODelay(1000 + 150);  // regulator ramp (hekate set_voltage) + settle (enable_low_voltage)
-    wr(pmc, PMC_PWR_DET_VAL, rd(pmc, PMC_PWR_DET_VAL) & ~PMC_SDMMC1_3V3);
-    (void)rd(pmc, PMC_PWR_DET_VAL);
-    for (uint32_t pad = 0; pad < 6; ++pad)
-        wr(apb, PINMUX_SDMMC1 + pad * 4, rd(apb, PINMUX_SDMMC1 + pad * 4) | PINMUX_SCHMITT);
+    switch_mmio_write32(pmc, PMC_PWR_DET_VAL, switch_mmio_read32(pmc, PMC_PWR_DET_VAL) & ~PMC_SDMMC1_3V3);
+    (void)switch_mmio_read32(pmc, PMC_PWR_DET_VAL);
+    for (uint32_t pad = 0; pad < 6; ++pad) {
+        switch_mmio_write32(apb, PINMUX_SDMMC1 + pad * 4,
+                            switch_mmio_read32(apb, PINMUX_SDMMC1 + pad * 4) | PINMUX_SCHMITT);
+    }
     if (!calibratePads())
         IOLog("SwitchSD: SDMMC1 pad calibration timed out; fixed B01 drive codes used\n");
     w8(POWER, 0x0a);  // hekate _sdmmc_set_io_power(1.8 V): voltage select, then bus power on
@@ -3421,20 +3383,20 @@ bool NativeSwitchBlock::switchTo1V8(uint8_t ldo2)
 // running with other dividers belongs to someone else and is left alone (no SDR104 then).
 bool NativeSwitchBlock::enablePllc4()
 {
-    const uint32_t base = rd(car, CAR_PLLC4_BASE);
+    const uint32_t base = switch_mmio_read32(car, CAR_PLLC4_BASE);
     if (base & PLL_ENABLE)
         return (base & PLLC4_DIVIDERS) == PLLC4_CONFIG && ((base & PLL_LOCK) != 0u);
-    wr(car, CAR_PLLC4_MISC, PLLC4_LOCK_DETECT);
-    wr(car, CAR_PLLC4_BASE, rd(car, CAR_PLLC4_BASE) & ~PLLC4_IDDQ);
+    switch_mmio_write32(car, CAR_PLLC4_MISC, PLLC4_LOCK_DETECT);
+    switch_mmio_write32(car, CAR_PLLC4_BASE, switch_mmio_read32(car, CAR_PLLC4_BASE) & ~PLLC4_IDDQ);
     IODelay(10);
-    wr(car, CAR_PLLC4_BASE, PLLC4_CONFIG);
-    wr(car, CAR_PLLC4_BASE, PLLC4_CONFIG | PLL_ENABLE);
-    for (unsigned us = 0; us < 1000 && !(rd(car, CAR_PLLC4_BASE) & PLL_LOCK); ++us)
-        IODelay(1);
+    switch_mmio_write32(car, CAR_PLLC4_BASE, PLLC4_CONFIG);
+    switch_mmio_write32(car, CAR_PLLC4_BASE, PLLC4_CONFIG | PLL_ENABLE);
+    (void)switch_mmio_wait32(car, CAR_PLLC4_BASE, PLL_LOCK, PLL_LOCK, 1000);
     IODelay(2);
-    if (rd(car, CAR_PLLC4_BASE) & PLL_LOCK)
+    if (switch_mmio_read32(car, CAR_PLLC4_BASE) & PLL_LOCK)
         return true;
-    wr(car, CAR_PLLC4_BASE, (rd(car, CAR_PLLC4_BASE) & ~PLL_ENABLE) | PLLC4_IDDQ);  // back as it was
+    switch_mmio_write32(car, CAR_PLLC4_BASE,
+                        (switch_mmio_read32(car, CAR_PLLC4_BASE) & ~PLL_ENABLE) | PLLC4_IDDQ);  // back as it was
     return false;
 }
 
@@ -3542,7 +3504,7 @@ bool NativeSwitchBlock::raiseBusSpeed()
         IOLog("SwitchSD: SDR104 skipped (CAR/APB/PMC not mapped); inherited bus kept\n");
         return false;
     }
-    const uint32_t source = rd(car, CAR_CLK_SOURCE_SDMMC1);
+    const uint32_t source = switch_mmio_read32(car, CAR_CLK_SOURCE_SDMMC1);
     const uint32_t clock = r16(CLOCK);
     const uint32_t divider = (clock >> 8 & 0xff) | (clock >> 6 & 3) << 8;
     const uint32_t baseKHz = source >> 29 == SOURCE_PLLP ? PLLP_KHZ * 2 / ((source & 0xff) + 2) : 0;
@@ -3554,7 +3516,7 @@ bool NativeSwitchBlock::raiseBusSpeed()
     uint8_t ldo2 = 0;
     if (PE_parse_boot_argn("switch-no-sd-uhs", &off, sizeof(off)) && off) {
         skip = "boot-arg switch-no-sd-uhs";
-    } else if (((rd(apb, APB_GP_HIDREV) >> 4) & 0xf) < 2) {
+    } else if (((switch_mmio_read32(apb, APB_GP_HIDREV) >> 4) & 0xf) < 2) {
         skip = "not T210B01 (the pad/tap/trim values are B01's)";
     } else if (!(r32(CAPABILITIES_HI) & 2)) {
         skip = "controller reports no SDR104";
@@ -3571,7 +3533,7 @@ bool NativeSwitchBlock::raiseBusSpeed()
     }
     if (skip) {
         IOLog("SwitchSD: SDR104 skipped (%s; LDO2_CFG 0x%02x PLLC4 0x%08x); bus stays at %u kHz\n", skip, ldo2,
-              rd(car, CAR_PLLC4_BASE), busKHz);
+              switch_mmio_read32(car, CAR_PLLC4_BASE), busKHz);
         return false;
     }
     return reinitialize(baseKHz, ldo2, true, false);
@@ -3600,7 +3562,7 @@ bool NativeSwitchBlock::reinitialize(uint32_t baseKHz, uint8_t ldo2, bool uhs, b
     // SDMMC1 CLK pad's deep loopback that the read sampling path relies on.
     w32(IO_SPARE, r32(IO_SPARE) | 1u << 19);
     w32(VENDOR_IO_TRIM, r32(VENDOR_IO_TRIM) & ~4u);
-    wr(apb, APB_SDMMC1_CLK_LOOPBACK, 1);
+    switch_mmio_write32(apb, APB_SDMMC1_CLK_LOOPBACK, 1);
     // Identification: 1-bit, legacy timing, <= 400 kHz, 1 ms + 74 clocks before the first command.
     w8(HOST_CONTROL, r8(HOST_CONTROL) & ~0x26u);
     setTiming(-1, false, -1, 0, (baseKHz + 799) / 800);
@@ -3751,29 +3713,29 @@ void NativeSwitchBlock::powerOffCard()
     if (tegra_gpio_output(kCardPowerGpio, 0))
         panic("SwitchSD: cannot switch the card supply (GPIO PE4) off");
     IOSleep(10);
-    wr(pmc, PMC_NO_IOPOWER, rd(pmc, PMC_NO_IOPOWER) | PMC_SDMMC1_NO_POWER);
-    wr(pmc, PMC_PWR_DET_VAL, rd(pmc, PMC_PWR_DET_VAL) | PMC_SDMMC1_3V3);
-    (void)rd(pmc, PMC_PWR_DET_VAL);
+    switch_mmio_write32(pmc, PMC_NO_IOPOWER, switch_mmio_read32(pmc, PMC_NO_IOPOWER) | PMC_SDMMC1_NO_POWER);
+    switch_mmio_write32(pmc, PMC_PWR_DET_VAL, switch_mmio_read32(pmc, PMC_PWR_DET_VAL) | PMC_SDMMC1_3V3);
+    (void)switch_mmio_read32(pmc, PMC_PWR_DET_VAL);
 }
 
 // After SC7: SDMMC1 clocked from PLLP at U-Boot's 48 MHz and out of reset, pads and card powered at 3.3 V (hekate
 // _sdmmc_config_sdmmc1), the host reset and set up as hekate sdmmc_init and setup() leave it, identification clock on.
 void NativeSwitchBlock::powerOnController()
 {
-    wr(car, CAR_RST_DEV_L_SET, CAR_SDMMC1);
-    wr(car, CAR_CLK_ENB_L_CLR, CAR_SDMMC1);
-    wr(car, CAR_CLK_SOURCE_SDMMC1, SOURCE_PLLP << 29 | kPllpDivider48MHz);
-    wr(car, CAR_CLK_ENB_L_SET, CAR_SDMMC1);
-    (void)rd(car, CAR_RST_DEVICES_L);
+    switch_mmio_write32(car, CAR_RST_DEV_L_SET, CAR_SDMMC1);
+    switch_mmio_write32(car, CAR_CLK_ENB_L_CLR, CAR_SDMMC1);
+    switch_mmio_write32(car, CAR_CLK_SOURCE_SDMMC1, SOURCE_PLLP << 29 | kPllpDivider48MHz);
+    switch_mmio_write32(car, CAR_CLK_ENB_L_SET, CAR_SDMMC1);
+    (void)switch_mmio_read32(car, CAR_RST_DEVICES_L);
     IODelay(2);
-    wr(car, CAR_RST_DEV_L_CLR, CAR_SDMMC1);
-    (void)rd(car, CAR_RST_DEVICES_L);
-    wr(pmc, PMC_NO_IOPOWER, rd(pmc, PMC_NO_IOPOWER) & ~PMC_SDMMC1_NO_POWER);
-    (void)rd(pmc, PMC_NO_IOPOWER);
+    switch_mmio_write32(car, CAR_RST_DEV_L_CLR, CAR_SDMMC1);
+    (void)switch_mmio_read32(car, CAR_RST_DEVICES_L);
+    switch_mmio_write32(pmc, PMC_NO_IOPOWER, switch_mmio_read32(pmc, PMC_NO_IOPOWER) & ~PMC_SDMMC1_NO_POWER);
+    (void)switch_mmio_read32(pmc, PMC_NO_IOPOWER);
     if (tegra_gpio_output(kCardPowerGpio, 1))
         panic("SwitchSD: cannot switch the card supply (GPIO PE4) on");
     IOSleep(10);
-    wr(pmc, PMC_PWR_DET_VAL, rd(pmc, PMC_PWR_DET_VAL) | PMC_SDMMC1_3V3);
+    switch_mmio_write32(pmc, PMC_PWR_DET_VAL, switch_mmio_read32(pmc, PMC_PWR_DET_VAL) | PMC_SDMMC1_3V3);
     const uint8_t on = static_cast<uint8_t>(0xc0 | kLdo3V3);  // power mode normal, 3.3 V
     const int error = tegra_i2c_write(kPmicBus, kPmicAddress, kPmicLdo2, &on, 1);
     if (error)
@@ -3801,7 +3763,7 @@ void NativeSwitchBlock::powerOnController()
     w32(SIGNAL_ENABLE, 0);
     w32(STATUS_ENABLE, 0x03ff800bu);
     w32(STATUS, 0xffffffff);
-    barrier();
+    switch_dcache_sync();
 }
 
 // System sleep (SwitchSuspend's sleep and wake actions, thread context, I2C up). Requests keep queueing while
@@ -3843,7 +3805,7 @@ void NativeSwitchBlock::dmaResume()
     if (!adma)
         return;
     const uint16_t control2 = r16(HOST_CONTROL2);
-    const bool translated = (mc[0xa94 / 4] & 0x80000000u) != 0u;
+    const bool translated = (switch_mmio_read32(mc, 0xa94) & 0x80000000u) != 0u;
     if ((control2 & CONTROL2_V4_64BIT) == CONTROL2_V4_64BIT && !translated)
         return;
     adma = false;
@@ -3859,7 +3821,7 @@ void NativeSwitchBlock::resume()
         irqSource->enable();
     const bool uhs = lowVoltageBus && enablePllc4();
     if (lowVoltageBus && !uhs)
-        panic("SwitchSD: PLLC4 does not lock after sleep (PLLC4_BASE 0x%08x)", rd(car, CAR_PLLC4_BASE));
+        panic("SwitchSD: PLLC4 does not lock after sleep (PLLC4_BASE 0x%08x)", switch_mmio_read32(car, CAR_PLLC4_BASE));
     (void)reinitialize(PLLP_KHZ * 2 / (kPllpDivider48MHz + 2), 0xc0 | kLdo3V3, uhs, true);
     uint8_t again[kSector] = {};
     const int step = transfer(1, 1, false, again);
@@ -3966,16 +3928,13 @@ const char *NativeSwitchBlock::checkAdma(const uint8_t *reference, uint32_t *des
         // As the data path's ADMA2 commands, without run()'s retry and re-tune: a failure here only keeps the bounce
         // buffer.
         *descriptors = table.count;
-        for (uintptr_t at = reinterpret_cast<uintptr_t>(table.entries),
-                       end = at + table.count * sizeof(SwitchAdmaDescriptor);
-             at < end; at += kAdmaLine)
-            __asm__ volatile("dc cvac, %0" ::"r"(at) : "memory");
-        syncLines<1>(table);
-        barrier();
+        switch_dcache_clean_lines(table.entries, table.count * sizeof(SwitchAdmaDescriptor));
+        syncLines(SWITCH_DCACHE_CLEAN_INVALIDATE, table);
+        switch_dcache_sync();
         uint32_t status = 0;
         const int step = command(static_cast<uint32_t>(firstSector), kBounceSectors, false, table.count, &status);
-        syncLines<2>(table);
-        barrier();
+        syncLines(SWITCH_DCACHE_INVALIDATE, table);
+        switch_dcache_sync();
         if (step) {
             snprintf(admaWhy, sizeof(admaWhy), "the read failed: step %d, STATUS 0x%08x, ADMA state 0x%02x at 0x%llx",
                      step, status, admaErrorState, admaErrorAddress);
@@ -4297,12 +4256,12 @@ const char *NativeSwitchBlock::checkCq(uint64_t *queuedNs, uint64_t *serialNs, u
 
 bool NativeSwitchBlock::setup()
 {
-    regs = reinterpret_cast<volatile uint8_t *>(ml_io_map(kControllerPA, 0x1000));
-    mc = reinterpret_cast<volatile uint32_t *>(ml_io_map(kMemoryControllerPA, 0x1000));
+    regs = switch_mmio_map(kControllerPA, 0x1000);
+    mc = switch_mmio_map(kMemoryControllerPA, 0x1000);
     // CAR, APB_MISC/pinmux and PMC serve the SDR104 bring-up only; without them it is skipped.
-    car = reinterpret_cast<volatile uint8_t *>(ml_io_map(kCarPA, 0x1000));
-    apb = reinterpret_cast<volatile uint8_t *>(ml_io_map(kApbMiscPA, 0x4000));
-    pmc = reinterpret_cast<volatile uint8_t *>(ml_io_map(kPmcPagePA, 0x1000));
+    car = switch_mmio_map(kCarPA, 0x1000);
+    apb = switch_mmio_map(kApbMiscPA, 0x4000);
+    pmc = switch_mmio_map(kPmcPagePA, 0x1000);
     queueLock = IOLockAlloc();
     if (!regs || !mc || !queueLock) {
         IOLog("SwitchSD: map/alloc failed\n");
@@ -4314,7 +4273,7 @@ bool NativeSwitchBlock::setup()
         return false;
     }
     // SDMMC1 group translation must be off for physical DMA (MC_SMMU_SDMMC1A_ASID).
-    if (mc[0xa94 / 4] & 0x80000000u) {
+    if (switch_mmio_read32(mc, 0xa94) & 0x80000000u) {
         IOLog("SwitchSD: SMMU translation enabled for SDMMC1\n");
         return false;
     }
@@ -4342,7 +4301,7 @@ bool NativeSwitchBlock::setup()
     w32(SIGNAL_ENABLE, 0);
     w32(STATUS_ENABLE, 0x03ff800bu);
     w32(STATUS, 0xffffffff);
-    barrier();
+    switch_dcache_sync();
     irqMode = startInterrupt();
     // What a scatter-gather (ADMA2) path straight into the requests' pages would rest on: CAPABILITIES bit 19 (ADMA2),
     // 28 (64-bit addressing, v3) and 27 (64-bit addressing, v4). The log only, once.
@@ -4355,7 +4314,7 @@ bool NativeSwitchBlock::setup()
     // GPT: header at LBA 1, then entries. Exactly one APFS partition. The header is read in the
     // inherited bus mode first; after a re-initialization it must read back byte for byte, which
     // checks the new mode end to end (sampling, tuning) beyond the bus CRC.
-    uint8_t header[kSector];
+    uint8_t header[kSector] = {};
     if (transfer(1, 1, false, header)) {
         IOLog("SwitchSD: GPT header read failed\n");
         return false;
@@ -4486,11 +4445,8 @@ bool NativeSwitchBlock::setup()
                 } else {
                     // No line of the sink is dirty in the cache from here on: the engine's writes there are never
                     // overwritten by an eviction, and nobody reads them.
-                    for (uintptr_t at = reinterpret_cast<uintptr_t>(sinkBytes),
-                                   end = at + static_cast<uintptr_t>(kGapSectors) * kSector;
-                         at < end; at += kAdmaLine)
-                        __asm__ volatile("dc civac, %0" ::"r"(at) : "memory");
-                    barrier();
+                    switch_dcache_clean_invalidate_lines(sinkBytes, static_cast<uintptr_t>(kGapSectors) * kSector);
+                    switch_dcache_sync();
                 }
             }
             gapsOn = sinkPA != 0;
@@ -4547,17 +4503,15 @@ bool NativeSwitchBlock::setup()
             IOLog("SwitchSD: ADMA2 off (%s); every request through the bounce buffer\n", why);
         }
         if (!step && !adma) {
-            for (uintptr_t at = reinterpret_cast<uintptr_t>(bounce), end = at + kBounceBytes; at < end; at += 64)
-                __asm__ volatile("dc civac, %0" ::"r"(at) : "memory");
-            barrier();
+            switch_dcache_clean_invalidate_lines(bounce, kBounceBytes);
+            switch_dcache_sync();
             uint32_t status = 0;
             step = command(static_cast<uint32_t>(firstSector), kBounceSectors, false, 0, &status);
             if (step) {
                 recover(true);
             } else {
-                for (uintptr_t at = reinterpret_cast<uintptr_t>(bounce), end = at + kBounceBytes; at < end; at += 64)
-                    __asm__ volatile("dc ivac, %0" ::"r"(at) : "memory");
-                barrier();
+                switch_dcache_invalidate_lines(bounce, kBounceBytes);
+                switch_dcache_sync();
             }
             const bool same = (step == 0) && (memcmp(reference, bounce, kBounceBytes) == 0);
             if (same) {
