@@ -3259,8 +3259,8 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     countRules(*pl);
 #endif
-    // framebuffer fetch reads a color attachment through the texture unit: a barrier where a draw since the last one wrote a
-    // color this draw fetches (m2v's barrier, 0106, follows any color write: the ROP writes only the colors SET_CT_WRITE opens).
+    // framebuffer fetch reads a color attachment through the texture unit: a barrier where a draw since the last one wrote
+    // any color, as m2v's barrier (0106) follows any color write, whichever colors this draw fetches.
     // The barrier holds this draw's pixel shading until the earlier pixels have left the ROP; vertex work and rasterization
     // go on (NVK's for a color-output to fragment-read dependency, as NVIDIA's drivers order one)
     // A storage access in the interlock is ordered after the earlier ones by the ticket, not after the ROP's writes; the
@@ -3278,7 +3278,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     }
     const bool storage =
         (pl->storageBits & writtenBits_) | (ropAccessed & storageWrittenBits_) | (texFetched & storageWrittenBits_);
-    if (storage || (texFetched & writtenBits_)) {
+    if (storage || (texFetched && writtenBits_)) {
         if (!storage && !written_.meets(g)) {
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
             dev_->stats.fetchBarriersElided++;
