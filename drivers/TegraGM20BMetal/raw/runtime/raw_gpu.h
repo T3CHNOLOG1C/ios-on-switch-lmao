@@ -792,8 +792,8 @@ public:
     }
 
     struct Stats {
-        std::atomic<uint64_t> commits{0}, pushBytes{0}, uploadBytes{0}, ringWaits{0}, imports{0}, importBytes{0},
-            poolBytes{0}, poolChunks{0}, cleanBytes{0}, poolStalls{0};
+        std::atomic<uint64_t> commits{0}, pushBytes{0}, uploadBytes{0}, ringWaits{0}, ringsOutgrown{0}, imports{0},
+            importBytes{0}, poolBytes{0}, poolChunks{0}, cleanBytes{0}, poolStalls{0};
         // surface imports made (a kernel import each) and found live, since open
         std::atomic<uint64_t> importsMade{0}, importHits{0};
         // diagnostics: color targets the raw path rendered whose address or pitch is not a multiple of 128 (NVK renders
@@ -863,6 +863,8 @@ private:
         };
 
         std::deque<Span> inflight;
+        std::vector<Bo>
+            outgrown;  // what the open command buffer grew out of (Device::alloc): freed once its work completes
     };
 
     struct Chunk {
@@ -902,6 +904,8 @@ private:
     Ring push_, upload_;
     // rings replaced by larger ones, freed once the GPU passed the seqno
     std::vector<std::pair<Bo, uint32_t>> grownOut_;
+    bool overflowing_ = false;       // the open command buffer outgrew a ring with no memory for a larger one
+    std::vector<uint8_t> overflow_;  // where it is written then (never submitted)
     uint32_t channel_ = 0, lastSeqno_ = 0;
     // the channel's fence word; before there is a channel a zero, which every seqno submitted so far (none) has passed
     const volatile uint32_t *fence_ = &kNoFence;
@@ -1047,6 +1051,8 @@ private:
     mutable std::atomic<uint32_t> killedError_{0};
     uint8_t *alloc(Ring &r, uint32_t bytes, uint32_t align, uint64_t &va);
     void retire(Ring &r, uint32_t seqno);
+    bool ownWords(const Ring &r, uint64_t at, uint64_t bytes) const;
+    bool outgrow(Ring &r, uint32_t bytes, uint64_t &at);
     uint32_t allocTic();
     void freeTic(uint32_t tic);  // lock_ held
     void writeTic(const Texture &t);

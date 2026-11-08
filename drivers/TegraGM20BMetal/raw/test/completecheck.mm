@@ -57,7 +57,12 @@ int main(int argc, char **argv)
                                                               range:NSMakeRange(0, l.length)
                                                        withTemplate:@""];
             probe::State s;
-            if (!probe::parseState(qc, plain.UTF8String, s) || !seen.insert(s.key).second)
+            if (!probe::parseState(qc, plain.UTF8String, s))
+                continue;
+            // the key as the facade makes it (raw_metal_pipeline_key) and probelog.py reads it: no trailing space
+            while (!s.key.empty() && s.key.back() == ' ')
+                s.key.pop_back();
+            if (!seen.insert(s.key).second)
                 continue;
             id<MTLRenderPipelineState> twin = [dev newRenderPipelineStateWithDescriptor:s.d error:&error];
             if (!twin)
