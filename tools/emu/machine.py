@@ -65,9 +65,12 @@ def command(run: Path, inputs: Inputs) -> list[str]:
     ]  # fmt: skip
     args += stage(run, inputs.package, inputs.regwrite)
     if inputs.icount:
-        # Guest time follows executed instructions, so a loaded host cannot expire a driver's timeout before the
-        # device it waits for has run (with MTTCG at load ~50, drivers panicked on interrupts that had not been lost).
-        args += ['-icount', 'shift=auto']
+        # Guest time follows executed instructions, one nanosecond each, so neither a loaded host nor TCG's own
+        # slowness can expire a driver's timeout before the work it waits for has run. With MTTCG at load ~50, and
+        # with shift=auto (guest time kept to the wall clock, so each instruction took 10-40 ns), drivers panicked on
+        # interrupts that had not been lost: kernel work at priority 92-95 filled all four cores past TegraI2C's
+        # deadline while its work loop (81) waited. shift=0 makes guest CPU time about the A57's.
+        args += ['-icount', 'shift=0']
     if inputs.sd:
         args += ['-drive', f'if=sd,index=0,format=vmdk,file={inputs.sd},snapshot=on']
     return args
