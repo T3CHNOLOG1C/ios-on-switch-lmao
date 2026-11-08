@@ -70,8 +70,8 @@ int main(int argc, char **argv)
         std::vector<id<MTLRenderPipelineState>> states;
         for (const frame::State &st : frame::states(argv[5]))
             if (states.size() < 32)
-                if (id<MTLRenderPipelineState> ps = [dev newRenderPipelineStateWithDescriptor:state_desc::descriptor(qc, st.line)
-                                                                                        error:&error])
+                if (id<MTLRenderPipelineState> ps =
+                        [dev newRenderPipelineStateWithDescriptor:state_desc::descriptor(qc, st.line) error:&error])
                     states.push_back(ps);
         if (states.empty()) {
             fprintf(stderr, "NO STATES: %s\n", error.localizedDescription.UTF8String ?: "-");
