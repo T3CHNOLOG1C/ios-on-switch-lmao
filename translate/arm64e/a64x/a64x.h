@@ -82,13 +82,33 @@ uint32_t a64x_dead_regs(const uint32_t *next, int n);
 uint32_t a64x_dead_regs_window(const uint32_t *window, int n, int site);
 uint32_t a64x_dead_regs_window_lr(const uint32_t *window, int n, int site);
 uint32_t a64x_dead_regs_budget(const uint32_t *window, int n, int site, int budget, int depth);
+
+/*
+ * Scratch of the per-register walks below over windows of up to `words` words: a visited bit per word and the
+ * branch targets still to walk. The caller allocates it once (per image scan, page-in or host run) and reuses it for
+ * every site: it does not belong on a 16 KB kernel stack that exec or a page fault has already half used. A window
+ * longer than `words` finds nothing dead.
+ */
+#define A64X_WALK_STACK        512
+#define A64X_WALK_BYTES(words) (A64X_WALK_STACK * sizeof(int) + ((words) + 7u) / 8u)
+
+struct a64x_walk {
+    int *stack;       /* A64X_WALK_STACK entries */
+    uint8_t *visited; /* (words + 7) / 8 bytes */
+    uint32_t words;
+};
+/* the walk over buf: A64X_WALK_BYTES(words) bytes, aligned for int */
+struct a64x_walk a64x_walk_in(void *buf, uint32_t words);
+
 /* per-register reachability (handles loops); candidates: registers to test */
-uint32_t a64x_dead_regs_flow(const uint32_t *window, int n, int site, uint32_t candidates, int budget);
+uint32_t a64x_dead_regs_flow(const uint32_t *window, int n, int site, uint32_t candidates, int budget,
+                             const struct a64x_walk *walk);
 /* same over a whole function (fn[0] = its first word): branches out of it are tail calls */
-uint32_t a64x_dead_regs_flow_fn(const uint32_t *fn, int n, int site, uint32_t candidates, int budget);
+uint32_t a64x_dead_regs_flow_fn(const uint32_t *fn, int n, int site, uint32_t candidates, int budget,
+                                const struct a64x_walk *walk);
 /* SIMD&FP registers dead after the site (a64x_vlive.h); whole_function: branches out of fn are tail calls */
-uint32_t a64x_dead_vregs_flow(const uint32_t *fn, int n, int site, uint32_t candidates, int budget,
-                              bool whole_function);
+uint32_t a64x_dead_vregs_flow(const uint32_t *fn, int n, int site, uint32_t candidates, int budget, bool whole_function,
+                              const struct a64x_walk *walk);
 /* V registers one instruction may read / writes in full (conservative; false = not decoded, reads all) */
 bool a64x_vregs_public(uint32_t w, uint32_t *vr, uint32_t *vw);
 
@@ -140,10 +160,11 @@ static inline bool a64x_class_is_pac(enum a64x_class c)
 }
 
 struct a64x_stub_region {
-    uint64_t va;         /* where the region is mapped (stub branches are PC-relative) */
-    uint32_t *words;     /* kernel/host view of it; NULL = only compute the layout */
-    uint32_t cap_words;  /* stub words may be placed at indices < cap_words */
-    uint32_t first_word; /* words[0] holds stub word index first_word (a window onto the region) */
+    uint64_t va;                  /* where the region is mapped (stub branches are PC-relative) */
+    uint32_t *words;              /* kernel/host view of it; NULL = only compute the layout */
+    uint32_t cap_words;           /* stub words may be placed at indices < cap_words */
+    uint32_t first_word;          /* words[0] holds stub word index first_word (a window onto the region) */
+    const struct a64x_walk *walk; /* for the FP stubs' liveness: at least the page's word count */
 };
 
 struct a64x_stats {

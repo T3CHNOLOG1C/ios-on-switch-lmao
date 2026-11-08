@@ -381,6 +381,12 @@ int a64x_translate_image(const struct a64x_macho *m, uint32_t map_page, uint32_t
     /* xnu/a64x_xnu.c a64x_scan(): one pass lays out the stubs and gives each page its output */
     struct img_ctx c = {m, x->data};
     struct a64x_code_map cm = {&c, img_is_code, x->map_flags, NULL};
+    void *walk_buf = malloc(A64X_WALK_BYTES(A64X_XLATE_PAGE / 4));
+    if (!walk_buf) {
+        a64x_image_xlate_free(x);
+        return fail(err, errlen, "out of memory");
+    }
+    struct a64x_walk walk = a64x_walk_in(walk_buf, A64X_XLATE_PAGE / 4);
     uint32_t page[A64X_XLATE_PAGE / 4], dst[A64X_XLATE_PAGE / 4], cursor = 0, cap = 0;
     for (uint32_t pg = 0; pg < x->npages; pg++) {
         uint64_t off = m->exec_fileoff + (uint64_t)pg * A64X_XLATE_PAGE;
@@ -389,13 +395,14 @@ int a64x_translate_image(const struct a64x_macho *m, uint32_t map_page, uint32_t
             uint32_t ncap = cap ? cap * 2 : 4 * (A64X_XLATE_PAGE / 4) * A64X_STUB_MAX;
             uint32_t *n = realloc(x->stubs, (size_t)ncap * sizeof(uint32_t));
             if (!n) {
+                free(walk_buf);
                 a64x_image_xlate_free(x);
                 return fail(err, errlen, "out of memory");
             }
             x->stubs = n;
             cap = ncap;
         }
-        struct a64x_stub_region sr = {m->exec_fileoff + (uint64_t)x->stub_delta, x->stubs, cap, 0};
+        struct a64x_stub_region sr = {m->exec_fileoff + (uint64_t)x->stub_delta, x->stubs, cap, 0, &walk};
         x->cursor[pg] = cursor;
         cursor = a64x_translate_page(page, dst, A64X_XLATE_PAGE / 4, off, &cm, &sr, cursor, &x->stats);
         uint64_t in_file = m->exec_filesize - (uint64_t)pg * A64X_XLATE_PAGE;
@@ -405,6 +412,7 @@ int a64x_translate_image(const struct a64x_macho *m, uint32_t map_page, uint32_t
         if (out)
             memcpy(out + off, dst, keep);
     }
+    free(walk_buf);
     x->cursor[x->npages] = cursor;
     x->nstubs = cursor;
     if (x->kind == A64X_KIND_ARM64 && x->changed == 0) {

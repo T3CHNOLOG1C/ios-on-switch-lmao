@@ -75,6 +75,8 @@ int a64x_cmd_kext(int argc, char **argv)
         return 1;
     }
     uint32_t cap = 1u << 22, *stubs = calloc(cap, 4), cursor = 0;
+    void *walk_buf = malloc(A64X_WALK_BYTES(1024));
+    struct a64x_walk walk = a64x_walk_in(walk_buf, 1024);
     char line[512];
     struct job j;
     memset(&j, 0, sizeof(j));
@@ -140,7 +142,7 @@ int a64x_cmd_kext(int argc, char **argv)
                 continue;
             size_t take = (va - base) + 4096 <= n ? 4096 : n - (va - base);
             memcpy(in, orig + (va - base), take);
-            struct a64x_stub_region sr = {stubs_va, stubs, cap, 0};
+            struct a64x_stub_region sr = {stubs_va, stubs, cap, 0, &walk};
             cursor = a64x_translate_page(in, out, 1024, va, &cm, &sr, cursor, &st);
             for (uint32_t w = 0; w < take / 4; w++) {
                 /* only this kext's instruction sections (its data islands come back unchanged) */
@@ -179,6 +181,7 @@ int a64x_cmd_kext(int argc, char **argv)
         free(j.f);
         j.f = NULL;
     }
+    free(walk_buf);
     FILE *o = fopen(argv[5], "wb");
     fwrite(blob, 1, n, o);
     fclose(o);
