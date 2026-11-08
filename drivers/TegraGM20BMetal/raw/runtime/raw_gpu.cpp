@@ -2475,6 +2475,16 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
         e.areaW_ = std::min(e.areaW_, pass.width);
     if (pass.height)
         e.areaH_ = std::min(e.areaH_, pass.height);
+    // a Clear load is a color write the prologue's CLEAR_SURFACE makes ahead of the draws: a draw that fetches the color
+    // takes the fetch barrier after it, as NVK's first fetch after its clears does, or it reads what was there before
+    for (uint32_t j = 0; j < pass.count && j < 8; j++)
+        if (e.pass_.color[j].texture && e.pass_.color[j].load == ColorAttachment::Clear)
+            e.writtenBits_ |= uint8_t(1u << j);
+    if (e.writtenBits_) {
+        DrawGeometry cleared;
+        cleared.limit = {0, 0, e.areaW_, e.areaH_};
+        e.written_.add(cleared);
+    }
     // the body goes straight into the push ring; the pass prologue (targets, clears) is written at end() and runs first
     e.reserve();
     e.setViewport(0, 0, e.areaW_, e.areaH_, 0, 1);
