@@ -2796,7 +2796,8 @@ static id<MTLSamplerState> clampedSampler(id<MTLSamplerState> s, float lodMin, f
 {
     (void)resources;
     (void)count;
-    [self memoryBarrierWithScope:MTLBarrierScopeBuffers | MTLBarrierScopeTextures | MTLBarrierScopeRenderTargets
+    // iOS has no MTLBarrierScopeRenderTargets; its texture scope covers render attachments
+    [self memoryBarrierWithScope:MTLBarrierScopeBuffers | MTLBarrierScopeTextures
                      afterStages:after
                     beforeStages:before];
 }
