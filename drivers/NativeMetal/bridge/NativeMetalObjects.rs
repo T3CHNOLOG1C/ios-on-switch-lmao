@@ -1877,7 +1877,9 @@ fn stage_linked(
     Ok(linked)
 }
 
-pub(crate) fn render_descriptor(descriptor: *const NmbRenderPipelineDescriptor) -> Result<RenderPipelineDescriptor, String> {
+pub(crate) fn render_descriptor(
+    descriptor: *const NmbRenderPipelineDescriptor,
+) -> Result<RenderPipelineDescriptor, String> {
     let d = get(descriptor)?;
     let vertex_linked = stage_linked(
         d.vertex_linked,

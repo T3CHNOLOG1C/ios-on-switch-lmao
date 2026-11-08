@@ -77,7 +77,8 @@ typedef struct NmbDirectState {
 // `each` (valid during the call). `barrier`: compiled as on a device without the pixel interlock; `textureFormat`: the
 // MTLPixelFormat of the probe's textures (0: BGRA8Unorm). False with nmb_last_error: refused, or `each`'s false
 bool nmb_render_pipeline_direct(NmbDevice *device, const NmbRenderPipelineDescriptor *descriptor, bool barrier,
-                                uint64_t textureFormat, bool (*each)(const NmbDirectState *state, void *ctx), void *ctx);
+                                uint64_t textureFormat, bool (*each)(const NmbDirectState *state, void *ctx),
+                                void *ctx);
 
 #ifdef __cplusplus
 }

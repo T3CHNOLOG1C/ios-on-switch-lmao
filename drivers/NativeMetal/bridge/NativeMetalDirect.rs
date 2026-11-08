@@ -8,8 +8,8 @@ use crate::objects::{NmbDevice, NmbRenderPipelineDescriptor, e, get, guard, raw,
 use ash::vk as avk;
 use metal2vulkan::Budget;
 use metal2vulkan::bind::{
-    BindState, BindingPlan, BoundBuffer, BoundSampler, BoundTexture, DrawCall, DrawCommands, ImageSource, NeutralResource,
-    SamplerDescriptor, SamplerSource, StageTable, TextureFacts, WriteSource,
+    BindState, BindingPlan, BoundBuffer, BoundSampler, BoundTexture, DrawCall, DrawCommands, ImageSource,
+    NeutralResource, SamplerDescriptor, SamplerSource, StageTable, TextureFacts, WriteSource,
 };
 use metal2vulkan::cache::VariantKey;
 use metal2vulkan::device::{DeviceDescription, VkExtension, VkFeature};
