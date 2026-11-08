@@ -104,6 +104,12 @@ static size_t constantBytes(uint64_t type)
     return [(id<MTLFunction>)_twin newArgumentEncoderWithBufferIndex:index];
 }
 
+- (id<MTLArgumentEncoder>)newArgumentEncoderWithBufferIndex:(NSUInteger)index
+                                                 reflection:(MTLAutoreleasedArgument *)reflection
+{
+    return [(id<MTLFunction>)_twin newArgumentEncoderWithBufferIndex:index reflection:reflection];
+}
+
 @end
 
 static std::string constantsText(MTLFunctionConstantValues *values)

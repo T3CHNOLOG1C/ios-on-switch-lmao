@@ -59,6 +59,19 @@
     return [super conformsToProtocol:protocol] || [_twin conformsToProtocol:protocol];
 }
 
+// The m2v object it carries (made with it, never for a selector) answers what this class does not: to its callers it is that
+// object (a buffer the raw pool had no room for, a sampler or tile state the raw path cannot draw with)
+- (id)forwardingTargetForSelector:(SEL)selector
+{
+    (void)selector;
+    return _twin;
+}
+
+- (BOOL)respondsToSelector:(SEL)selector
+{
+    return [super respondsToSelector:selector] || [_twin respondsToSelector:selector];
+}
+
 @end
 
 @implementation RMDepthStencil

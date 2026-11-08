@@ -3,15 +3,16 @@
 // "sent") on the object this process's raw device hands out:
 //   raw     a method of the facade's class (the device: of the raw device class itself, not one it inherits);
 //   zero    the facade answers it zero (answerZero), as m2v's object would: neither class has a method for it;
-//   m2v     m2v answers it: the facade's twin or the m2v object it carries (forwarded to it, or recorded for m2v's replay),
-//           or, on the device, the m2v device class the raw device class inherits;
+//   m2v     m2v's class has a method the facade's lacks: an encoder or command buffer records it for m2v's replay, any other
+//           facade object answers it zero with a fault (answerMissing), and the raw device class inherits the m2v device's;
 //   m2vobj  the device hands out m2v's own object for the protocol (argument encoders, events, fences, binary archives);
 //   base    the device only: _MTLDevice's own method on the iPad (the kind's table, "base"), which the host does not have
 //           (NMB_DEVICE_BASE_NSOBJECT);
 //   none    nothing answers it (no object of the protocol here, or a device selector no class has).
 // Every line that is not raw or zero is a gap. Gaps print per kind and object; the run fails on a gap the baseline lacks and on a
-// baseline line that is no longer one. Then every zero-argument selector the facade answers zero is sent to its object: the
-// rates line must count each one answered zero and none forwarded to a twin (tw=../f0).
+// baseline line that is no longer one. Then every zero-argument selector the facade answers zero is sent to its object, and
+// every zero-argument method of an m2v class its facade object lacks (none a kind sends: m2v's own accessors): the rates line
+// must count the first answered zero, the second missing (tw=../f), and no object may have made a twin.
 // usage: selcover <pack> <cache> <nvk dylib> <default.metallib> <baseline> <kinds/<kind>.json>...
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
@@ -49,6 +50,7 @@ bool facadeClass(Class cls)
 struct Object {
     id object;
     Class twin;  // the m2v class that answers what the facade's class forwards (nil: none)
+    bool bare;   // made without the m2v object it carries on the device
 };
 
 Class twinClassOf(id object)
@@ -67,7 +69,7 @@ struct Objects {
 
     void put(const char *protocol, id object, Class twin = nil)
     {
-        byProtocol[protocol] = {object, object ? (twin ?: twinClassOf(object)) : nil};
+        byProtocol[protocol] = {object, object ? (twin ?: twinClassOf(object)) : nil, twin != nil};
     }
 
     bool make(id<MTLDevice> dev, NSString *metallib)
@@ -118,7 +120,8 @@ struct Objects {
         put("MTLArgumentEncoder", [dev newArgumentEncoderWithArguments:@[ argument ]]);
         put("MTLBinaryArchive", [dev newBinaryArchiveWithDescriptor:[MTLBinaryArchiveDescriptor new] error:&error]);
         // Made only from a pack state or a kernel the host corpus lacks: the facade's classes, with the m2v class each carries
-        put("MTLRenderPipelineState", class_createInstance(NSClassFromString(@"RMPipeline"), 0));
+        put("MTLRenderPipelineState", class_createInstance(NSClassFromString(@"RMPipeline"), 0),
+            NSClassFromString(@"NBRenderPipeline"));
         put("MTLComputePipelineState", class_createInstance(NSClassFromString(@"RMComputeState"), 0),
             NSClassFromString(@"NBComputePipeline"));
         bool all = true;
@@ -163,37 +166,92 @@ void rates(id<MTLCommandQueue> queue, char *line, size_t size)
     raw_metal_rates(line, size);
 }
 
-// Sends each zero-argument selector the facade answers zero to its object; false unless the rates line counts them all answered
-// zero and no twin forward
-bool sendZeros(const std::map<std::string, Object> &objects, const std::set<std::pair<std::string, std::string>> &zeros)
+// Sends each zero-argument selector of `which` to its object, the answer checked zero; how many, or -1 on a nonzero answer. An
+// RMTwinObject's go to the m2v object it carries, as before: not sent.
+int send(const std::map<std::string, Object> &objects, const std::set<std::pair<std::string, std::string>> &which)
 {
-    char line[4096];
-    id<MTLCommandQueue> queue = objects.at("MTLCommandQueue").object;
-    rates(queue, line, sizeof line);
-    unsigned sent = 0;
-    for (const auto &[protocol, selector] : zeros) {
+    int sent = 0;
+    for (const auto &[protocol, selector] : which) {
         const Object &o = objects.at(protocol);
         SEL sel = sel_registerName(selector.c_str());
-        if (strchr(selector.c_str(), ':') || class_getInstanceMethod(object_getClass(o.object), sel))
+        if (strchr(selector.c_str(), ':') || class_getInstanceMethod(object_getClass(o.object), sel) ||
+            [o.object isKindOfClass:NSClassFromString(@"RMTwinObject")])
             continue;
         NSMethodSignature *signature = [o.object methodSignatureForSelector:sel];
         if (!signature) {
             printf("NO SIGNATURE -[%s %s]\n", object_getClassName(o.object), selector.c_str());
-            return false;
+            return -1;
         }
         NSInvocation *invocation = [NSInvocation invocationWithMethodSignature:signature];
         invocation.selector = sel;
         [invocation invokeWithTarget:o.object];
+        uint8_t answer[64] = {}, zero[64] = {};
+        if (const NSUInteger n = signature.methodReturnLength; n && n <= sizeof answer) {
+            [invocation getReturnValue:answer];
+            if (memcmp(answer, zero, n)) {
+                printf("NOT ZERO -[%s %s]\n", object_getClassName(o.object), selector.c_str());
+                return -1;
+            }
+        }
         sent++;
     }
+    return sent;
+}
+
+int counter(const char *line, const char *after, const char *name)
+{
+    const char *from = strstr(line, after), *at = from ? strstr(from, name) : nullptr;
+    return at ? atoi(at + strlen(name)) : -1;
+}
+
+bool sendUnanswered(const std::map<std::string, Object> &objects,
+                    const std::set<std::pair<std::string, std::string>> &zeros,
+                    const std::set<std::pair<std::string, std::string>> &missing)
+{
+    char line[4096];
+    id<MTLCommandQueue> queue = objects.at("MTLCommandQueue").object;
     rates(queue, line, sizeof line);
-    const char *zero = strstr(line, " zero="), *twins = strstr(line, " tw="),
-               *forwards = twins ? strstr(twins, "/f") : nullptr;
-    const unsigned answered = zero ? unsigned(atoi(zero + 6)) : ~0u;
-    const unsigned forwarded = forwards ? unsigned(atoi(forwards + 2)) : ~0u;
-    printf("sent %u zero-argument selectors the facade answers zero: %u answered zero, %u forwarded to a twin\n", sent,
-           answered, forwarded);
-    return answered == sent && forwarded == 0;
+    const int zeroed = send(objects, zeros), unanswered = send(objects, missing);
+    rates(queue, line, sizeof line);
+    const int answered = counter(line, " zero=", "="), counted = counter(line, " tw=", "/f");
+    // the m2v objects a depth-stencil state, library and function carry from their creation
+    static const std::set<std::string> carried = {"MTLDepthStencilState", "MTLLibrary", "MTLFunction"};
+    unsigned twins = 0;
+    for (const auto &[protocol, o] : objects) {
+        Class cls = object_getClass(o.object);
+        if (Ivar twin = facadeClass(cls) ? class_getInstanceVariable(cls, "_twin") : nullptr)
+            twins += object_getIvar(o.object, twin) && !carried.count(protocol);
+    }
+    printf(
+        "sent %d selectors the facade answers zero (%d counted) and %d it lacks (%d counted missing); twins made: %u\n",
+        zeroed, answered, unanswered, counted, twins);
+    return zeroed >= 0 && unanswered >= 0 && answered == zeroed && counted == unanswered && !twins;
+}
+
+// Methods of the m2v class each facade object stands in for that the facade's class does not answer and no kind sends (m2v's own
+// accessors), but an encoder's or command buffer's (recorded for m2v)
+std::set<std::pair<std::string, std::string>> m2vOnly(const std::map<std::string, Object> &objects,
+                                                      const std::set<std::pair<std::string, std::string>> &sent)
+{
+    std::set<std::pair<std::string, std::string>> out;
+    for (const auto &[protocol, o] : objects) {
+        if (!o.object || !o.twin || o.bare || !facadeClass(object_getClass(o.object)))
+            continue;
+        std::set<std::string> methods;
+        for (Class c = o.twin; c && c != [NSObject class]; c = class_getSuperclass(c)) {
+            unsigned count = 0;
+            Method *list = class_copyMethodList(c, &count);
+            for (unsigned i = 0; i < count; i++)
+                methods.insert(sel_getName(method_getName(list[i])));
+            free(list);
+        }
+        for (const std::string &m : methods)
+            if (m[0] != '.' && m != "dealloc" && !answers(object_getClass(o.object), sel_registerName(m.c_str())) &&
+                !sent.count({protocol, m}) && protocol.find("Encoder") == std::string::npos &&
+                protocol != "MTLCommandBuffer")
+                out.insert({protocol, m});
+    }
+    return out;
 }
 
 }  // namespace
@@ -216,7 +274,7 @@ int main(int argc, char **argv)
             return 1;
         }
         std::set<std::string> gaps, baseline;
-        std::set<std::pair<std::string, std::string>> zeros;
+        std::set<std::pair<std::string, std::string>> zeros, sentAll;
         NSString *text = [NSString stringWithContentsOfFile:@(argv[5]) encoding:NSUTF8StringEncoding error:nil];
         for (NSString *line in [text componentsSeparatedByString:@"\n"])
             if (line.length && ![line hasPrefix:@"#"])
@@ -231,9 +289,10 @@ int main(int argc, char **argv)
             std::map<std::string, unsigned> totals;
             for (NSString *protocol in [sent.allKeys sortedArrayUsingSelector:@selector(compare:)]) {
                 const auto it = objects.byProtocol.find(protocol.UTF8String);
-                const Object o = it == objects.byProtocol.end() ? Object{nil, nil} : it->second;
+                const Object o = it == objects.byProtocol.end() ? Object{nil, nil, false} : it->second;
                 unsigned open = 0;
                 for (NSString *selector in [sent[protocol].allKeys sortedArrayUsingSelector:@selector(compare:)]) {
+                    sentAll.insert({protocol.UTF8String, selector.UTF8String});
                     const char *how = who(o, sel_registerName(selector.UTF8String),
                                           [protocol isEqualToString:@"MTLDevice"] ? base : nil);
                     totals[how]++;
@@ -265,10 +324,10 @@ int main(int argc, char **argv)
                 printf("NO LONGER A GAP (remove it from the baseline) %s\n", b.c_str());
                 gone++;
             }
-        const bool zerosOk = sendZeros(objects.byProtocol, zeros);
+        const bool zerosOk = sendUnanswered(objects.byProtocol, zeros, m2vOnly(objects.byProtocol, sentAll));
         const bool pass = !added && !gone && zerosOk;
         printf("%s: selcover (%u new gaps, %u baseline lines answered now%s)\n", pass ? "PASS" : "FAIL", added, gone,
-               zerosOk ? "" : ", zero answers miscounted");
+               zerosOk ? "" : ", unanswered selectors miscounted");
         return pass ? 0 : 1;
     }
 }

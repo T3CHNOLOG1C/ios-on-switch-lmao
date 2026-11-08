@@ -80,8 +80,9 @@ struct Stats {
     std::atomic<uint64_t> replayDraws{0}, twinTextures{0}, twinBuffers{0}, twinOthers{0}, twinTextureUs{0};
     // command buffers completed before their submitting thread scheduled them (finish() ran their scheduled handlers)
     std::atomic<uint64_t> scheduledByFinish{0};
-    std::atomic<uint64_t> twinForwards{0};  // selectors a facade object forwarded to its m2v twin (RMObject)
-    std::atomic<uint64_t> zeroAnswers{0};   // selectors answered zero, as m2v's objects answer them (answerZero)
+    std::atomic<uint64_t> twinForwards{
+        0};  // selectors m2v's object answers that a facade object has no method for (answerMissing)
+    std::atomic<uint64_t> zeroAnswers{0};  // selectors answered zero, as m2v's objects answer them (answerZero)
 #endif
 };
 
@@ -157,6 +158,8 @@ const char *metalTypes(SEL selector);
 // facade's object, with no twin made and nothing sent to m2v (answerZero)
 bool twinAnswers(Class twinClass, SEL selector);
 void answerZero(id object, NSInvocation *invocation);
+// A selector m2v's object answers that raw has no method for: answered zero, a fault in debug builds and the rates line's tw=../f
+void answerMissing(id object, NSInvocation *invocation);
 bool rawShape(MTLTextureDescriptor *d);
 bool chainShape(MTLTextureDescriptor *d);
 bool zetaDescriptor(MTLTextureDescriptor *d);

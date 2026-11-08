@@ -37,6 +37,7 @@ static inline id twinPublish(id object, __strong id &slot, id made)
 }
 @property (nonatomic, copy) NSString *label;
 - (id)rmTwin;  // made now if needed; nil if it cannot be
+- (Class)rmTwinClass;
 @end
 
 @interface RMDevice : NSObject  // the methods the device class gets (raw_metal_device_open); no state of its own
