@@ -14,7 +14,9 @@ bazel run //tools/emu:build                                  # only the emulator
 
 `check` watches the live kernel log and the panic record every 3 s and stops at the first of the milestone
 (`cores`, `display`, `sd`, `root`, `launchd`), a panic or `--timeout`. It prints the panic line or the last kernel
-lines, and keeps the run directory. iOS 17 reaches `launchd` in about 10 s of wall time.
+lines, and keeps the run directory. `launchd` is reached at the first kernel line that names a process other than
+`init` (pid 1 before its exec) or `kernel_task`, such as launchd's dyld asking for the shared region (`[1(launchd)]`)
+or a mount requested by a job launchd spawned.
 
 `--kind` builds `//:boot` with `--//ipsw:kind` in the output base `bazel run` itself uses. `--bazel-flag` passes flags
 to that build (for example `--bazel-flag=--config=agent`). `--package DIR` boots an existing `//:boot` output instead,
