@@ -88,6 +88,15 @@ bool chainShape(MTLTextureDescriptor *d)
            f && f->rt && raw::xrForm(uint32_t(d.pixelFormat)) == raw::XrForm::None;
 }
 
+// A 1D texture the raw path keeps (raw::Device::createLine): one level, of a format it has a header for, not extended range.
+// Memory of its own only: a 1D header has no pitch layout, which a buffer's or a surface's rows are.
+bool lineShape(MTLTextureDescriptor *d)
+{
+    return d.textureType == MTLTextureType1D && d.mipmapLevelCount <= 1 && d.sampleCount <= 1 && d.arrayLength <= 1 &&
+           d.height <= 1 && d.depth <= 1 && d.storageMode != MTLStorageModeMemoryless &&
+           raw::xrForm(uint32_t(d.pixelFormat)) == raw::XrForm::None && raw::formatInfo(uint32_t(d.pixelFormat));
+}
+
 // A memoryless Depth32Float_Stencil8 texture, 2D, one level, one sample, no rotation: the raw path's zeta (raw_zeta.h). A stored
 // one stays m2v's: its twin could not hold the raw path's texels (NVK's image is its own memory), and a command buffer m2v
 // replays would read another depth than the one the raw path left.

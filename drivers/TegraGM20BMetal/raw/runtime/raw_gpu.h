@@ -196,6 +196,8 @@ struct Texture {
     bool blockLinear = false;
     uint8_t blockHeight = 0;
     uint64_t layerBytes = 0;
+    // A block-linear texture's header type (fx::kTexOneD, kTexTwoD); a pitch header is always TWO_D_NO_MIPMAP
+    uint8_t type = fx::kTexTwoD;
 
     // Depth32Float_Stencil8 (raw_zeta.h): block-linear zeta memory, bound with its own PTE kind; never sampled, copied or a
     // colour target
@@ -659,6 +661,9 @@ public:
     bool createView(const Texture &of, uint32_t format, Texture &t);  // the same memory as another format
     // Memoryless (a pass gives it a backing); Depth32Float_Stencil8 among them, as zeta (Texture::zeta)
     bool createMemoryless(uint32_t width, uint32_t height, uint32_t format, Texture &t);
+    // A 1D texture: NIL's 1D image, one block-linear row (y_log2 0) under a ONE_D header, in block-linear memory the CPU
+    // writes through its tiled view (a 1D header takes no pitch layout)
+    bool createLine(uint32_t width, uint32_t format, Texture &t);
     // A mipmapped 2D texture of `levels` levels: level 0 of its block-linear chain (Texture::chain), its header the chain's.
     // False: not one the raw path keeps (not a render target format, extended range, no memory).
     bool createMipTexture(uint32_t width, uint32_t height, uint32_t format, uint32_t levels, Texture &t);

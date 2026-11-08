@@ -153,6 +153,7 @@ extern RawState *gRM;
 const char *metalTypes(SEL selector);
 bool rawShape(MTLTextureDescriptor *d);
 bool chainShape(MTLTextureDescriptor *d);
+bool lineShape(MTLTextureDescriptor *d);
 bool zetaDescriptor(MTLTextureDescriptor *d);
 uint32_t rawShapeTerm(MTLTextureDescriptor *d);
 // A texture the raw path does not keep: its predicate, and the predicate's first line with the texture's details

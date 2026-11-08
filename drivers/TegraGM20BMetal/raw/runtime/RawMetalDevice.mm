@@ -181,7 +181,8 @@
             return (id<MTLTexture>)t;
         }
     }
-    if (!rawShape(d) && !zetaDescriptor(d)) {
+    const bool line = lineShape(d);
+    if (!rawShape(d) && !zetaDescriptor(d) && !line) {
         RMTexture *w = (RMTexture *)[self wrapTwin:[gRM->fallback newTextureWithDescriptor:d] descriptor:d];
         if (w)
             refuseTexture(w, PredTexShape, rawShapeTerm(d), d.pixelFormat, @"twin-only", nil);
@@ -190,7 +191,10 @@
     RMTexture *t = [RMTexture new];
     t->_device = self;
     t->_descriptor = [d copy];
-    if (d.storageMode == MTLStorageModeMemoryless) {
+    if (line) {
+        t->_kind = RMTexturePool;
+        t->_rawOk = gRM->raw->createLine(uint32_t(d.width), uint32_t(d.pixelFormat), t->_raw);
+    } else if (d.storageMode == MTLStorageModeMemoryless) {
         t->_kind = RMTextureMemoryless;
         t->_rawOk = gRM->raw->createMemoryless(uint32_t(d.width), uint32_t(d.height), uint32_t(d.pixelFormat), t->_raw);
     } else {

@@ -283,6 +283,24 @@ int main(int argc, char **argv)
                 [tex[t] replaceRegion:MTLRegionMake2D(0, 0, mw, mh) mipmapLevel:0 withBytes:m.data() bytesPerRow:mw];
                 printf("MASK texels=%016llx corner=%u centre=%u\n", (unsigned long long)hash, m[0],
                        m[(mh / 2) * mw + mw / 2]);
+            } else if (t == frame::IMAGE3 && getenv("FRAME_1D")) {
+                // FRAME_1D=<MTLPixelFormat>: IMAGE3 a 1D lookup table as backboardd's on iOS 27 (4096x1 R32Float/R16Float,
+                // 3072x1 R16Uint, 1024x1 RG32Float): shared, its texels written by replaceRegion
+                const MTLPixelFormat lf = MTLPixelFormat(atoi(getenv("FRAME_1D")) ?: MTLPixelFormatR32Float);
+                MTLTextureDescriptor *ld = [MTLTextureDescriptor new];
+                ld.textureType = MTLTextureType1D;
+                ld.pixelFormat = lf;
+                ld.width = 1024;
+                ld.usage = MTLTextureUsageShaderRead;
+                ld.storageMode = MTLStorageModeShared;
+                tex[t] = [dev newTextureWithDescriptor:ld];
+                std::vector<uint8_t> row(1024 * 16);
+                for (size_t i = 0; i < row.size(); i++)
+                    row[i] = uint8_t(i * 7 + 3);
+                [tex[t] replaceRegion:MTLRegionMake1D(0, 1024)
+                          mipmapLevel:0
+                            withBytes:row.data()
+                          bytesPerRow:row.size()];
             } else if (t == frame::IMAGE1 &&
                        frame::mipImage()) {  // every level, private: m2v's own image, or the raw path's chain
                 d.mipmapLevelCount = 1 + unsigned(std::log2(double(std::max(td.w, td.h))));
@@ -419,8 +437,9 @@ int main(int argc, char **argv)
                 [e setVertexBytes:bytes.data() length:u.length atIndex:slot == 1 ? 7 : slot];
                 [e setFragmentBytes:bytes.data() length:u.length atIndex:slot];
             }
+            // (FRAME_1D: slot 9 the 1D texture, so m2v's segment samples the raw path's 1D memory through its twin)
             for (int t = 0; t < 16; t++)
-                [e setFragmentTexture:tex[frame::IMAGE1] atIndex:t];
+                [e setFragmentTexture:tex[t == 9 && getenv("FRAME_1D") ? frame::IMAGE3 : frame::IMAGE1] atIndex:t];
             for (int s2 = 0; s2 < 16; s2++)
                 [e setFragmentSamplerState:smp[s2 & 1] atIndex:s2];
             [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];

@@ -289,6 +289,25 @@ TEST(Layout, IsRawFxLevelZero)
     }
 }
 
+// A 1D image is NIL's 2D layout of one row (Tiling::choose leaves a 1D image one GOB tall, where a 2D image of height 1 clamps
+// to), under a header of TEXTURE_TYPE ONE_D (nvb097_fill_image_view_desc for ViewType::_1D); nothing else in the header moves
+TEST(Layout, OneDHeaderDiffersFromTwoDInItsTypeAlone)
+{
+    raw::fx::MipChain c;
+    ASSERT_TRUE(raw::fx::mipChainLayout(1024, 1, 1, 4, c));
+    EXPECT_EQ(c.yLog2, 0);
+    uint32_t one[8], two[8];
+    raw::fx::mipChainTic(c, 0x100000, 0x7017ff8f, false, 0, 1, one, raw::fx::kTexOneD);
+    raw::fx::mipChainTic(c, 0x100000, 0x7017ff8f, false, 0, 1, two);
+    EXPECT_EQ(one[4] >> 23 & 0xf, 0u);  // TEXTURE_TYPE, bits 154:151
+    EXPECT_EQ(two[4] >> 23 & 0xf, 1u);
+    EXPECT_EQ(one[4] & 0xffff, 1023u);  // WIDTH_MINUS_ONE
+    EXPECT_EQ(one[5] & 0xffff, 0u);     // HEIGHT_MINUS_ONE
+    for (int w : {0, 1, 2, 3, 5, 6, 7})
+        EXPECT_EQ(one[w], two[w]) << w;
+    EXPECT_EQ(one[4] & ~(0xfu << 23), two[4] & ~(0xfu << 23));
+}
+
 TEST(Layout, RefusesWhatNilDoesNotTile)
 {
     tgm_layout l;

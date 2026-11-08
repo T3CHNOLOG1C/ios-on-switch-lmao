@@ -153,6 +153,7 @@ const FormatInfo kFormats[] = {
     {10, 0xf3, 0x7012491d, 1, false},    // R8Unorm
     {11, 0, 0x7012491d, 1, true},        // R8Unorm_sRGB
     {20, 0xee, 0x7012491b, 2, false},    // R16Unorm
+    {23, 0, 0x6014921b, 2, false},       // R16Uint (NIL's R16_UINT: UINT components, alpha ONE_INT; sampled only)
     {25, 0xf2, 0x7017ff9b, 2, false},    // R16Float
     {30, 0xea, 0x70d24918, 2, false},    // RG8Unorm
     {40, 0xe8, 0x74e24915, 2, false},    // B5G6R5Unorm
@@ -1024,7 +1025,7 @@ void Device::writeTic(const Texture &t)
     uint32_t w[8] = {f->tic0};
     fx::MipChain one;
     if (t.blockLinear && fx::mipChainLayout(t.width, t.height, 1, t.bpp, one)) {  // NIL's header of a one-level image
-        fx::mipChainTic(one, t.va, f->tic0, f->srgb, 0, 1, w);
+        fx::mipChainTic(one, t.va, f->tic0, f->srgb, 0, 1, w, t.type);
         memcpy(tic_.cpu + 32 * t.tic, w, 32);
         return;
     }
@@ -1097,6 +1098,30 @@ bool Device::createTexture(uint32_t width, uint32_t height, uint32_t format, Tex
     if (!(t.tic = allocTic())) {
         Lease *none = nullptr;
         freeSpan(t.span, memoryOf(t), none);
+        return false;
+    }
+    writeTic(t);
+    return true;
+}
+
+bool Device::createLine(uint32_t width, uint32_t format, Texture &t)
+{
+    tgm_layout bl;
+    if (!shape(width, 1, format, t) || xrForm(format) != XrForm::None || !tgm_layout_tiled(width, 1, t.bpp, &bl))
+        return false;
+    std::lock_guard<std::mutex> l(lock_);
+    if (!blAlloc(bl.bytes, bl.align, t.span))
+        return false;
+    t.va = t.span.va;
+    t.cpu = t.span.cpu;
+    t.pitch = bl.row_bytes;
+    t.blockLinear = true;
+    t.blockHeight = bl.y_log2;
+    t.layerBytes = bl.bytes;
+    t.type = fx::kTexOneD;
+    if (!(t.tic = allocTic())) {
+        Lease *none = nullptr;
+        freeSpan(t.span, Memory::Bl, none);
         return false;
     }
     writeTic(t);
@@ -1287,7 +1312,7 @@ bool Device::createView(const Texture &of, uint32_t format, Texture &t)
         return false;
     if (of.chain) {
         uint32_t w[8];
-        fx::mipChainTic(of.chain->layout, of.va, f->tic0, f->srgb, 0, of.chain->layout.levels, w);
+        fx::mipChainTic(of.chain->layout, of.va, f->tic0, f->srgb, 0, of.chain->layout.levels, w, of.type);
         memcpy(tic_.cpu + 32 * t.tic, w, 32);
         return true;
     }
