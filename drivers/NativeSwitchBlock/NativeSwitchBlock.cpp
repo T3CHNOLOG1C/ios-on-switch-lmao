@@ -63,10 +63,9 @@
 #include "SwitchCq.h"
 
 extern "C" {
-// The ADMA2 path's page checks and cache maintenance (osfmk/arm/pmap/pmap.c, arm64/arm_vm_init.c): whether a page is
-// managed RAM, its cache attributes (VM_WIMG_DEFAULT 0x2, osfmk/arm/memory_types.h: write-back cacheable), and its
-// address in the kernel's physical aperture.
-boolean_t pmap_valid_page(ppnum_t pn);
+// The ADMA2 path's page checks and cache maintenance (osfmk/arm/pmap/pmap.c, arm64/arm_vm_init.c): a page's cache
+// attributes (VM_WIMG_DEFAULT 0x2, osfmk/arm/memory_types.h: write-back cacheable) and its address in the kernel's
+// physical aperture.
 unsigned int pmap_cache_attributes(ppnum_t pn);
 vm_offset_t phystokv(uint64_t pa);
 extern uint64_t gPhysBase, gPhysSize;  // the RAM phystokv covers (it panics on anything else)
