@@ -23,14 +23,10 @@ NAMES = {
     # 0x20, round_page, page_size, mask 0). The GOT pass put these names on the wrong functions, the pair above among
     # them.
     0xFFFFFFF00A872760: '__ZN24IOBufferMemoryDescriptor17inTaskWithOptionsEP4taskjmmjj',
-    0xFFFFFFF00A872840: '__ZN24IOBufferMemoryDescriptor22inTaskWithPhysicalMaskEP4taskjyy',
-    0xFFFFFFF00A872910: '__ZN24IOBufferMemoryDescriptor20inTaskWithGuardPagesEP4taskjy',
     # Five arguments handed to initWithSpecification: the SegmentOptions form.
     0xFFFFFFF00A875FB8: (
         '__ZN12IODMACommand17withSpecificationEPFbPS_NS_9Segment64EPvjEPKNS_14SegmentOptionsEjP8IOMapperS2_'
     ),
-    # segments[index] = segment, return true: the segment function kexts pass to IODMACommand as data (__got).
-    0xFFFFFFF00A8762CC: '__ZN12IODMACommand12OutputHost64EPS_NS_9Segment64EPvj',
     # serviceMatching(name, table) on the raw pointer, then retains the result and releases the table it consumed.
     0xFFFFFFF00A83EA78: '__ZN9IOService15serviceMatchingEPKc11OSSharedPtrI12OSDictionaryE',
     # kern_codesigning.c in source order, which AppleMobileFileIntegrity and the sandbox import. The GOT pass put these
@@ -39,7 +35,6 @@ NAMES = {
     # toggle_developer_mode(true), then (false); a load (developer_mode_state, which the GOT pass names); the research
     # pair (the same code, research_mode_enabled first); rem_enable's call; rem_state's load; device state; boot mode;
     # garbage collection's tail call into its body.
-    0xFFFFFFF00A66C038: '_disable_code_signing_feature',
     0xFFFFFFF00A66C100: '_enable_developer_mode',
     0xFFFFFFF00A66C150: '_disable_developer_mode',
     0xFFFFFFF00A66C1B8: '_research_mode_state',
@@ -48,17 +43,12 @@ NAMES = {
     0xFFFFFFF00A66C278: '_restricted_execution_mode_state',
     0xFFFFFFF00A66C2A0: '_update_csm_device_state',
     0xFFFFFFF00A66C2E8: '_complete_security_boot_mode',
-    0xFFFFFFF00A66C34C: '_garbage_collect_provisioning_profiles',
     # After set_local_signing_public_key, as in the source.
     0xFFFFFFF00A66CB40: '_get_local_signing_public_key',
     # No calls, followed by fp_getfvp's call to fp_get_ftype, as in kern_descrip.c.
     0xFFFFFFF00A5F68C0: '_fg_get_vnode',
     # current_persona_get_id (voucher, bank, release), then persona_lookup.
     0xFFFFFFF00A62AD80: '_current_persona_get',
-    # panic() after OSCollection's and OSIterator's deleted destructors, between OSMetaClass::instanceConstructed and
-    # __stack_chk_fail in the GOT of every kext with an abstract class (thirty of the prelinked ones). Vtables cannot
-    # name it: every pure virtual slot points here.
-    0xFFFFFFF00A96EE90: '___cxa_pure_virtual',
     # The OSSharedPtr wrapper after setObject(unsigned, OSSharedPtr): the same tail call through the vtable, two slots
     # further (0x100, replaceObject after merge), which IOGameControllerFamily imports.
     0xFFFFFFF00A7A4FC0: '__ZN7OSArray13replaceObjectEjRK11OSSharedPtrIK15OSMetaClassBaseE',
@@ -70,7 +60,6 @@ NAMES = {
     # "Invalid vm_map_copy_t sz:%lld, ofst:%lld"; the copyin wrapper that makes src_destroy a boolean and tail-calls
     # vm_map_copyin_internal, as ours does; the user-flags check, ktriage and VM_FLAGS_ANYWHERE toggle of vm_allocate's
     # external entry; vm_deallocate's tail call into mach_vm_deallocate.
-    0xFFFFFFF00A1F1574: '_vm_map_copy_discard',
     0xFFFFFFF00A1FC608: '_vm_map_copyin',
     0xFFFFFFF00A253B20: '_vm_allocate',
     0xFFFFFFF00A253B84: '_vm_deallocate',
@@ -78,21 +67,13 @@ NAMES = {
     0xFFFFFFF00A25B9F0: '_iokit_make_ident_port',
     # Before vfs_attr_pack_internal (the "com.apple.FinderInfo" packer), calling it twice.
     0xFFFFFFF00A2BF04C: '_vfs_attr_pack_ext',
-    # vfs_bio.c after buf_meta_breadn: buf_bwrite(ap->a_bp), the function lifs puts in its vnop_bwrite slot.
-    0xFFFFFFF00A2CEEC0: '_vn_bwrite',
     # vfs_cluster.c: advisory_read is the 0x10 wrapper calling the 0x3a0 advisory_read_ext; the GOT pass had put
     # advisory_read's name on advisory_read_ext.
     0xFFFFFFF00A2DFB78: '_advisory_read_ext',
-    0xFFFFFFF00A2E0190: '_advisory_read',
     # (seq << 32) | (aux << 4) | (stat & 0xf).
     0xFFFFFFF00A2F9B38: '_vfs_resolver_result',
     # The mount helper that names "lifs", with vfs_mount_at_path's calls.
     0xFFFFFFF00A2FD974: '_vfs_mount_at_path',
-    # lifs's vnode operation vector: vnop_revoke's nop (a_vp, then vn_revoke), vnop_advlock's and vnop_copyfile's
-    # ENOTSUP, vfs_support.c's source order.
-    0xFFFFFFF00A314920: '_nop_revoke',
-    0xFFFFFFF00A314A60: '_err_advlock',
-    0xFFFFFFF00A314C40: '_err_copyfile',
     # mnt_kern_flag (+116) bit 30 read; bit 29 (MNTK_AUTH_OPAQUE) and bit 30 (MNTK_AUTH_OPAQUE_ACCESS) set under the
     # mount lock; the VBLK (v_type 3) check and v_specinfo of vfs_setdevvp; the audit token copy of the context.
     0xFFFFFFF00A320EA4: '_vfs_authopaqueaccess',
@@ -102,15 +83,9 @@ NAMES = {
     0xFFFFFFF00A32230C: '_vfs_context_copy_audit_token',
     # kpi_vfs.c, which the ubc-like shift had one function off too: MNTK_SYSTEM (0x40) and MNTK_NOSWAP (0x80) set
     # under the mount lock; owner and group stored; snap_mp's mnt_flag (+112) given mp's security bits.
-    0xFFFFFFF00A3211E4: '_vfs_setmntsystem',
-    0xFFFFFFF00A321478: '_vfs_setnoswap',
-    0xFFFFFFF00A3221F8: '_vfs_setowner',
     0xFFFFFFF00A322A58: '_vfs_setsnapshotmntflags',
     # kern_subr.c, adjacent: hashinit, then hashdestroy.
-    0xFFFFFFF00A6467BC: '_hashinit',
     0xFFFFFFF00A6468D8: '_hashdestroy',
-    # The handler of the kernel's CTLTYPE_INT "L"/"LU" oids (num_vnodes, cs_blob_size, ...): SYSCTL_LONG's.
-    0xFFFFFFF00A64E00C: '_sysctl_handle_long',
     # ubc_subr.c, read from the code (v_type VREG, v_ubcinfo at +120, ui_size at +32, ui_flags at +40). The GOT pass
     # had this block shifted (ubc_setsize's name on upl_abort, getsize's on msync, ...): create_upl's vm_tag_bt and
     # ubc_create_upl_kernel calls (the GOT holds its _external alias too); ui_size; UI_ISMAPPED and
@@ -123,15 +98,12 @@ NAMES = {
     0xFFFFFFF00A6906E4: '_ubc_msync',
     0xFFFFFFF00A690F2C: '_ubc_range_op',
     0xFFFFFFF00A690164: '_ubc_setsize',
-    0xFFFFFFF00A68FCE4: '_ubc_setsize_ex',
     0xFFFFFFF00A6911C8: '_ubc_upl_abort',
     0xFFFFFFF00A690114: '_ubc_upl_abort_range',
     # refcnt.c: the count store; ldadd +1 with the overflow check; ldaddl then ldapr on the last reference (barrier).
     0xFFFFFFF00A7EE0B4: '_os_ref_init_count_external',
     0xFFFFFFF00A7EE0D0: '_os_ref_retain_external',
     0xFFFFFFF00A7EE1FC: '_os_ref_release_barrier_external',
-    # The parent list of the vfs.lifs and vfs.apfs sysctl nodes (vfs.generic's too).
-    0xFFFFFFF007BDE9A8: '_sysctl__vfs_children',
     # IOLib.cpp's data allocators in source order: IOMallocData, IOMallocZeroData, IOMallocDataShareable,
     # IOMallocZeroDataShareable, IOFreeData, IOFreeDataShareable. The first, second and fifth load one heap
     # (KHEAP_DATA_BUFFERS), these three the other (KHEAP_DATA_SHARED). The GOT pass had the private heap's names on the
@@ -166,37 +138,14 @@ NAMES = {
     # corecrypto. subrs.c's fortify checks after strnstr, each panicking with its own name ("__memcpy_chk object size
     # check failed", ...) before tail-calling memmove or memset.
     0xFFFFFFF00A264588: '___memcpy_chk',
-    0xFFFFFFF00A2645D4: '___memmove_chk',
-    0xFFFFFFF00A264620: '___memset_chk',
-    # Data. Sysctl parents, from the oids whose oid_parent they are: the root (sysctl, kern, vm, vfs), debug
-    # (lowpri_throttle_*), security (mac, lockdown_mode_state; SYSCTL_EXTENSIBLE_NODE in 13432, so AMFI, AppleImage4
-    # and the sandbox add to it) and hw.features (the "features" node's oid_arg1; AMFI's allows_security_research).
-    0xFFFFFFF007C56218: '_sysctl__children',
-    0xFFFFFFF007C55F10: '_sysctl__debug_children',
-    0xFFFFFFF007C56278: '_sysctl__security_children',
-    0xFFFFFFF007BFD770: '_sysctl__hw_features_children',
     # The int behind the desired_vnodes oid, next to rootvp, between ___stack_chk_guard and _gIODTPlane in apfs's GOT.
     0xFFFFFFF00AC58DA4: '_desiredvnodes',
-    # Declared before gIODefaultMatchCategoryKey (the next word), between gIOGeneralInterest and gIOParentMatchKey in
-    # IOStorageFamily's GOT.
-    0xFFFFFFF00AC5A968: '_gIOMatchCategoryKey',
     # The isa of the kernel's global block literals (invoke, then descriptor after it), which kexts' blocks use too.
     0xFFFFFFF00AC5CA78: '__NSConcreteGlobalBlock',
     # Each 16 bytes before its class's vtable, after the class's gMetaClass in the kexts' GOTs: Class::metaClass.
     0xFFFFFFF007C19348: '__ZN13IOCommandPool9metaClassE',
-    0xFFFFFFF007C19688: '__ZN28IOFilterInterruptEventSource9metaClassE',
-    0xFFFFFFF007C19C68: '__ZN12IODMACommand9metaClassE',
-    # image4_v2.c: "libImage4_V2 interface already set", Image4's registration.
-    0xFFFFFFF00A7F8828: '_image4_v2_interface_register',
-    # amfi.c's two after it, by their panics: "AppleMobileFileIntegrity interface already set", then
-    # "libCoreEntitlements interface already set". The GOT pass had them one off (arp_lookup_ip's name on the first).
-    0xFFFFFFF00A7F8868: '_amfi_interface_register',
-    0xFFFFFFF00A7F88A8: '_amfi_core_entitlements_register',
-    # kern_codesigning.c after the image4 dispatcher ("image4_ dispatch: overflow on input"), in source order: the
-    # object calls (two TXM selectors each), then get_monitor_exports and set_release_type (one call each).
-    0xFFFFFFF00A66D29C: '_kernel_image4_monitor_trap',
-    0xFFFFFFF00A66D468: '_kernel_image4_execute_object',
-    0xFFFFFFF00A66D4E0: '_kernel_image4_copy_object',
+    # kern_codesigning.c after the image4 dispatcher ("image4_ dispatch: overflow on input"): the wrappers that only
+    # branch to xnu_image4_get_monitor_exports and xnu_image4_set_release_type.
     0xFFFFFFF00A66D54C: '_kernel_image4_get_monitor_exports',
     0xFFFFFFF00A66D568: '_kernel_image4_set_release_type',
     # IOKitBSDInit.cpp after IOBSDGetPlatformUUID: IOBSDMountChange and IOBSDLowSpaceUnlinkKernelCore (empty without
@@ -204,43 +153,12 @@ NAMES = {
     0xFFFFFFF00A8ECC10: '_IOBSDMountChange',
     0xFFFFFFF00A8ECC14: '_IOBSDLowSpaceUnlinkKernelCore',
     0xFFFFFFF00A8ECC94: '_IOTaskHasStringEntitlement',
-    # ether_if_module.c around ether_demux ("dropping short VLAN packet"): del_proto, add_proto (bcmp, bzero), demux;
-    # ether_frameout's bounds checks before its tail call into ether_frameout_extended; ether_check_multi's AF_LINK
-    # test (EAFNOSUPPORT, EADDRNOTAVAIL).
-    0xFFFFFFF00A3845A8: '_ether_del_proto',
-    0xFFFFFFF00A3846AC: '_ether_add_proto',
-    0xFFFFFFF00A384B08: '_ether_demux',
-    0xFFFFFFF00A385304: '_ether_frameout',
-    0xFFFFFFF00A3855CC: '_ether_check_multi',
-    # IODMACommand.cpp's segment functions in source order: Host32 (two 32-bit stores), Big32 (rev), Little32 (stp);
-    # Little64 after the pinned Host64 and Big64.
-    0xFFFFFFF00A87311C: '__ZN12IODMACommand12OutputHost32EPS_NS_9Segment64EPvj',
+    # IODMACommand.cpp's OutputBig32 (rev), which no kext's iOS 17 GOT names in its gap.
     0xFFFFFFF00A873134: '__ZN12IODMACommand11OutputBig32EPS_NS_9Segment64EPvj',
-    0xFFFFFFF00A873154: '__ZN12IODMACommand14OutputLittle32EPS_NS_9Segment64EPvj',
-    0xFFFFFFF00A8762FC: '__ZN12IODMACommand14OutputLittle64EPS_NS_9Segment64EPvj',
-    # IOMemoryCursor.cpp: each cursor's outputSegment between its initWithSpecification and getMetaClass.
-    0xFFFFFFF00A8797CC: '__ZN21IONaturalMemoryCursor13outputSegmentEN14IOMemoryCursor15PhysicalSegmentEPvj',
-    0xFFFFFFF00A879E4C: '__ZN17IOBigMemoryCursor13outputSegmentEN14IOMemoryCursor15PhysicalSegmentEPvj',
-    0xFFFFFFF00A87A4D8: '__ZN20IOLittleMemoryCursor13outputSegmentEN14IOMemoryCursor15PhysicalSegmentEPvj',
     # apfs. vfs_support.c's nop_*/err_* in source order between named ones (nop returns 0, err ENOTSUP: the
     # same words as ours).
-    0xFFFFFFF00A314948: '_nop_mmap',
-    0xFFFFFFF00A314950: '_err_mmap',
-    0xFFFFFFF00A314958: '_nop_fsync',
-    0xFFFFFFF00A314970: '_err_remove',
-    0xFFFFFFF00A314980: '_err_link',
-    0xFFFFFFF00A314990: '_err_rename',
-    0xFFFFFFF00A3149A0: '_err_mkdir',
-    0xFFFFFFF00A3149B0: '_err_rmdir',
-    0xFFFFFFF00A3149C0: '_err_symlink',
-    0xFFFFFFF00A3149D0: '_err_readdir',
     0xFFFFFFF00A3149F0: '_err_readdirattr',
-    0xFFFFFFF00A314A10: '_err_readlink',
-    0xFFFFFFF00A314A18: '_nop_inactive',
-    0xFFFFFFF00A314A40: '_err_strategy',
-    0xFFFFFFF00A314A48: '_nop_pathconf',
     0xFFFFFFF00A314A68: '_nop_allocate',
-    0xFFFFFFF00A314A90: '_err_bwrite',
     0xFFFFFFF00A314A98: '_nop_pagein',
     0xFFFFFFF00A314B58: '_nop_pageout',
     0xFFFFFFF00A314C28: '_err_searchfs',
@@ -258,7 +176,6 @@ NAMES = {
     0xFFFFFFF00A32D71C: '_cp_os_version',
     # Paired in order inside runs of named neighbours that hold as many functions in 24B119 as in ours (unload_trust_cache's
     # entitlement string, vnode_addfsref's panic, the proc_ accessors' loads).
-    0xFFFFFFF00A2F3F50: '_vnode_addfsref',
     0xFFFFFFF00A317B5C: '_utf8_normalizeOptCaseFoldToUTF8',
     0xFFFFFFF00A5EF578: '_current_cached_proc_cred',
     0xFFFFFFF00A612960: '_ctl_name_by_id',
@@ -269,7 +186,6 @@ NAMES = {
     0xFFFFFFF00A62EB70: '_proc_is_simulated',
     0xFFFFFFF00A62F26C: '_proc_signal',
     0xFFFFFFF00A635AB4: '_proc_pgrpid',
-    0xFFFFFFF00A66B0D8: '_unload_trust_cache',
     # The sandbox's (AMFI shares some), each placed by what it does and checked against the alphabetical order of every
     # GOT holding it: kern_cs.c's csblob/csproc accessors (cs_blob grew 0x30 after csb_hashtype, so platform_binary reads
     # 0xdc), kern_proc.c's syscall-filter and sandbox-info setters (nsysent 558, mach_trap_count 128, mach_kobj_count),
@@ -323,7 +239,6 @@ NAMES = {
     0xFFFFFFF00A1FAF4C: '_vm_map_unwire',
     0xFFFFFFF00A1FAF58: '_vm_map_wire',
     0xFFFFFFF00A1FC5EC: '_vm_map_copyout',
-    0xFFFFFFF00A2D1E94: '_vnode_getname_printable',
     0xFFFFFFF00A2D1FFC: '_vnode_putname_printable',
     0xFFFFFFF00A5F17E0: '_cs_require_lv',
     0xFFFFFFF00A5F17E8: '_cs_system_require_lv',
@@ -353,13 +268,100 @@ NAMES = {
     0xFFFFFFF00A66B764: '_query_trust_cache_with_length',
     0xFFFFFFF00A66B8D0: '_query_trust_cache_for_rem_with_length',
     0xFFFFFFF00A66CC7C: '_csm_resolve_os_entitlements_from_proc',
-    0xFFFFFFF00A68F01C: '_csblob_find_blob_bytes',
     0xFFFFFFF00A68F180: '_csblob_get_entitlements',
     0xFFFFFFF00A68F344: '_csblob_get_der_entitlements',
     0xFFFFFFF00A68F4EC: '_csblob_register_profile',
-    0xFFFFFFF00A7F88E8: '_ptrauth_utils_auth_blob_generic',
-    0xFFFFFFF00A9688FC: '_pmap_ce_allocate_acceleration_buffer',
-    0xFFFFFFF00A968934: '_pmap_ce_free_acceleration_buffer',
+    # One function of ours each under two names, so the GOT count cannot place them. kalloc.c's frees in lifs's GOT
+    # order between kernel_thread_start and lck_grp_alloc_init: the data pair (tail calls into kfree_ext), then the
+    # typed pair (the zone view check, then kfree_ext). memcpy before memmove in IOGPUFamily's GOT: the 56-byte
+    # front and the 432-byte body. IOLib.cpp's IOLockSleep and IOLockSleepDeadline, each only a branch to
+    # lck_mtx_sleep / lck_mtx_sleep_deadline.
+    0xFFFFFFF00A13041C: '_kfree_data',
+    0xFFFFFFF00A130430: '_kfree_data_external',
+    0xFFFFFFF00A1303D4: '_kfree_type_impl',
+    0xFFFFFFF00A130414: '_kfree_type_impl_external',
+    0xFFFFFFF00A227074: '_memcpy',
+    0xFFFFFFF00A972EB0: '_memmove',
+    0xFFFFFFF00A80E4D0: '_IOLockSleep',
+    0xFFFFFFF00A80E4E0: '_IOLockSleepDeadline',
+    # Alone in their GOT gaps among our names, with the body: lock_rw_old.c's "Invalid lock sleep action" and
+    # assert_wait_deadline; the tail call into vm_map_region; the arm no-op; port_name_to_task_kernel with flavor 3
+    # (TASK_FLAVOR_NAME); wakeup_with_inheritor_and_turnstile with no woken-thread out pointer (all, not one);
+    # the "Expected to have usecount or iocount" check of vnode_getwithref_noblock; the PAC-signed v_parent load.
+    0xFFFFFFF00A138158: '_lck_rw_sleep_deadline',
+    0xFFFFFFF00A25442C: '_mach_vm_region',
+    0xFFFFFFF00A29C650: '_ml_thread_policy',
+    0xFFFFFFF00A12C90C: '_port_name_to_task_name',
+    0xFFFFFFF00A13D114: '_wakeup_all_with_inheritor',
+    0xFFFFFFF00A2F3A78: '_vnode_getwithref_noblock',
+    0xFFFFFFF00A323B44: '_vnode_parent',
+    # apfs's SMR imports between read_random and snprintf, in GOT order: smr_call (disables and re-enables
+    # preemption around the queue), smr_enter, smr_hash_destroy (frees through kfree_ext), smr_hash_init,
+    # smr_hash_init_empty, smr_hash_is_empty_initialized (the same instructions as ours), smr_leave (re-enables
+    # preemption).
+    0xFFFFFFF00A164064: '_smr_call',
+    0xFFFFFFF00A163E18: '_smr_enter',
+    0xFFFFFFF00A16482C: '_smr_hash_destroy',
+    0xFFFFFFF00A164784: '_smr_hash_init',
+    0xFFFFFFF00A164744: '_smr_hash_init_empty',
+    0xFFFFFFF00A164760: '_smr_hash_is_empty_initialized',
+    0xFFFFFFF00A163E44: '_smr_leave',
+    # apfs between file_drop and kauth_cred_get, in GOT order and as 21H461's apfs imported them: the withvid
+    # wrapper (fourth argument 0), vfs_bio.c's gc register/unregister pair (one global lock), the EXC_GUARD of the
+    # current thread, kern_shutdown.c's two flags (OSKextIsInUserspaceReboot inlined as a byte load).
+    0xFFFFFFF00A5F6D44: '_file_vnode_withvid',
+    0xFFFFFFF00A2CF700: '_fs_buffer_cache_gc_register',
+    0xFFFFFFF00A2CF8AC: '_fs_buffer_cache_gc_unregister',
+    0xFFFFFFF00A600EA4: '_generate_file_permissions_guard_exception',
+    0xFFFFFFF00A63E7B0: '_get_system_inshutdown',
+    0xFFFFFFF00A63E7BC: '_get_system_inuserspacereboot',
+    # kpi_vfs.c's context queries in apfs's GOT order between vfs_context_current and vfs_context_kernel: the
+    # branch into the original dataless check, p_vfs_iopolicy bit 0x20 (IGNORE_CONTENT_PROTECTION), is64bit, the
+    # dataless-manipulation entitlement strings, proc_pendingsignals with the mask; then the original dataless check
+    # itself, alone between vfs_context_kernel and vfs_context_proc.
+    0xFFFFFFF00A3109A0: '_vfs_context_dataless_materialization_is_prevented',
+    0xFFFFFFF00A322570: '_vfs_context_ignores_content_protection',
+    0xFFFFFFF00A32079C: '_vfs_context_is64bit',
+    0xFFFFFFF00A310A84: '_vfs_context_is_dataless_manipulator',
+    0xFFFFFFF00A3223B8: '_vfs_context_issignal',
+    0xFFFFFFF00A3109A4: '_vfs_context_orig_dataless_materialization_is_prevented',
+    # apfs's pairs, each gap holding one name its 21H461 apfs imported and one Darwin 26 KPI of ours: in GOT order.
+    0xFFFFFFF00A2DFA44: '_cluster_unlock_direct_read',
+    0xFFFFFFF00A2DC544: '_cluster_update_range',
+    0xFFFFFFF00A32CEA8: '_cpx_alloc',
+    0xFFFFFFF00A32CF34: '_cpx_alloc_ctx',
+    0xFFFFFFF00A2F8594: '_vnode_attr_authorize_init',
+    0xFFFFFFF00A2F8620: '_vnode_authattr',
+    # libkern's os_pcpu_ref: init and kill (the two left between destroy and release), retain_try (the one left
+    # between release and wait_for_death).
+    0xFFFFFFF00A7EE2C4: '_os_pcpu_ref_init',
+    0xFFFFFFF00A7EE468: '_os_pcpu_ref_kill',
+    0xFFFFFFF00A7EE590: '_os_pcpu_ref_retain_try',
+    # Alone or ordered in their GOT gaps, with the body: the null check of ubc_was_mapped_writable (ubc_was_mapped
+    # has none); the shared-to-exclusive upgrade of cache_lookup_ext; each thread_call_enter*_delayed's own name in
+    # its panic; IOSimpleLockInit's inlined lck_spin_init (Free only branches, GetMachLock returns its argument);
+    # setMapperOptions's store; IORegistryIterator::iterateOver from the registry root, the other overload's caller.
+    0xFFFFFFF00A6912F4: '_ubc_was_mapped_writable',
+    0xFFFFFFF00A2D3404: '_cache_lookup_ext',
+    0xFFFFFFF00A189AC4: '_thread_call_enter_delayed',
+    0xFFFFFFF00A189B28: '_thread_call_enter1_delayed',
+    0xFFFFFFF00A80E8E0: '_IOSimpleLockInit',
+    0xFFFFFFF00A888980: '__ZN18IOMemoryDescriptor16setMapperOptionsEt',
+    0xFFFFFFF00A81E850: '__ZN18IORegistryIterator11iterateOverEPK15IORegistryPlanej',
+    # IOCircularDataQueue.cpp in IOHIDFamily's GOT order: CopyLatest, CopyMemoryDescriptor before
+    # CreateWithEntries; Destroy, Enqueue (the 420-byte writer) after it.
+    0xFFFFFFF00A8C1E10: '_IOCircularDataQueueCopyLatest',
+    0xFFFFFFF00A8C19B0: '_IOCircularDataQueueCopyMemoryDescriptor',
+    0xFFFFFFF00A8C18FC: '_IOCircularDataQueueDestroy',
+    0xFFFFFFF00A8C1A28: '_IOCircularDataQueueEnqueue',
+    # Data, by the functions that use it: eight named functions each (spec_ioctl, bdevsw_add, ...; decmpfs_init,
+    # decmpfs_read_compressed, ...) reference it where ours reference bdevsw / decmpfs_ctx, in apfs's GOT order.
+    # IOSerialFamily's data GOT after tk_nin: the tty counter tk_rawcc, then the line discipline's input routine
+    # (3.5 KiB, taken as a pointer for linesw).
+    0xFFFFFFF00ABE0160: '_bdevsw',
+    0xFFFFFFF00AC407D8: '_decmpfs_ctx',
+    0xFFFFFFF00AC57D18: '_tk_rawcc',
+    0xFFFFFFF00A682FFC: '_ttyinput',
 }
 
 
