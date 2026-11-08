@@ -340,6 +340,15 @@ def compare_draw(tally: Tally, fi: int, di: int, x: collections.OrderedDict, y: 
 ELIDED = 'ELIDED'
 
 
+# A draw that reads a constant buffer over bytes the copy engine wrote after its channel's last constant-cache
+# invalidate (nvdec.cpp): wrong on either side
+CBSTALE = 'CBSTALE'
+# What the raw path must cover of NVK's barriers before a draw. CBINV: NVK invalidates the constant cache as it opens
+# each submission and each of m2v's encoders (a primary command buffer of its own), and where a uniform read follows a
+# transfer write
+REQUIRED = {'TEXINV', 'WFI', 'PSB', 'CBINV'}
+
+
 def compare_barriers(tally: Tally, where: str, xb: set[str], yb: set[str]) -> bool:
     missing = xb - yb
     if ELIDED in yb and missing <= {'PSB', 'TEXINV'}:
@@ -349,7 +358,12 @@ def compare_barriers(tally: Tally, where: str, xb: set[str], yb: set[str]) -> bo
         tally.bar_missing[m] += 1
     for m in yb - xb - {ELIDED}:
         tally.bar_extra[m] += 1
-    if 'TEXINV' not in missing and 'WFI' not in missing and 'PSB' not in missing:
+    if CBSTALE in xb | yb:
+        tally.mism['constant cache stale'] += 1
+        if tally.wants('constant cache stale'):
+            tally.examples['constant cache stale'].append(f'{where}: nvk {sorted(xb)} raw {sorted(yb)}')
+        return False
+    if not missing & REQUIRED:
         return True
     tally.mism['barrier (fetch/pass)'] += 1
     if tally.wants('barrier (fetch/pass)'):

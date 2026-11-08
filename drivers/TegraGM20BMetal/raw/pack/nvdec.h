@@ -88,6 +88,9 @@ public:
     }
 
     uint64_t draws = 0, dispatches = 0, clears = 0, submits = 0, macroCalls = 0, unknownMacros = 0, badHeaders = 0;
+    // Draws that read a constant buffer over bytes the copy engine wrote after the channel's last constant-cache invalidate
+    // (their barriers name CBSTALE): the SMs' constant caches may still hold what those bytes were
+    uint64_t staleConstantReads = 0;
 
     static uint64_t fnv(const void *p, size_t n, uint64_t h = 0xcbf29ce484222325ull);
 
@@ -121,6 +124,8 @@ private:
     // mapped in two channels' address spaces, the raw path's and m2v's twins, are one resource), shared by every decoder
     static std::map<uint64_t, int> &names();
     std::set<std::string> pendingBarriers_;
+    // [from, to) the copy engine wrote since the last constant-cache invalidate (INVALIDATE_SHADER_CACHES(_NO_WFI) CONSTANT)
+    std::vector<std::pair<uint64_t, uint64_t>> constantStale_;
     bool firstDraw_ = true;
     bool indexed_ = false;  // the draw being printed is DRAW_INDEX_BUFFER's
 
@@ -132,6 +137,7 @@ private:
     void clear(uint32_t data);
     void countComp(uint32_t clearData);
     void barrier(const std::string &what);
+    bool readsStaleConstants();
 
     uint32_t r3(uint32_t mthd) const
     {

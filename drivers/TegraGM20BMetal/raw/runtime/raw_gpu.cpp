@@ -111,8 +111,14 @@ constexpr size_t kDedicatedSpares = 2;
 // one for the GPU's instruction prefetch past a program's end. The render server binds kHeapAtOpen at its start: what Core
 // Animation's states place in their first frames (17's journal: 1.13 MiB).
 constexpr uint64_t kProgramWindow = 1ull << 32, kHeapStep = 256 << 10, kHeapSlack = 0x1000, kHeapAtOpen = 2 << 20;
-// INVALIDATE_SHADER_CACHES_NO_WFI (cla097.h): INSTRUCTION bit 0, CONSTANT bit 12
-constexpr uint32_t kInvalidateInstruction = 1u << 0, kInvalidateConstant = 1u << 12;
+// INVALIDATE_SHADER_CACHES and its _NO_WFI form (cl9097.h, cla097.h): INSTRUCTION bit 0, FLUSH_DATA 2, DATA 4, CONSTANT 12
+constexpr uint32_t kInvalidateInstruction = 1u << 0, kFlushData = 1u << 2, kInvalidateData = 1u << 4,
+                   kInvalidateConstant = 1u << 12;
+// Between passes: the shaders' data writes flushed, their data caches invalidated, and the constant caches too: bytes the copy
+// engine, the 2D engine or a shader wrote since the submission's prologue may be bound as a constant buffer after, and the SMs'
+// constant caches do not see such writes (NVK opens each of m2v's encoders, a command buffer of its own, with a constant
+// invalidate, and its transfer-write to uniform-read barrier has one)
+constexpr uint32_t kBetweenPasses = kFlushData | kInvalidateData | kInvalidateConstant;
 constexpr uint32_t kMaxSegments = TegraGM20BMaxPushes;
 // An instance of a draw: BEGIN with INSTANCE_ID SUBSEQUENT (two words), the first vertex or index and the count (three), END
 constexpr uint32_t kInstanceWords = 6;
@@ -2231,9 +2237,9 @@ CommandBuffer *Device::begin()
     p.m(INVALIDATE_TEXTURE_HEADER_CACHE_NO_WFI, 0);
     p.inc(INVALIDATE_SHADER_CACHES_NO_WFI, {kInvalidateConstant});
     cb.shaderInvalidate_ = p.at - 1;
-    p.m(INVALIDATE_SHADER_CACHES, 0x14);
+    p.m(INVALIDATE_SHADER_CACHES, kFlushData | kInvalidateData);
     p.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
-    p.m(INVALIDATE_SHADER_CACHES_NO_WFI, 0x10);
+    p.m(INVALIDATE_SHADER_CACHES_NO_WFI, kInvalidateData);
     checkRoom(p, "a submission prologue");
     cb.segment(start, p.at);
     return &cb;
@@ -2596,7 +2602,7 @@ void RenderEncoder::barrier()
     if (p_.room() < 64)
         reserve();
     p_.m(WAIT_FOR_IDLE, 0);
-    p_.m(INVALIDATE_SHADER_CACHES, 0x14);
+    p_.m(INVALIDATE_SHADER_CACHES, kBetweenPasses);
     p_.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
     writtenBits_ = storageWrittenBits_ = 0;
     written_.clear();
@@ -3434,7 +3440,7 @@ void RenderEncoder::end()
     Push p{start, start + room};
     p.raw(restore.data(), uint32_t(restore.size()));
     p.m(WAIT_FOR_IDLE, 0);
-    p.m(INVALIDATE_SHADER_CACHES, 0x14);
+    p.m(INVALIDATE_SHADER_CACHES, kBetweenPasses);
     p.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
     // shadow targets' pool images: their texels over the render area first, as NVK's tiled shadow loads them (a load that
     // keeps them: Load, and a DontCare the clears leave; a Clear clears it all), then the barrier to the pass
@@ -3479,7 +3485,7 @@ void RenderEncoder::end()
     }
     if (own) {
         p.m(WAIT_FOR_IDLE, 0);
-        p.m(INVALIDATE_SHADER_CACHES, 0x14);
+        p.m(INVALIDATE_SHADER_CACHES, kBetweenPasses);
         p.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
     }
     uint32_t ct = 0, count = 0;
