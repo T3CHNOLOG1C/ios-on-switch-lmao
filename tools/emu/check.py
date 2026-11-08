@@ -77,7 +77,7 @@ def main() -> int:
     started = time.monotonic()
     boot.run_machine(run, inputs, args.timeout, watch)
     wall = time.monotonic() - started
-    report.summarize(run)
+    report.summarize(run, watch.log)
     panic = watch.panic or report.panic_text((run / 'ramoops.raw').read_bytes())
     if panic:
         print(f'PANIC after {wall:.0f} s wall ({run}):\n{panic}')
