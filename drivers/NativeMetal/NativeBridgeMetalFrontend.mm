@@ -42,6 +42,7 @@
 #include "QueuePriority.h"
 #include "SurfaceLayout.h"
 #include "SwitchFrameTimeline.h"
+#include "../../kits/SwitchDMA/SwitchDcache.h"
 #include "../../kits/SwitchRefusal/SwitchRefusalSite.h"
 // The two-plane render targets' load and store functions (TwoPlaneStandIn.metal).
 #include "TwoPlaneStandIn.h"
@@ -614,20 +615,6 @@ static void textureGpuWrites(NBTexture *t)
     t.gpuWritesDeclared = true;
 }
 
-// Clean [base, base + bytes) to the point of coherency and invalidate it, by VA from EL0 (XNU sets SCTLR_EL1.UCI). Cortex-A57 data
-// cache lines are 64 bytes (CTR_EL0 is not readable at EL0 here: SCTLR_EL1.UCT is clear). The caller ends its run of these with a DSB.
-static void cleanToCoherency(const void *base, size_t bytes)
-{
-    uintptr_t line = (uintptr_t)base & ~(uintptr_t)63;
-    const uintptr_t end = (uintptr_t)base + bytes;
-    for (; line + 256 <= end; line += 256)
-        __asm__ volatile("dc civac, %0\n dc civac, %1\n dc civac, %2\n dc civac, %3" ::"r"(line), "r"(line + 64),
-                         "r"(line + 128), "r"(line + 192)
-                         : "memory");
-    for (; line < end; line += 64)
-        __asm__ volatile("dc civac, %0" ::"r"(line) : "memory");
-}
-
 @implementation NBBuffer
 
 // A host import the GPU wrote (gpuWrote, set at the writing command buffer's completion): invalidate its lines so a CPU read in
@@ -640,8 +627,7 @@ static void cleanToCoherency(const void *base, size_t bytes)
         return false;
     const size_t bytes = nmb_buffer_length(_handle);
     const uint64_t began = nowUs();
-    cleanToCoherency(nmb_buffer_contents(_handle), bytes);
-    __asm__ volatile("dsb sy" ::: "memory");
+    switch_dcache_clean_invalidate(nmb_buffer_contents(_handle), bytes);
     gReadbackInvalidates++;
     gReadbackBytes += bytes;
     gReadbackUs += nowUs() - began;

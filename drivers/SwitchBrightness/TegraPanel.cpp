@@ -40,6 +40,7 @@ extern "C" {
 #include "TegraPanel.h"
 #include "TegraPanelSteps.h"
 #include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
+#include "../../kits/SwitchMMIO/SwitchMMIOWords.h"
 
 // The DC A interrupt's owner (NativeLegacyDisplay) keeps FRAME_END unmasked while any holder has it; any context. These
 // defaults stand for a display that never masks it.
@@ -121,8 +122,9 @@ bool gFrameEndsDriven;  // the display calls the filter (atomic)
 timer_call_data_t gStepTimer;
 uint64_t gStepDeadline;  // mach absolute time the step timer was last armed for
 
-IOLock *volatile gLock;               // serializes commands
-volatile uint8_t *gCar, *gDc, *gDsi;  // DC and DSI registers are numbered in words
+IOLock *volatile gLock;  // serializes commands
+volatile uint8_t *gCar;
+SwitchMMIOWords gDc, gDsi;
 bool gControlSent, gHaveLevel;
 unsigned gLevel;
 
@@ -157,8 +159,8 @@ bool displayRunning()
 {
     if (!gCar) {
         timer_call_setup(&gStepTimer, stepTimerFired, nullptr);
-        gDc = switch_mmio_map(kDisplayAPA, kDcMapBytes);
-        gDsi = switch_mmio_map(kDsiPA, 0x1000);
+        gDc = SwitchMMIOWords(switch_mmio_map(kDisplayAPA, kDcMapBytes));
+        gDsi = SwitchMMIOWords(switch_mmio_map(kDsiPA, 0x1000));
         gCar = switch_mmio_map(kCarPA, 0x1000);
     }
     if (!gCar || !gDc || !gDsi)
@@ -168,9 +170,8 @@ bool displayRunning()
         (switch_mmio_read32(gCar, RST_DEVICES_H) & kDsiClock)) {
         return false;
     }
-    return ((switch_mmio_read32(gDsi, DSI_POWER_CONTROL * 4) & kDsiPowerEnable) != 0u) &&
-           ((switch_mmio_read32(gDsi, DSI_CONTROL * 4) & kDsiVideoEnable) != 0u) &&
-           ((switch_mmio_read32(gDc, DC_CMD_DISPLAY_COMMAND * 4) & kDisplayModeMask) != 0u);
+    return ((gDsi[DSI_POWER_CONTROL] & kDsiPowerEnable) != 0u) && ((gDsi[DSI_CONTROL] & kDsiVideoEnable) != 0u) &&
+           ((gDc[DC_CMD_DISPLAY_COMMAND] & kDisplayModeMask) != 0u);
 }
 
 Step step()
@@ -201,9 +202,9 @@ uint64_t frameDeadline()
     switch_interrupt_describe(kDisplayAInterrupt, gic, sizeof(gic));
     panic("TegraPanel: %s: no DC A frame end in 50 ms (step %u): INT_STATUS %#x MASK %#x ENABLE %#x CMD %#x DBG_TIMING "
           "%#x, %s",
-          what, static_cast<unsigned>(now), switch_mmio_read32(gDc, DC_CMD_INT_STATUS * 4),
-          switch_mmio_read32(gDc, DC_CMD_INT_MASK * 4), switch_mmio_read32(gDc, DC_CMD_INT_ENABLE * 4),
-          switch_mmio_read32(gDc, DC_CMD_DISPLAY_COMMAND * 4), switch_mmio_read32(gDc, DC_DISP_DISPLAY_DBG_TIMING * 4),
+          what, static_cast<unsigned>(now), static_cast<uint32_t>(gDc[DC_CMD_INT_STATUS]),
+          static_cast<uint32_t>(gDc[DC_CMD_INT_MASK]), static_cast<uint32_t>(gDc[DC_CMD_INT_ENABLE]),
+          static_cast<uint32_t>(gDc[DC_CMD_DISPLAY_COMMAND]), static_cast<uint32_t>(gDc[DC_DISP_DISPLAY_DBG_TIMING]),
           gic);
 }
 
@@ -219,13 +220,13 @@ void play(const uint32_t *words, unsigned count, const char *what)
     native_legacy_frame_end_hold();
     if (!native_legacy_frame_end_held()) {
         panic("TegraPanel: %s: DC A FRAME_END is not enabled and unmasked (INT_ENABLE %#x MASK %#x)", what,
-              switch_mmio_read32(gDc, DC_CMD_INT_ENABLE * 4), switch_mmio_read32(gDc, DC_CMD_INT_MASK * 4));
+              static_cast<uint32_t>(gDc[DC_CMD_INT_ENABLE]), static_cast<uint32_t>(gDc[DC_CMD_INT_MASK]));
     }
     for (unsigned i = 0; i < count; ++i)
         gCommand.words[i] = words[i];
     gCommand.count = count;
     gCommand.deferrals = 0;
-    const uint32_t before = switch_mmio_read32(gDsi, DSI_STATUS * 4);
+    const uint32_t before = gDsi[DSI_STATUS];
     uint64_t seen = frames();
     uint64_t deadline = frameDeadline();
     __atomic_store_n(&gCommand.step, kQueued, __ATOMIC_RELEASE);
@@ -309,7 +310,7 @@ int bootLevel()
 {
     if (!displayRunning())
         return -1;
-    const uint32_t duty = switch_mmio_read32(gDc, DC_COM_SCRATCH_REGISTER_B * 4);
+    const uint32_t duty = gDc[DC_COM_SCRATCH_REGISTER_B];
     if (!duty || duty > 255)
         return -1;
     return static_cast<int>(duty * TEGRA_PANEL_BRIGHTNESS_MAX / 255);
@@ -423,8 +424,7 @@ extern "C" bool tegra_panel_holds_frame_end(void)
 
 extern "C" __attribute__((weak)) bool native_legacy_frame_end_held(void)
 {
-    return (switch_mmio_read32(gDc, DC_CMD_INT_ENABLE * 4) & switch_mmio_read32(gDc, DC_CMD_INT_MASK * 4) &
-            kFrameEndInt) != 0;
+    return (gDc[DC_CMD_INT_ENABLE] & gDc[DC_CMD_INT_MASK] & kFrameEndInt) != 0;
 }
 
 // Primary interrupt context, at every DC A FRAME_END; one step of the command out, if any (see the top of this file).
@@ -436,10 +436,10 @@ extern "C" void tegra_panel_frame_end_filter(void)
     if (now == kIdle || now == kDone || movesAtTimer(now))
         return;
     if (now == kQueued && gCommand.count) {
-        switch_mmio_write32(gDsi, DSI_VIDEO_MODE_CONTROL * 4, kCommandsInVideo | kOnLine4);
+        gDsi[DSI_VIDEO_MODE_CONTROL] = kCommandsInVideo | kOnLine4;
     } else if (now == kEnabled) {
         for (unsigned i = 0; i < gCommand.count; ++i)
-            switch_mmio_write32(gDsi, DSI_WR_DATA * 4, gCommand.words[i]);
+            gDsi[DSI_WR_DATA] = gCommand.words[i];
     }
     __atomic_fetch_add(&gFrames, 1, __ATOMIC_RELEASE);
     advance(atFrameEnd(now, gCommand.count));
@@ -455,7 +455,7 @@ void stepTimerFired(timer_call_param_t, timer_call_param_t)
         return;
     bool inBlanking = false;
     if (now == kBlankCheck) {
-        gCommand.timing = switch_mmio_read32(gDc, DC_DISP_DISPLAY_DBG_TIMING * 4);
+        gCommand.timing = gDc[DC_DISP_DISPLAY_DBG_TIMING];
         inBlanking = (gCommand.timing & kDbgVBlank) != 0;
     }
     const Move move = atTimer(now, inBlanking, gCommand.deferrals);
@@ -464,14 +464,14 @@ void stepTimerFired(timer_call_param_t, timer_call_param_t)
         ++gCommand.deferrals;
         break;
     case kResetHeld:
-        gCommand.status = switch_mmio_read32(gDsi, DSI_STATUS * 4);
-        switch_mmio_write32(gDsi, DSI_INCR_SYNCPT_CNTRL * 4, kSyncptSoftReset);
+        gCommand.status = gDsi[DSI_STATUS];
+        gDsi[DSI_INCR_SYNCPT_CNTRL] = kSyncptSoftReset;
         break;
     case kResetReleased:
-        switch_mmio_write32(gDsi, DSI_INCR_SYNCPT_CNTRL * 4, 0);
+        gDsi[DSI_INCR_SYNCPT_CNTRL] = 0;
         break;
     case kDone:
-        switch_mmio_write32(gDsi, DSI_VIDEO_MODE_CONTROL * 4, 0);
+        gDsi[DSI_VIDEO_MODE_CONTROL] = 0;
         break;
     default:
         return;

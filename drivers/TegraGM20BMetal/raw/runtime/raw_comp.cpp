@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstring>
+#include "raw_follow.h"
 #include "raw_gpu.h"
 #include "raw_zeta.h"
 
@@ -118,8 +119,9 @@ Device::Backing *Device::compBacking(const Texture &m, uint32_t tag, uint32_t ki
             comp_.wanted.push_back(want);
             if (!compThread_.joinable())
                 compThread_ = std::thread([this] {
-                    pthread_set_qos_class_self_np(QOS_CLASS_USER_INITIATED, 0);
+                    pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
                     pthread_setname_np("com.brunostjohn.switch.raw.comp");
+                    followers().join();  // it binds under lock_, which the committer's render thread waits for
                     std::unique_lock<std::mutex> l(lock_);
                     for (;;) {
                         compWake_.wait(l, [&] {

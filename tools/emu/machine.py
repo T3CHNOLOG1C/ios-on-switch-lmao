@@ -16,6 +16,8 @@ class Inputs:
     regwrite: Path
     sd: Path | None
     qmp: Path
+    kernel: Path | None = None
+    icount: bool = True
 
 
 def _load(path: str, address: int) -> list[str]:
@@ -58,8 +60,17 @@ def command(run: Path, inputs: Inputs) -> list[str]:
         '-D', 'qemu-guest.log',
         '-object', 'secret,id=tegra.fuse.cache,file=fuse.bin,format=raw',
         '-global', f'driver=tegra.evp,property=cpu-reset-vector,value={IRAM_STUB:#x}',
+        '-global', 'driver=tegra.gpu,property=method-log,value=gpu-methods.raw',
+        '-global', 'driver=tegra.gpu,property=event-log,value=gpu-events.log',
     ]  # fmt: skip
     args += stage(run, inputs.package, inputs.regwrite)
+    if inputs.icount:
+        # Guest time follows executed instructions, one nanosecond each, so neither a loaded host nor TCG's own
+        # slowness can expire a driver's timeout before the work it waits for has run. With MTTCG at load ~50, and
+        # with shift=auto (guest time kept to the wall clock, so each instruction took 10-40 ns), drivers panicked on
+        # interrupts that had not been lost: kernel work at priority 92-95 filled all four cores past TegraI2C's
+        # deadline while its work loop (81) waited. shift=0 makes guest CPU time about the A57's.
+        args += ['-icount', 'shift=0']
     if inputs.sd:
         args += ['-drive', f'if=sd,index=0,format=vmdk,file={inputs.sd},snapshot=on']
     return args

@@ -320,7 +320,8 @@ class Msgbuf {
 public:
     using EventHandler = void (*)(void *context, const Event &event);
     // Ethernet header + payload, and the firmware interface it came in on (0: the station)
-    using FrameHandler = void (*)(void *context, const uint8_t *frame, size_t length, uint8_t ifidx);
+    // `kind`: the rx completion's frame type (BCM_MSGBUF_RX_FRAME_*: 802.3 for the station, 802.11 in monitor mode).
+    using FrameHandler = void (*)(void *context, const uint8_t *frame, size_t length, uint8_t ifidx, uint8_t kind);
 
     enum Flow {
         FLOW_CLOSED,

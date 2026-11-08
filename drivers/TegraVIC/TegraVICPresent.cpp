@@ -199,7 +199,7 @@ extern "C" int tegra_vic_present(const TegraVICPicture *p, task_t task, const ch
 {
     *why = nullptr;
     if (!tegra_vic_present_ready()) {
-        *why = "VIC is not published, or block-linear input is not proven (see the V4 line)";
+        *why = "VIC is not published";
         presentRefused(*why);
         return -19;
     }

@@ -1,15 +1,14 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// V4's transform probes: which OutputFlipX/FlipY/Transpose combination implements which IOSurfaceAccelerator transform,
-// how a transposed job's rectangles and output surface are given (before or after the transpose), and where a
-// destination rectangle inside a larger surface lands under each transform. Plain C, header only:
-// TegraVICSelfTest.cpp runs it on the engine at boot, and the host test (test:tegra_vic_transpose_test) runs the same
-// code on test/vic_model.h, the model of VIC 4.0's output layout fitted to the unit's V4 diag lines and to hekate's
-// rotation. The includer declares snprintf (IOKit/IOLib.h in the kernel, stdio.h on the host).
+// The transform probes the unit's boot self-test ran: which OutputFlipX/FlipY/Transpose combination implements which
+// IOSurfaceAccelerator transform, how a transposed job's rectangles and output surface are given (before or after the
+// transpose), and where a destination rectangle inside a larger surface lands under each transform. Run on
+// vic_model.h, the model of VIC 4.0's output layout fitted to the unit's diag lines and to hekate's rotation, they give
+// kTegraVICTraits (tegra_vic_transpose_test). The includer declares snprintf.
 #ifndef TEGRA_VIC_PROBE_H
 #define TEGRA_VIC_PROBE_H
 #include <stdint.h>
 #include <string.h>
-#include "TegraVICConfig.h"
+#include "../TegraVICConfig.h"
 
 #ifdef __cplusplus
 extern "C" {
