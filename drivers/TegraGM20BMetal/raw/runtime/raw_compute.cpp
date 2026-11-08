@@ -27,6 +27,8 @@ constexpr uint32_t kRootBytes = 0x800, kRootSets = 0x38, kRootPush = 0x700, kUpl
 constexpr uint32_t kPcasInvalidateSchedule = 3;
 constexpr uint32_t kInvalidateData = 1u << 4, kFlushData = 1u << 2, kInvalidateConstant = 1u << 12;
 constexpr uint32_t kEncoderWords = 1 << 12;
+// PackKernelEntry.slot of a constexpr sampler: its index in the pack's (pack/kernels.py CONSTEXPR)
+constexpr uint8_t kConstexprSampler = 0x80;
 
 // QMDV01_07 (cla1c0qmd.h) words
 constexpr uint32_t kQmdProgramOffset = 8, kQmdRasterWidth = 12, kQmdRasterHeightDepth = 13, kQmdCbufValid = 20;
@@ -227,8 +229,15 @@ bool ComputeEncoder::dispatch(const uint32_t groups[3], const uint32_t threads[3
                 return false;
             }
             at[0] |= t ? t->tic : 0;
+        } else if (e.slot & kConstexprSampler) {
+            const uint32_t index = e.slot & ~kConstexprSampler;
+            if (index >= dev_.constexprCount_) {
+                *why = "a kernel's constexpr sampler the pack holds no header of";
+                return false;
+            }
+            at[0] |= dev_.constexprTsc_[index] << 20;
         } else {
-            const Sampler *s = samplers_[e.slot];
+            const Sampler *s = e.slot < 16 ? samplers_[e.slot] : nullptr;
             at[0] |= (s ? s->tsc : dev_.neutralTsc_) << 20;
         }
     }

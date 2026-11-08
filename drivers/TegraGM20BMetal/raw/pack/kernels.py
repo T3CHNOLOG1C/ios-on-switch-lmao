@@ -1,11 +1,11 @@
 """The compute kernels of the probe's compute runs (probecompute.mm), for mkpack.py.
 
 A bucket's compute.out names each probed dispatch shape (KPROBE <i> tg=... grid=... key=<key>), the grid's width its
-own; compute.log holds nvdec's record of each dispatch (nvdec_compute.cpp, NVDEC_KERNELS): its QMD and program (K qmd=),
-the root table's push words (K push), m2v's DispatchRegion field (K region), set 0's size (K set) and what each of
-set 0's words holds (K entry). Tags (probecompute.mm): a buffer slot's bytes start 0xC0DE0000 | slot, texture slot t
-is (16 + t) x (8 + t), sampler slot s has a max LOD clamp of 1 + s / 2; a sampler of no tag is the kernel's own
-(constexpr), kept in the pack's constexpr samplers.
+own, and the shape's second dispatch the width after it (the tags bound from elsewhere). compute.log holds nvdec's
+record of each dispatch (nvdec_compute.cpp, NVDEC_KERNELS): its QMD and program (K qmd=), the root table's push words
+(K push), m2v's DispatchRegion field (K region), set 0's size (K set) and what each of set 0's words holds (K entry).
+Tags (probecompute.mm): a buffer slot's bytes start 0xC0DE0000 | slot, texture slot t is (16 + t) x (8 + t). Every
+sampler's header goes in the pack's samplers: the key holds the samplers bound, so the header is the record's own.
 """
 
 import os
@@ -40,13 +40,13 @@ def template(qmd: list[int]) -> list[int]:
     return q
 
 
-def sampler_slot(words: list[int], constexpr_tsc: list[list[int]]) -> int:
-    lod = (words[2] >> 12) & 0xFFF  # max LOD clamp, 4.8 fixed
-    if lod >= 256 and lod % 128 == 0 and (lod - 256) // 128 < 16:
-        return (lod - 256) // 128
+def sampler_slot(words: list[int], constexpr_tsc: list[list[int]], problems: list[str]) -> int:
+    """Give a sampler handle's entry slot: its header in the pack's samplers (the key holds the samplers bound)."""
     if words not in constexpr_tsc:
         constexpr_tsc.append(words)
-    return CONSTEXPR | constexpr_tsc.index(words)
+    if constexpr_tsc.index(words) >= CONSTEXPR:
+        problems.append('a sampler past the 128 an entry names')
+    return CONSTEXPR | (constexpr_tsc.index(words) & (CONSTEXPR - 1))
 
 
 def width(lines: list[str]) -> int:
@@ -64,7 +64,7 @@ def entry(f: list[str], constexpr_tsc: list[list[int]], problems: list[str]) -> 
         if w < TEXTURE_TAG[0] or h != w - TEXTURE_TAG[0] + TEXTURE_TAG[1]:
             problems.append(f'a texture of no tag ({w}x{h}) at {f[2]}')
         return {'off': int(f[2]), 'kind': TEXTURE, 'slot': w - TEXTURE_TAG[0], 'window': 0}
-    slot = sampler_slot([int(x, 16) for x in f[4:12]], constexpr_tsc)
+    slot = sampler_slot([int(x, 16) for x in f[4:12]], constexpr_tsc, problems)
     return {'off': int(f[2]), 'kind': SAMPLER, 'slot': slot, 'window': 0}
 
 
@@ -86,10 +86,6 @@ def kernel(probe: re.Match[str], lines: list[str], constexpr_tsc: list[list[int]
             k['entries'].append(entry(f, constexpr_tsc, problems))
     region = range(k['region'], k['region'] + 8) if k['region'] >= 0 else range(0)
     k['push'] = {w: v for w, v in push.items() if w not in region}
-    # m2v writes no constant push word: any other is a value the dispatch's bindings decide (a bound texture's format
-    # class, metal2vulkan bind/plan/resources.rs texel_format), which the raw path does not compute yet
-    if k['push']:
-        problems.append(f'push words the bindings decide: {sorted(k["push"])}')
     if len(k['entries']) > 16:
         problems.append(f'{len(k["entries"])} set-0 entries')
     if 'qmd' not in k:
@@ -108,13 +104,18 @@ def load(dirs: list[str], constexpr_tsc: list[list[int]]) -> tuple[list[dict], l
             probes = {int(m.group(5)): m for m in map(KPROBE.match, f) if m}
         dispatched = {width(lines): lines for lines in blocks(log)}
         for grid, probe in probes.items():
-            lines = dispatched.get(grid)
-            if not lines:
+            lines, moved = dispatched.get(grid), dispatched.get(grid + 1)
+            if not lines or not moved:
                 skipped.append((probe.group(6), 'no dispatch decoded'))
                 continue
             if probe.group(6) in seen:
                 continue
             k, problems = kernel(probe, lines, constexpr_tsc)
+            other, _ = kernel(probe, moved, list(constexpr_tsc))
+            # the second dispatch bound the same tags from other addresses, through other samplers: a program, QMD or
+            # push word that moved with them is a value the bindings decide, which the raw path does not compute
+            if any(k.get(f) != other.get(f) for f in ('prog', 'qmd', 'push', 'region', 'set_bytes', 'entries')):
+                problems.append('a program or push word the bound addresses or samplers decide')
             if problems:
                 skipped.append((k['key'], '; '.join(problems)))
                 continue

@@ -221,6 +221,13 @@ void Decoder::probeKernel(const uint32_t *q, const std::string &prog)
         return;
     std::vector<uint32_t> w(setBytes / 4);
     read(set, w.data(), setBytes);
+    // m2v writes only its layout's words of a set (NVDEC_SCRUB, the probe's): zeroed now, the next dispatch's set holds no
+    // word of this one's that its layout leaves alone
+    static const bool scrubbing = getenv("NVDEC_SCRUB") != nullptr;
+    if (scrub && scrubbing) {
+        scrub(set, setBytes);
+        scrub(root, sizeof r);
+    }
     // the set's words: a buffer descriptor (an address of tagged bytes, its range), else a texture and sampler handle (tic |
     // tsc << 20) by the header each names: a texture's size and a sampler's words
     const uint64_t ticPool = (uint64_t(reg_[1][kTicPoolA >> 2] & 0xff) << 32) | reg_[1][kTicPoolB >> 2];

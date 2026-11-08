@@ -1994,7 +1994,12 @@ static NSData *functionBitcode(NBFunction *function)
 @interface NBComputePipeline : NBObject
 @property (nonatomic) NmbComputePipeline *handle;
 @property (nonatomic) std::string journalState;
-- (void)journalDispatch:(MTLSize)grid group:(MTLSize)group threads:(bool)threads memory:(const std::string &)memory;
+- (void)journalDispatch:(MTLSize)grid
+                  group:(MTLSize)group
+                threads:(bool)threads
+                 memory:(const std::string &)memory
+               textures:(const std::string &)textures
+               samplers:(const std::string &)samplers;
 @end
 @implementation NBComputePipeline {
     std::mutex _dispatchLock;
@@ -2006,7 +2011,12 @@ static NSData *functionBitcode(NBFunction *function)
     nmb_compute_pipeline_release(_handle);
 }
 
-- (void)journalDispatch:(MTLSize)grid group:(MTLSize)group threads:(bool)threads memory:(const std::string &)memory
+- (void)journalDispatch:(MTLSize)grid
+                  group:(MTLSize)group
+                threads:(bool)threads
+                 memory:(const std::string &)memory
+               textures:(const std::string &)textures
+               samplers:(const std::string &)samplers
 {
     if (!journalOn() || _journalState.empty())
         return;
@@ -2017,7 +2027,7 @@ static NSData *functionBitcode(NBFunction *function)
         shape[3 + i] = g[i] ? (uint32_t)(n[i] % g[i]) : 0;
     {
         std::lock_guard<std::mutex> hold(_dispatchLock);
-        const auto seen = std::make_pair(shape, memory);
+        const auto seen = std::make_pair(shape, memory + "|" + textures + "|" + samplers);
         if (_dispatched.size() >= 16 || std::find(_dispatched.begin(), _dispatched.end(), seen) != _dispatched.end())
             return;
         _dispatched.push_back(seen);
@@ -2025,7 +2035,9 @@ static NSData *functionBitcode(NBFunction *function)
     char head[128];
     snprintf(head, sizeof head, "D ok=1 tg=%u,%u,%u edge=%u,%u,%u threads=%u", shape[0], shape[1], shape[2], shape[3],
              shape[4], shape[5], shape[6]);
-    journal(head + (memory.empty() ? std::string() : " tgmem=" + memory) + " | " + _journalState);
+    journal(head + (memory.empty() ? std::string() : " tgmem=" + memory) +
+            (textures.empty() ? std::string() : " tex=" + textures) +
+            (samplers.empty() ? std::string() : " smp=" + samplers) + " | " + _journalState);
 }
 
 - (NSUInteger)maxTotalThreadsPerThreadgroup
@@ -2752,6 +2764,54 @@ static void waitForResource(id resource)
     // setThreadgroupMemoryLength:'s lengths by index, rounded up to 16 as Metal takes them: a dispatch's D line names
     // them (m2v compiles each into the kernel's program)
     std::map<uint32_t, uint32_t> _threadgroupMemory;
+    // the textures bound, by index: m2v's program and push words follow their formats (texel_format), so a D line names them
+    NSMutableDictionary<NSNumber *, id<MTLTexture>> *_textures;
+    NSMutableDictionary<NSNumber *, id<MTLSamplerState>> *_samplers;  // and the samplers they are read through
+}
+
+// "<index>:<min>:<mag>:<mip>:<s>:<t>:<r>:<lodMin bits>:<lodMax bits>:<anisotropy>:<compare>:<border>:<normalized>:<average>,..."
+// of the samplers bound, the floats' bits in hex (raw/runtime/raw_compute_key.h computeSamplers)
+- (std::string)samplersText
+{
+    std::string text;
+    for (NSNumber *index in [_samplers.allKeys sortedArrayUsingSelector:@selector(compare:)]) {
+        id s = _samplers[index];
+        if (![s isKindOfClass:[NBSampler class]])
+            continue;
+        MTLSamplerDescriptor *d = ((NBSampler *)s).descriptor;
+        const float lo = d.lodMinClamp, hi = d.lodMaxClamp;
+        uint32_t loBits, hiBits;
+        memcpy(&loBits, &lo, 4);
+        memcpy(&hiBits, &hi, 4);
+        char one[192];
+        snprintf(one, sizeof one, "%s%u:%lu:%lu:%lu:%lu:%lu:%lu:%x:%x:%lu:%lu:%lu:%d:%d", text.empty() ? "" : ",",
+                 index.unsignedIntValue, (unsigned long)d.minFilter, (unsigned long)d.magFilter,
+                 (unsigned long)d.mipFilter, (unsigned long)d.sAddressMode, (unsigned long)d.tAddressMode,
+                 (unsigned long)d.rAddressMode, loBits, hiBits, (unsigned long)d.maxAnisotropy,
+                 (unsigned long)d.compareFunction, (unsigned long)d.borderColor, d.normalizedCoordinates ? 1 : 0,
+                 d.lodAverage ? 1 : 0);
+        text += one;
+    }
+    return text;
+}
+
+// "<index>:<pixelFormat>:<textureType>:<mipmapLevelCount>:<arrayLength>:<swizzle, 4 hex bytes>,..." of the
+// textures bound (the raw pack's key, raw/runtime/raw_compute_key.h computeTextures)
+- (std::string)texturesText
+{
+    std::string text;
+    for (NSNumber *index in [_textures.allKeys sortedArrayUsingSelector:@selector(compare:)]) {
+        id<MTLTexture> t = _textures[index];
+        if ([(id)t isKindOfClass:[NSNull class]])
+            continue;
+        const MTLTextureSwizzleChannels w = t.swizzle;
+        char one[96];
+        snprintf(one, sizeof one, "%s%u:%lu:%lu:%lu:%lu:%02x%02x%02x%02x", text.empty() ? "" : ",",
+                 index.unsignedIntValue, (unsigned long)t.pixelFormat, (unsigned long)t.textureType,
+                 (unsigned long)t.mipmapLevelCount, (unsigned long)t.arrayLength, w.red, w.green, w.blue, w.alpha);
+        text += one;
+    }
+    return text;
 }
 
 // "<index>:<length>,..." of the lengths set (the raw pack's key, raw/runtime/raw_compute_key.h)
@@ -2805,17 +2865,27 @@ static void waitForResource(id resource)
 - (void)setTexture:(id<MTLTexture>)t atIndex:(NSUInteger)i
 {
     [self texture:t index:i stage:0];
+    if (journalOn()) {
+        if (!_textures)
+            _textures = [NSMutableDictionary dictionary];
+        _textures[@(i)] = t ?: (id<MTLTexture>)[NSNull null];
+    }
 }
 
 - (void)setTextures:(const id<MTLTexture> __unsafe_unretained[])t withRange:(NSRange)r
 {
     for (NSUInteger k = 0; k < r.length; k++)
-        [self texture:t[k] index:r.location + k stage:0];
+        [self setTexture:t[k] atIndex:r.location + k];
 }
 
 - (void)setSamplerState:(id<MTLSamplerState>)s atIndex:(NSUInteger)i
 {
     [self sampler:s index:i stage:0];
+    if (journalOn()) {
+        if (!_samplers)
+            _samplers = [NSMutableDictionary dictionary];
+        _samplers[@(i)] = s ?: (id<MTLSamplerState>)[NSNull null];
+    }
 }
 
 - (void)setThreadgroupMemoryLength:(NSUInteger)n atIndex:(NSUInteger)i
@@ -2834,7 +2904,12 @@ static void waitForResource(id resource)
     const uint64_t s[3] = {size.width, size.height, size.depth}, g[3] = {group.width, group.height, group.depth};
     [self check:nmb_compute_dispatch(self.handle, s, g, threads) what:"dispatch"];
     if (journalOn())
-        [self.state journalDispatch:size group:group threads:threads memory:[self threadgroupMemoryText]];
+        [self.state journalDispatch:size
+                              group:group
+                            threads:threads
+                             memory:[self threadgroupMemoryText]
+                           textures:[self texturesText]
+                           samplers:[self samplersText]];
 }
 
 - (void)dispatchThreads:(MTLSize)t threadsPerThreadgroup:(MTLSize)g
@@ -2863,7 +2938,12 @@ static void waitForResource(id resource)
     [self check:nmb_compute_dispatch_indirect(self.handle, [(NBBuffer *)b handle], o, per)
            what:"dispatchThreadgroupsWithIndirectBuffer"];
     if (journalOn())
-        [self.state journalDispatch:MTLSizeMake(0, 0, 0) group:g threads:false memory:[self threadgroupMemoryText]];
+        [self.state journalDispatch:MTLSizeMake(0, 0, 0)
+                              group:g
+                            threads:false
+                             memory:[self threadgroupMemoryText]
+                           textures:[self texturesText]
+                           samplers:[self samplersText]];
 }
 
 // SPI (MTLDispatchThreadsIndirectArguments: the grid, then the threadgroup).
@@ -2946,7 +3026,7 @@ static void waitForResource(id resource)
 - (void)setSamplerStates:(const id<MTLSamplerState> __unsafe_unretained[])s withRange:(NSRange)r
 {
     for (NSUInteger k = 0; k < r.length; k++)
-        [self sampler:s[k] index:r.location + k stage:0];
+        [self setSamplerState:s[k] atIndex:r.location + k];
 }
 
 - (void)setSamplerState:(id<MTLSamplerState>)s lodMinClamp:(float)lo lodMaxClamp:(float)hi atIndex:(NSUInteger)i

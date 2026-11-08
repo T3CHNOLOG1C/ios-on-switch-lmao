@@ -128,7 +128,8 @@ int runNvk(char **argv)
                                          width:16 + t
                                         height:8 + t
                                      mipmapped:NO];
-        d.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+        d.usage = getenv("FRAME_TEXTURE_READ_ONLY") ? MTLTextureUsageShaderRead
+                                                    : MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
         id<MTLTexture> x = [dev newTextureWithDescriptor:d];
         [x replaceRegion:MTLRegionMake2D(0, 0, 16 + t, 8 + t)
              mipmapLevel:0

@@ -5,10 +5,11 @@
 // (pack/nvdec_compute.cpp, NVDEC_KERNELS): NVK's QMD, the program, and where each Metal argument lands in set 0.
 //
 // Tags: every buffer slot is setBytes of 4096 bytes whose first word is 0xC0DE0000 | slot (the range m2v gives a slot below
-// 4096 is the function's window on it); texture slot t is a (16 + t) x (8 + t) RGBA8 texture; sampler slot s has a max LOD
-// clamp of 1 + s / 2 (a sampler made before them takes NVK's sampler index 0); threadgroup memory as the line's tgmem=
-// field names it (<index>:<length>,...). One command buffer per shape, its grid (3 + i)x5x2 threadgroups for the i-th line
-// (its record names the dispatch by it). stdout: "KPROBE <i> tg=<x,y,z>
+// 4096 is the function's window on it); the line's tex= textures, each (16 + slot) x (8 + slot) in its format; its smp=
+// samplers as they are (the key holds them: the record takes their headers as its own); threadgroup memory as its tgmem=
+// field names it (<index>:<length>,...). Two command buffers per shape, their grids (3 + 2i)x5x2 and (4 + 2i)x5x2
+// threadgroups for the i-th line (its records name the dispatches by them); the second binds the same tags from buffers at
+// another address. stdout: "KPROBE <i> tg=<x,y,z>
 // grid=<x,y,z> key=<raw_compute_key.h key>" before each one is committed, "KREFUSED <i> <why>" for a shape not made.
 // Libraries: lib=<path> under PROBE_LIB_ROOT (the crawl's root), lib=data:<SHA-256> as <PROBE_DATA_LIBS>/<SHA-256>.metallib.
 // usage: probecompute <nvk dylib> <cache dir> <corpus.log>
@@ -26,7 +27,42 @@ extern "C" void pushcount_report(const char *what);
 
 namespace {
 
-constexpr uint32_t kSlots = 31, kTextures = 31, kSamplers = 16, kTagBytes = 4096;
+constexpr uint32_t kSlots = 31, kTagBytes = 4096, kBufferOffset = 256;
+
+std::vector<uint32_t> tag(uint32_t slot)
+{
+    std::vector<uint32_t> t(kTagBytes / 4);
+    t[0] = 0xC0DE0000u | slot;
+    for (uint32_t k = 1; k < t.size(); k++)
+        t[k] = 0xA0000000u | slot << 16 | k;
+    return t;
+}
+
+// The line's textures, each of its tag size: (16 + slot) x (8 + slot)
+NSArray<id<MTLTexture>> *textures(id<MTLDevice> dev, const std::vector<raw::BoundTexture> &bound, std::string &why)
+{
+    NSMutableArray<id<MTLTexture>> *out = [NSMutableArray array];
+    for (const raw::BoundTexture &b : bound) {
+        MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormat(b.pixelFormat)
+                                                                                     width:16 + b.slot
+                                                                                    height:8 + b.slot
+                                                                                 mipmapped:NO];
+        d.swizzle = MTLTextureSwizzleChannelsMake(MTLTextureSwizzle(b.swizzle[0]), MTLTextureSwizzle(b.swizzle[1]),
+                                                  MTLTextureSwizzle(b.swizzle[2]), MTLTextureSwizzle(b.swizzle[3]));
+        d.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+        id<MTLTexture> t = [dev newTextureWithDescriptor:d];
+        if (!t) {
+            d.usage = MTLTextureUsageShaderRead;
+            t = [dev newTextureWithDescriptor:d];
+        }
+        if (!t) {
+            why = "no texture of format " + std::to_string(b.pixelFormat);
+            return nil;
+        }
+        [out addObject:t];
+    }
+    return out;
+}
 
 void missing(const char *cls, const char *sel)
 {
@@ -42,7 +78,86 @@ struct Shape {
     std::string function, library, constants;
     bool specialized = false;
     std::string threadgroupMemory;  // "<index>:<length>,..." (raw_compute_key.h)
+    std::vector<raw::BoundTexture> textures;
+    std::vector<raw::BoundSampler> samplers;
 };
+
+// smp=<slot>:<min>:<mag>:<mip>:<s>:<t>:<r>:<lodMin bits>:<lodMax bits>:<anisotropy>:<compare>:<border>:<normalized>:<average>,...
+bool parseSamplers(const std::string &text, std::vector<raw::BoundSampler> &out, std::string &why)
+{
+    std::istringstream in(text);
+    std::string one;
+    while (std::getline(in, one, ',')) {
+        raw::BoundSampler b = {};
+        unsigned long long f[9];
+        unsigned slot, lo, hi;
+        int normalized, average;
+        if (sscanf(one.c_str(), "%u:%llu:%llu:%llu:%llu:%llu:%llu:%x:%x:%llu:%llu:%llu:%d:%d", &slot, &f[0], &f[1],
+                   &f[2], &f[3], &f[4], &f[5], &lo, &hi, &f[6], &f[7], &f[8], &normalized, &average) != 14) {
+            why = "an smp= field it cannot read";
+            return false;
+        }
+        b.slot = slot;
+        b.minFilter = f[0];
+        b.magFilter = f[1];
+        b.mipFilter = f[2];
+        b.sAddress = f[3];
+        b.tAddress = f[4];
+        b.rAddress = f[5];
+        b.maxAnisotropy = f[6];
+        b.compare = f[7];
+        b.border = f[8];
+        memcpy(&b.lodMin, &lo, 4);
+        memcpy(&b.lodMax, &hi, 4);
+        b.normalized = normalized;
+        b.lodAverage = average;
+        out.push_back(b);
+    }
+    return true;
+}
+
+id<MTLSamplerState> sampler(id<MTLDevice> dev, const raw::BoundSampler &b)
+{
+    MTLSamplerDescriptor *d = [MTLSamplerDescriptor new];
+    d.minFilter = MTLSamplerMinMagFilter(b.minFilter);
+    d.magFilter = MTLSamplerMinMagFilter(b.magFilter);
+    d.mipFilter = MTLSamplerMipFilter(b.mipFilter);
+    d.sAddressMode = MTLSamplerAddressMode(b.sAddress);
+    d.tAddressMode = MTLSamplerAddressMode(b.tAddress);
+    d.rAddressMode = MTLSamplerAddressMode(b.rAddress);
+    d.lodMinClamp = b.lodMin;
+    d.lodMaxClamp = b.lodMax;
+    d.maxAnisotropy = b.maxAnisotropy;
+    d.compareFunction = MTLCompareFunction(b.compare);
+    d.borderColor = MTLSamplerBorderColor(b.border);
+    d.normalizedCoordinates = b.normalized;
+    d.lodAverage = b.lodAverage;
+    return [dev newSamplerStateWithDescriptor:d];
+}
+
+// tex=<slot>:<pixelFormat>:<textureType>:<levels>:<arrayLength>:<swizzle>,... (raw_compute_key.h computeTextures)
+bool parseTextures(const std::string &text, std::vector<raw::BoundTexture> &out, std::string &why)
+{
+    std::istringstream in(text);
+    std::string one;
+    while (std::getline(in, one, ',')) {
+        raw::BoundTexture t = {};
+        unsigned slot, swizzle;
+        unsigned long long format, type, levels, array;
+        if (sscanf(one.c_str(), "%u:%llu:%llu:%llu:%llu:%x", &slot, &format, &type, &levels, &array, &swizzle) != 6) {
+            why = "a tex= field it cannot read";
+            return false;
+        }
+        if (type != MTLTextureType2D || levels != 1 || array != 1) {
+            why = "a texture of another type than a one-level 2D one";
+            return false;
+        }
+        t = {slot,   format, type,
+             levels, array,  {uint8_t(swizzle >> 24), uint8_t(swizzle >> 16), uint8_t(swizzle >> 8), uint8_t(swizzle)}};
+        out.push_back(t);
+    }
+    return true;
+}
 
 // A D line: "D ok=1 tg=x,y,z edge=a,b,c threads=t | form=... | k <name> lib=<library> [spec] <constants> | ..."; false where
 // the raw path dispatches no such shape (a grid with an edge, linked functions)
@@ -60,6 +175,14 @@ bool parse(const std::string &line, Shape &s, std::string &why)
     }
     if (const size_t at = line.find(" tgmem="); at != std::string::npos && at < line.find(" | "))
         s.threadgroupMemory = line.substr(at + 7, line.find_first_of(" |", at + 7) - at - 7);
+    if (const size_t at = line.find(" tex=");
+        at != std::string::npos && at < line.find(" | ") &&
+        !parseTextures(line.substr(at + 5, line.find_first_of(" |", at + 5) - at - 5), s.textures, why))
+        return false;
+    if (const size_t at = line.find(" smp=");
+        at != std::string::npos && at < line.find(" | ") &&
+        !parseSamplers(line.substr(at + 5, line.find_first_of(" |", at + 5) - at - 5), s.samplers, why))
+        return false;
     const size_t state = line.find(" | form=");
     const size_t k = line.find(" | k ", state);
     if (state == std::string::npos || k == std::string::npos) {
@@ -174,22 +297,12 @@ int main(int argc, char **argv)
             fprintf(stderr, "NO DEVICE: %s\n", nmb_last_error());
             return 1;
         }
-        id<MTLSamplerState> first = [dev newSamplerStateWithDescriptor:[MTLSamplerDescriptor new]];
-        (void)first;
-        NSMutableArray<id<MTLSamplerState>> *samplers = [NSMutableArray array];
-        for (uint32_t s = 0; s < kSamplers; s++) {
-            MTLSamplerDescriptor *d = [MTLSamplerDescriptor new];
-            d.lodMaxClamp = 1 + s / 2.0f;
-            [samplers addObject:[dev newSamplerStateWithDescriptor:d]];
-        }
-        NSMutableArray<id<MTLTexture>> *textures = [NSMutableArray array];
-        for (uint32_t t = 0; t < kTextures; t++) {
-            MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
-                                                                                         width:16 + t
-                                                                                        height:8 + t
-                                                                                     mipmapped:NO];
-            d.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
-            [textures addObject:[dev newTextureWithDescriptor:d]];
+        // the second dispatch's buffers lie elsewhere: each slot's tagged bytes 256 bytes into a buffer of its own
+        NSMutableArray<id<MTLBuffer>> *buffers = [NSMutableArray array];
+        for (uint32_t slot = 0; slot < kSlots; slot++) {
+            id<MTLBuffer> b = [dev newBufferWithLength:kBufferOffset + kTagBytes options:MTLResourceStorageModeShared];
+            memcpy(static_cast<uint8_t *>(b.contents) + kBufferOffset, tag(slot).data(), kTagBytes);
+            [buffers addObject:b];
         }
         id<MTLCommandQueue> queue = [dev newCommandQueue];
         NSString *text = [NSString stringWithContentsOfFile:@(argv[3]) encoding:NSUTF8StringEncoding error:nil];
@@ -230,44 +343,55 @@ int main(int argc, char **argv)
                 refused++;
                 continue;
             }
-            const std::string key = raw::computeKey(air[s.function], s.constants, s.maxThreads, s.multipleOfWidth,
-                                                    s.threads, s.threadgroupMemory);
+            const std::string key =
+                raw::computeKey(air[s.function], s.constants, s.maxThreads, s.multipleOfWidth, s.threads,
+                                s.threadgroupMemory, raw::computeTextures(s.textures.data(), s.textures.size()),
+                                raw::computeSamplers(s.samplers.data(), s.samplers.size()));
             if (seen[key])
                 continue;
             seen[key] = true;
-            id<MTLCommandBuffer> cb = [queue commandBuffer];
-            id<MTLComputeCommandEncoder> enc = [cb computeCommandEncoder];
-            [enc setComputePipelineState:ps];
-            std::vector<uint32_t> tag(kTagBytes / 4);
-            for (uint32_t slot = 0; slot < kSlots; slot++) {
-                tag[0] = 0xC0DE0000u | slot;
-                for (uint32_t k = 1; k < tag.size(); k++)
-                    tag[k] = 0xA0000000u | slot << 16 | k;
-                [enc setBytes:tag.data() length:kTagBytes atIndex:slot];
+            NSArray<id<MTLTexture>> *bound = textures(dev, s.textures, why);
+            if (!bound) {
+                printf("KREFUSED %u %s\n", i, why.c_str());
+                refused++;
+                continue;
             }
-            for (uint32_t t = 0; t < kTextures; t++)
-                [enc setTexture:textures[t] atIndex:t];
-            for (uint32_t t = 0; t < kSamplers; t++)
-                [enc setSamplerState:samplers[t] atIndex:t];
-            std::istringstream memory(s.threadgroupMemory);
-            std::string pair;
-            while (std::getline(memory, pair, ','))
-                [enc setThreadgroupMemoryLength:strtoul(pair.c_str() + pair.find(':') + 1, nullptr, 10)
-                                        atIndex:strtoul(pair.c_str(), nullptr, 10)];
-            const uint32_t grid[3] = {3 + i, 5, 2};
-            [enc dispatchThreadgroups:MTLSizeMake(grid[0], grid[1], grid[2])
-                threadsPerThreadgroup:MTLSizeMake(s.threads[0], s.threads[1], s.threads[2])];
-            [enc endEncoding];
-            printf("KPROBE %u tg=%u,%u,%u grid=%u,%u,%u key=%s\n", i, s.threads[0], s.threads[1], s.threads[2], grid[0],
-                   grid[1], grid[2], key.c_str());
-            fflush(stdout);
-            [cb commit];
-            [cb waitUntilCompleted];
-            if (cb.error) {
-                failed++;
-                printf("KFAILED %u %s\n", i, cb.error.localizedDescription.UTF8String);
-            } else {
-                made++;
+            // twice: the second with the buffers elsewhere, so kernels.py keeps only what their addresses do not move
+            for (uint32_t v = 0; v < 2; v++) {
+                id<MTLCommandBuffer> cb = [queue commandBuffer];
+                id<MTLComputeCommandEncoder> enc = [cb computeCommandEncoder];
+                [enc setComputePipelineState:ps];
+                for (uint32_t slot = 0; slot < kSlots; slot++) {
+                    if (v)
+                        [enc setBuffer:buffers[slot] offset:kBufferOffset atIndex:slot];
+                    else
+                        [enc setBytes:tag(slot).data() length:kTagBytes atIndex:slot];
+                }
+                for (NSUInteger t = 0; t < bound.count; t++)
+                    [enc setTexture:bound[t] atIndex:s.textures[t].slot];
+                for (const raw::BoundSampler &b : s.samplers)
+                    [enc setSamplerState:sampler(dev, b) atIndex:b.slot];
+                std::istringstream memory(s.threadgroupMemory);
+                std::string pair;
+                while (std::getline(memory, pair, ','))
+                    [enc setThreadgroupMemoryLength:strtoul(pair.c_str() + pair.find(':') + 1, nullptr, 10)
+                                            atIndex:strtoul(pair.c_str(), nullptr, 10)];
+                const uint32_t grid[3] = {3 + 2 * i + v, 5, 2};
+                [enc dispatchThreadgroups:MTLSizeMake(grid[0], grid[1], grid[2])
+                    threadsPerThreadgroup:MTLSizeMake(s.threads[0], s.threads[1], s.threads[2])];
+                [enc endEncoding];
+                if (!v)
+                    printf("KPROBE %u tg=%u,%u,%u grid=%u,%u,%u key=%s\n", i, s.threads[0], s.threads[1], s.threads[2],
+                           grid[0], grid[1], grid[2], key.c_str());
+                fflush(stdout);
+                [cb commit];
+                [cb waitUntilCompleted];
+                if (cb.error) {
+                    failed++;
+                    printf("KFAILED %u %s\n", i, cb.error.localizedDescription.UTF8String);
+                } else if (v) {
+                    made++;
+                }
             }
         }
         fprintf(stderr, "probecompute: %u shapes dispatched, %u refused, %u failed\n", made, refused, failed);
