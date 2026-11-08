@@ -36,7 +36,7 @@ void TegraDisplayColor::free()
     lock = nullptr;
 }
 
-void TegraDisplayColor::attach(volatile uint32_t *registers)
+void TegraDisplayColor::attach(SwitchMMIOWords registers)
 {
     colorControl = registers[kDcDispColorControl] & ~kCmuEnable;
     const IOInterruptState state = IOSimpleLockLockDisableInterrupt(lock);
@@ -51,7 +51,7 @@ void TegraDisplayColor::detach()
     const IOInterruptState state = IOSimpleLockLockDisableInterrupt(lock);
     if (dc && hwEnabled)
         writeEnable(false);
-    dc = nullptr;
+    dc = SwitchMMIOWords();
     activeValid = hwEnabled = false;
     const bool held = holding;
     holding = false;
@@ -73,7 +73,7 @@ void TegraDisplayColor::commit()
         build(snapshot, tables);
         state = IOSimpleLockLockDisableInterrupt(lock);
         const bool current = seen == generation;
-        const bool hold = current && dc != nullptr && !holding;
+        const bool hold = current && static_cast<bool>(dc) && !holding;
         if (current) {
             pending = tables;
             pendingDirty = true;
@@ -305,7 +305,7 @@ void TegraDisplayColor::frameEndAction(bool mayRequest)
     const IOInterruptState state = IOSimpleLockLockDisableInterrupt(lock);
     const bool want = pending.enabled;
     const bool ready = !pendingDirty && activeValid;
-    const bool attached = dc != nullptr;
+    const bool attached = static_cast<bool>(dc);
     const uint32_t reasons = pending.reasons;
     const bool settled = !pendingDirty && want == hwEnabled;
     const bool release = holding && settled;
@@ -345,7 +345,7 @@ void TegraDisplayColor::restoreAfterPowerUp()
     IOSimpleLockUnlockEnableInterrupt(lock, state);
 }
 
-void TegraDisplayColor::bypassForPanic(volatile uint32_t *registers)
+void TegraDisplayColor::bypassForPanic(SwitchMMIOWords registers)
 {
     registers[kDcDispColorControl] = registers[kDcDispColorControl] & ~kCmuEnable;
 }

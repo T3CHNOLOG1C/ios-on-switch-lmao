@@ -431,13 +431,7 @@ extern "C" void nvxnu_dcache_clean_inval_pa(nvxnu_u64 pa, nvxnu_u64 size)
 // One barrier for the whole list: a pair per page is ~1800 barriers for a 3.6 MB import.
 extern "C" void nvxnu_dcache_clean_inval_pages(const nvxnu_u64 *pas, nvxnu_u32 count)
 {
-	for (nvxnu_u32 i = 0; i < count; i++) {
-		if (switch_dma_pa_managed(pas[i])) {
-			switch_dcache_phys_lines(SWITCH_DCACHE_CLEAN_INVALIDATE,
-						 pas[i] & ~SWITCH_HW_PAGE_MASK,
-						 SWITCH_HW_PAGE_SIZE);
-		}
-	}
+	switch_dcache_hw_pages(SWITCH_DCACHE_CLEAN_INVALIDATE, pas, count);
 	switch_dcache_sync();
 }
 

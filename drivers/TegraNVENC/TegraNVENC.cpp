@@ -113,9 +113,8 @@ constexpr uint32_t kInFlight = 4, kSetupSlots = 8, kSetupSlotBytes = TEGRA_NVENC
 constexpr uint32_t kJobBoundUs = 500000, kWaitBoundUs = kInFlight * kJobBoundUs;
 IOLock *gEngineLock;
 uint32_t gSyncpt, gBase, gIssued;  // job n's fence is gBase + n
-bool gUp, gWedged, gSuspended, gPublished;
+bool gUp, gWedged, gSuspended;
 switch_dma_buffer gSetup, gSink;  // setup slots and the scratch buffer, never mapped into a client
-const TegraNVENCProven gProven = {TEGRA_NVENC_LAYOUT_TILED16, TEGRA_NVENC_CHROMA_OFFSET, 1};
 
 const char *falconState()
 {
@@ -133,10 +132,10 @@ const char *falconRunState(uint32_t cpuctl)
 // A falcon that did not finish, for its one line (nvgpu gk20a_falcon_dump_stats): CPUCTL (bit 4 halted, bit 5
 // stopped, i.e. waiting for work), IDLESTATE (bit 0 the falcon, bits 1.. engine units busy), interrupts, mailboxes,
 // the exception register, the falcon's DMA queue and its external-error capture, the OS's version word, the THI
-// interrupt status, the last branch targets in the trace buffer (newest first), and with `debugger`, PC and SP read three
-// times through the in-circuit debugger (the same PC three times: a tight wait loop or a stall; different: still
-// running code). The debugger is only used on a falcon that is about to be reset or the system with it.
-const char *falconDump(bool debugger)
+// interrupt status, the last branch targets in the trace buffer (newest first), and PC and SP read three times through
+// the in-circuit debugger (the same PC three times: a tight wait loop or a stall; different: still running code). The
+// debugger is only used on a falcon whose fault is about to panic the system.
+const char *falconDump()
 {
     static char text[512];
     const uint32_t cpuctl = switch_mmio_read32(gNvenc, SWITCH_FALCON_CPUCTL);
@@ -157,9 +156,8 @@ const char *falconDump(bool debugger)
         n += snprintf(text + n, sizeof(text) - static_cast<size_t>(n), " %#x",
                       switch_mmio_read32(gNvenc, SWITCH_FALCON_TRACEPC) & 0xffffff);
     }
-    if (debugger)
-        n += snprintf(text + n, sizeof(text) - static_cast<size_t>(n), " PC/SP");
-    for (int i = 0; debugger && i < 3; i++) {
+    n += snprintf(text + n, sizeof(text) - static_cast<size_t>(n), " PC/SP");
+    for (int i = 0; i < 3; i++) {
         switch_mmio_write32(gNvenc, SWITCH_FALCON_ICD_CMD, ICD_RREG | 21u << 8);
         const uint32_t pc = switch_mmio_read32(gNvenc, SWITCH_FALCON_ICD_RDATA);
         switch_mmio_write32(gNvenc, SWITCH_FALCON_ICD_CMD, ICD_RREG | 20u << 8);
@@ -299,21 +297,13 @@ bool proofOfLife(uint64_t *us, uint32_t *id, uint32_t *from)
 void engineSuspend();
 void engineResume();
 
-// A fence past its bound. Once published this is a hardware fault: one-line panic. Before that the engine is refused
-// and the bring-up ends with its FAIL line.
-void timedOut(uint32_t fence)
+// A fence past its bound is a hardware fault: no job runs before the service is published.
+[[noreturn]] void timedOut(uint32_t fence)
 {
     char host[200];
     tegra_host1x_describe(host, sizeof(host));
-    if (gPublished) {
-        panic("TegraNVENC: job fence %u not reached in %u ms (syncpoint %u at %u, GP timer bound passed); %s; %s",
-              fence, kWaitBoundUs / 1000, gSyncpt, tegra_host1x_syncpt_read(gSyncpt), falconDump(true), host);
-    }
-    if (gWedged)
-        return;
-    gWedged = true;
-    IOLog("TegraNVENC: job fence %u not reached in %u ms (syncpoint %u at %u); %s; %s\n", fence, kWaitBoundUs / 1000,
-          gSyncpt, tegra_host1x_syncpt_read(gSyncpt), falconDump(true), host);
+    panic("TegraNVENC: job fence %u not reached in %u ms (syncpoint %u at %u, GP timer bound passed); %s; %s", fence,
+          kWaitBoundUs / 1000, gSyncpt, tegra_host1x_syncpt_read(gSyncpt), falconDump(), host);
 }
 
 // Back to reset with the clock off after a failed bring-up: nothing will use the engine this boot.
@@ -382,7 +372,6 @@ void bringUp(void *, wait_result_t)
     gBase = tegra_host1x_syncpt_read(id);
     gUp = true;
     tegra_host1x_set_sleep_client(engineSuspend, engineResume);
-    gPublished = true;
     tegra_nvenc_publish();
 }
 }  // namespace
@@ -390,11 +379,6 @@ void bringUp(void *, wait_result_t)
 extern "C" bool tegra_nvenc_ready(void)
 {
     return gUp && !gWedged;
-}
-
-extern "C" const TegraNVENCProven *tegra_nvenc_proven(void)
-{
-    return &gProven;
 }
 
 namespace {
@@ -430,7 +414,7 @@ int run(const TegraNVENCSubmit *s, TegraNVENCResolve resolve, void *context, uin
             *why = "clean range";
             return -22;
         }
-        tegra_nvenc_cache_clean(b.va + r->offset, r->length);
+        switch_dcache_clean(b.va + r->offset, r->length);
     }
 
     // SETCLASS; the submit's methods, SET_APPLICATION_ID first (the checker requires it: the OS selects the app before
@@ -469,7 +453,7 @@ int run(const TegraNVENCSubmit *s, TegraNVENCResolve resolve, void *context, uin
     const uint32_t slot = job % kSetupSlots;
     uint8_t *setup = gSetup.va + static_cast<size_t>(slot) * kSetupSlotBytes;
     memcpy(setup, s->setup, s->setup_bytes);
-    tegra_nvenc_cache_clean(setup, s->setup_bytes);
+    switch_dcache_clean(setup, s->setup_bytes);
     for (uint32_t i = 0; i < s->entry_count; i++) {
         const TegraNVENCEntry *e = &s->entries[i];
         if (i == s->entry_count - 1) {  // EXECUTE, last by the check
@@ -501,11 +485,6 @@ extern "C" int tegra_nvenc_run(const TegraNVENCSubmit *s, TegraNVENCResolve reso
                                const char **why)
 {
     return run(s, resolve, context, fence, why);
-}
-
-extern "C" const char *tegra_nvenc_falcon_dump(void)
-{
-    return falconDump(false);
 }
 
 extern "C" int tegra_nvenc_wait(uint32_t fence)

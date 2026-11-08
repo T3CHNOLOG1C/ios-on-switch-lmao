@@ -36,6 +36,7 @@ kernel_driver(
         "drivers/SwitchSuspend",
         "drivers/TegraAPBDMA",
         "kits/SwitchDMA",
+        "kits/SwitchDT",
         "kits/SwitchMMIO",
         "kits/SwitchRefusal",
     ],
