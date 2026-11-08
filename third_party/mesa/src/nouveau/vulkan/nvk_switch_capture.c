@@ -162,9 +162,23 @@ switch_nvk_program_freed(struct nvk_device *dev,
    simple_mtx_unlock(&p->lock);
 }
 
+/* A constant buffer as the raw path's pack names it (raw_pack.h PackCbufType):
+ * the nvk_cbuf_type, and a UBO descriptor's set-0 offset / 16 in bits 3-7; a
+ * UBO elsewhere is 7, which no raw draw binds.
+ */
+static uint8_t
+switch_nvk_cbuf_code(const struct nvk_cbuf *cbuf)
+{
+   if (cbuf->type != NVK_CBUF_TYPE_UBO_DESC)
+      return cbuf->type;
+   if (cbuf->desc_set != 0 || cbuf->desc_offset % 16 || cbuf->desc_offset >= 512)
+      return 7;
+   return NVK_CBUF_TYPE_UBO_DESC | (cbuf->desc_offset / 16) << 3;
+}
+
 /* The graphics program uploaded at `program`, a SET_PIPELINE_PROGRAM offset
  * (pre-Volta: from the shader heap's base): its shader header, code and
- * shader data as uploaded, and its constant buffers' nvk_cbuf_type. The
+ * shader data as uploaded, and its constant buffers' switch_nvk_cbuf_code. The
  * pointers live as long as the shader (the pipelines that hold it).
  */
 SWITCH_EXPORT bool
@@ -193,7 +207,7 @@ switch_nvk_capture_program(uint64_t command_buffer, uint32_t program,
       *data_bytes = shader->data_size;
       *cbuf_count = MIN2(shader->cbuf_map.cbuf_count, 16);
       for (uint32_t c = 0; c < *cbuf_count; c++)
-         cbuf_types[c] = shader->cbuf_map.cbufs[c].type;
+         cbuf_types[c] = switch_nvk_cbuf_code(&shader->cbuf_map.cbufs[c]);
    }
    simple_mtx_unlock(&p->lock);
    return shader != NULL;

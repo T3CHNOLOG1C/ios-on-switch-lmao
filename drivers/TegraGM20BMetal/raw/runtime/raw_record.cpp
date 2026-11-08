@@ -16,7 +16,6 @@ constexpr uint32_t kProgramVertex = 0x2044, kProgramPixel = 0x2144;
 constexpr uint32_t kInterlockControl = 0x1224;  // SET_PIXEL_SHADER_INTERLOCK_CONTROL
 constexpr uint32_t kTextureType3D = 2;          // TEXHEAD's TEXTURE_TYPE (word 4 bits 26:23)
 constexpr uint32_t kTagBuffer = 0xC0DE;         // pack/probe.mm's payload tag
-constexpr uint8_t kCbufRoot = 1, kCbufShaderData = 2, kCbufSet = 3;
 
 std::string hex(uint64_t v)
 {
@@ -95,15 +94,39 @@ bool skipReason(const nvdec::ProbeSubmission &s, std::string &why)
 bool rawBindable(const CapturedProgram &p)
 {
     const std::vector<uint8_t> &t = p.cbufTypes;
-    if (t.empty() || t[0] != kCbufRoot)
+    if (t.empty() || t[0] != CbufRoot)
         return false;
     bool data = false, set = false;
+    uint32_t ubos = 0;
     for (size_t i = 1; i < t.size(); i++) {
-        if ((t[i] != kCbufShaderData && t[i] != kCbufSet) || (t[i] == kCbufShaderData ? data : set))
+        if (cbufKind(t[i]) == CbufUbo) {
+            const uint32_t bit = 1u << (cbufUboOffset(t[i]) / 16);
+            if (ubos & bit)
+                return false;
+            ubos |= bit;
+            continue;
+        }
+        if ((t[i] != CbufShaderData && t[i] != CbufSet) || (t[i] == CbufShaderData ? data : set))
             return false;
-        (t[i] == kCbufShaderData ? data : set) = true;
+        (t[i] == CbufShaderData ? data : set) = true;
     }
     return data == !p.data.empty();
+}
+
+// mkpack.py pipeline: every uniform buffer a program reads as a constant buffer is a uniform entry of set 0
+bool ubosNamed(const CapturedProgram &p, const PackPipeline &pipe)
+{
+    for (size_t i = 1; i < p.cbufTypes.size(); i++) {
+        if (cbufKind(p.cbufTypes[i]) != CbufUbo)
+            continue;
+        bool named = false;
+        for (uint32_t k = 0; k < pipe.entries && !named; k++)
+            named = pipe.entry[k].kind == EntryUbo && !bufferStorage(pipe.entry[k]) &&
+                    pipe.entry[k].offset == cbufUboOffset(p.cbufTypes[i]);
+        if (!named)
+            return false;
+    }
+    return true;
 }
 
 std::string cbufList(const std::vector<uint8_t> &types)
@@ -428,7 +451,7 @@ bool makeRecord(const ProbeRuns &runs, const PackRules &rules, const ProgramLook
         }
         if (!rawBindable(*p)) {
             why = "a program reads constant buffers " + cbufList(p->cbufTypes) +
-                  ", the raw path binds root, shader data and set 0";
+                  ", the raw path binds root, shader data, set 0 and its uniform buffers";
             return false;
         }
         out.programs[k] = *p;
@@ -451,6 +474,10 @@ bool makeRecord(const ProbeRuns &runs, const PackRules &rules, const ProgramLook
             return false;
         if (entry.kind == EntryFetch)
             p.flags |= PipelineFetches;
+    }
+    if (!ubosNamed(out.programs[0], p) || !ubosNamed(out.programs[1], p)) {
+        why = "a program reads a set-0 uniform buffer the layout does not name";
+        return false;
     }
     if (!vertexStream(r, p.vertexSlot, p.vertexStride, why))
         return false;

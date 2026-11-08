@@ -172,19 +172,27 @@ def default_forms(simple: list[dict], storage: set[str]) -> tuple[list[dict], li
     return kept, aside
 
 
-# NVK's cbuf types (nvk_shader.h nvk_cbuf_type) a raw draw binds: the root table at slot 0, then NAK's shader data and
-# set 0 at the slots the program names (raw_gpu.cpp)
-CBUF_ROOT, CBUF_SHADER_DATA, CBUF_SET = 1, 2, 3
+# NVK's cbuf types (nvk_shader.h nvk_cbuf_type) a raw draw binds: the root table at slot 0, then NAK's shader data, set 0,
+# and set 0's uniform buffers (mkprograms.py cbuf_code: the type in bits 0-2, the descriptor's offset / 16 above) at the
+# slots the program names (raw_gpu.cpp)
+CBUF_ROOT, CBUF_SHADER_DATA, CBUF_SET, CBUF_UBO = 1, 2, 3, 5
+
+
+def ubo_offsets(program: dict) -> list[int]:
+    """The set-0 byte offsets of the uniform buffers the program reads as constant buffers."""
+    return [(c >> 3) * 16 for c in program['cbufs'][1:] if c & 7 == CBUF_UBO]
 
 
 def raw_bindable(program: dict) -> bool:
     cbufs = program['cbufs']
-    rest = cbufs[1:]
+    rest = [c for c in cbufs[1:] if c & 7 != CBUF_UBO]
+    offsets = ubo_offsets(program)
     return (
         bool(cbufs)
         and cbufs[0] == CBUF_ROOT
         and set(rest) <= {CBUF_SHADER_DATA, CBUF_SET}
         and len(set(rest)) == len(rest)
+        and len(set(offsets)) == len(offsets)
         and (CBUF_SHADER_DATA in rest) == bool(program['data'])
     )
 
@@ -200,7 +208,11 @@ def raw_bound(simple: list[dict], programs: dict[str, dict]) -> tuple[list[dict]
         ]
         if unbound:
             aside.append(
-                (p, f'a program reads constant buffers {unbound[0]}, the raw path binds root, shader data and set 0')
+                (
+                    p,
+                    f'a program reads constant buffers {unbound[0]}, the raw path binds root, shader data, set 0 and '
+                    'its uniform buffers',
+                )
             )
         else:
             kept.append(p)
@@ -216,7 +228,8 @@ EXPECTED_SKIPS = (
     'storage form',
     'warm-up state',
     'a sampler m2v derives from a bound one',
-    'the raw path binds root, shader data and set 0',
+    'the raw path binds root, shader data, set 0 and its uniform buffers',
+    'as a uniform buffer the layout does not name',
     'the raw path has no 3D textures',
 )
 
@@ -464,6 +477,7 @@ def vertex_streams(r: dict, problems: list[str]) -> list[dict]:
 
 def pipeline(
     p: dict,
+    programs: dict[str, dict],
     varying: list[int],
     prog_index: dict[str, int],
     sizes: dict[tuple[int, int], list[int]],
@@ -491,6 +505,11 @@ def pipeline(
         for e in ents
     ]
     rec['entries'] = entries
+    uniform = {e['off'] for e in entries if e['kind'] == 'ubo' and not e['ssbo']}
+    for stage, pid in ((1, r['prog'][1][0]), (5, r['prog'][5][0])):
+        for offset in ubo_offsets(programs[pid]):
+            if offset not in uniform:
+                problems.append(f'stage {stage} reads set 0 at {offset} as a uniform buffer the layout does not name')
     rec['vbs'] = vertex_streams(r, problems)
     rec['fetch'] = any(e.get('tex', [None])[0] == 'fetch' for e in entries if e['kind'] == 'handle')
     rec['clears'] = len(p['clears'])
@@ -537,7 +556,7 @@ def main() -> None:
     # pipelines
     pipes, constexpr_tsc = [], []
     for p in simple:
-        rec = pipeline(p, varying, prog_index, sizes, constexpr_tsc)
+        rec = pipeline(p, programs, varying, prog_index, sizes, constexpr_tsc)
         if rec['problems']:  # m2v draws it (RawMetal.mm: a state not in the pack goes there)
             skipped.append((p, '; '.join(rec['problems'])))
             continue

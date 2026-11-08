@@ -2788,7 +2788,7 @@ static id<MTLSamplerState> clampedSampler(id<MTLSamplerState> s, float lodMin, f
     (void)stages;
 }
 
-// A barrier on some resources is the scope barrier over all of them
+// A barrier on some resources is the scope barrier over all of them (iOS's texture scope covers render attachments)
 - (void)memoryBarrierWithResources:(const id<MTLResource> __unsafe_unretained[])resources
                              count:(NSUInteger)count
                        afterStages:(MTLRenderStages)after
