@@ -112,8 +112,10 @@ def load(dirs: list[str], constexpr_tsc: list[list[int]]) -> tuple[list[dict], l
                 continue
             if probe.group(6) in seen:
                 continue
-            k, problems = kernel(probe, lines, constexpr_tsc)
-            other, _ = kernel(probe, moved, list(constexpr_tsc))
+            # a left-out kernel's samplers stay out of the pack's
+            samplers = list(constexpr_tsc)
+            k, problems = kernel(probe, lines, samplers)
+            other, _ = kernel(probe, moved, list(samplers))
             # the second dispatch bound the same tags from other addresses, through other samplers: a program, QMD or
             # push word that moved with them is a value the bindings decide, which the raw path does not compute
             if any(k.get(f) != other.get(f) for f in ('prog', 'qmd', 'push', 'region', 'set_bytes', 'entries')):
@@ -121,6 +123,7 @@ def load(dirs: list[str], constexpr_tsc: list[list[int]]) -> tuple[list[dict], l
             if problems:
                 skipped.append((k['key'], '; '.join(problems)))
                 continue
+            constexpr_tsc[:] = samplers
             seen.add(k['key'])
             kernels.append(k)
     return kernels, skipped
