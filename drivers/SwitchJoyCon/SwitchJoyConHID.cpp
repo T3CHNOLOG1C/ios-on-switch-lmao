@@ -85,7 +85,6 @@
 #include <libkern/c++/OSDictionary.h>
 #include <libkern/c++/OSNumber.h>
 #include <libkern/c++/OSString.h>
-#include <mach/kmod.h>
 #include <pexpert/pexpert.h>
 #include <IOKit/IOUserClient.h>
 #include <sys/param.h>
@@ -94,7 +93,7 @@
 #include "SwitchJoyConSession.h"
 #include "../SwitchSuspend/SwitchWake.h"
 
-extern kmod_info_t g_kernel_kmod_info;
+extern "C" OSReturn switch_kernel_classes(void (*initialize)(void));
 extern "C" void switch_joycon_hid_static_init(void) __asm__("__GLOBAL__sub_I_SwitchJoyConHID.cpp");
 
 namespace {
@@ -590,11 +589,7 @@ void switch_joycon_hid_prepare()
         const OSReturn loaded = OSKextLoadKextWithIdentifier("com.apple.iokit.IOHIDFamily");
         if (loaded != kOSReturnSuccess)
             panic("SwitchJoyCon: loading com.apple.iokit.IOHIDFamily failed: %#x", loaded);
-        void *handle = OSMetaClass::preModLoad(g_kernel_kmod_info.name);
-        if (!handle)
-            panic("SwitchJoyCon: OSMetaClass::preModLoad failed");
-        switch_joycon_hid_static_init();
-        const OSReturn registered = OSMetaClass::postModLoad(handle);
+        const OSReturn registered = switch_kernel_classes(switch_joycon_hid_static_init);
         if (registered != kOSReturnSuccess)
             panic("SwitchJoyCon: registering SwitchJoyConDevice failed: %#x", registered);
 

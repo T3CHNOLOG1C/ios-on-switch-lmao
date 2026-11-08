@@ -16,15 +16,21 @@
 #include <kern/task.h>
 #include <sys/proc.h>
 #include <pexpert/pexpert.h>
-#include <mach/kmod.h>
 #include <machine/machine_routines.h>
 #include "OriginalLegacyFramebufferABI.h"
 #include "../SwitchDT/SwitchDTProperty.h"
-extern "C" kmod_info_t g_kernel_kmod_info;
+extern "C" OSReturn switch_kernel_classes(void (*initialize)(void));
 extern "C" void native_legacy_display_static_init(void) __asm__("__GLOBAL__sub_I_NativeLegacyDisplay.cpp");
 extern "C" IOService *native_legacy_display_allocate(void);
 extern "C" void native_gop_presenter_static_init(void) __asm__("__GLOBAL__sub_I_NativeGOPPresenter.cpp");
 extern "C" IOService *native_gop_presenter_create(void);
+
+static void native_legacy_static_init(void)
+{
+    native_legacy_display_static_init();
+    native_gop_presenter_static_init();
+}
+
 static IOService *pendingLegacyDisplay;
 static IOService *activeGOPNub;
 // GPU hand-off presenter: never attached, so the display driver copies every frame itself.
@@ -856,14 +862,7 @@ void native_legacy_display_probe(void)
     if (native_legacy_stage)
         return;
     native_legacy_stage = 1;
-    void *handle = OSMetaClass::preModLoad(g_kernel_kmod_info.name);
-    if (!handle) {
-        native_legacy_display_checkpoint();
-        return;
-    }
-    native_legacy_display_static_init();
-    native_gop_presenter_static_init();
-    native_legacy_meta_status = OSMetaClass::postModLoad(handle);
+    native_legacy_meta_status = switch_kernel_classes(native_legacy_static_init);
     if (native_legacy_meta_status) {
         native_legacy_display_checkpoint();
         return;
