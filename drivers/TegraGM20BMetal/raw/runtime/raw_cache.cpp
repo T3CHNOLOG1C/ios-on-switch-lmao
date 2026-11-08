@@ -347,6 +347,8 @@ bool RecordCache::store(const CacheKey &k, const RuntimeRecord *record, const st
         return false;
     const std::string bytes = encodeEntry(k, record, refusal), final = path(k);
     std::lock_guard<std::mutex> l(lock_);
+    if (cap_ && bytes.size() > cap_ / 4 * 3)
+        return false;
     if (cap_ && bytes_ + bytes.size() > cap_)
         evict(bytes.size());
     const std::string temporary = dir_ + "/" + std::to_string(getpid()) + "-" + std::to_string(serial++) + ".tmp";
