@@ -3,8 +3,10 @@
 // 4:4:4 surface ('_RB4': green codes in plane 0, the blue and red pairs in plane 1), drawn through the facade over the mock GPU
 // whose copy engine nvdec runs into host memory (NVDEC_WRITETHROUGH). The command buffer that samples it must stay on the raw
 // path (the rates line: c=1, m2v=0), and the image the raw path samples must hold, texel for texel, what Metal reads of the
-// format (m2v ycbcr.rs, "Codes"): red Cr, green Y, blue Cb, alpha 255, at odd sizes and padded rows.
-// usage: planarframe <pack> <cache> <nvk host dylib>
+// format (m2v ycbcr.rs, "Codes"): red Cr, green Y, blue Cb, alpha 255, at odd sizes and padded rows. The raw path converts the
+// image when a draw's state samples the texture, so the pass draws once with each of the corpus's first BGRA8 states in the
+// pack, the texture at every fragment slot, until one samples it.
+// usage: planarframe <pack> <cache> <nvk host dylib> <QuartzCore default.metallib> <corpus.log>
 #import <Foundation/Foundation.h>
 #import <IOSurface/IOSurface.h>
 #import <Metal/Metal.h>
@@ -12,6 +14,7 @@
 #include "../runtime/RawMetal.h"
 #include "NativeBridgeMetalFrontend.h"
 #include "bridge/NativeMetalObjects.h"
+#include "state_desc.h"
 
 static void missing(const char *, const char *)
 {}
@@ -48,11 +51,12 @@ static IOSurfaceRef planarSurface(uint32_t w, uint32_t h, uint32_t lumaRow, uint
 int main(int argc, char **argv)
 {
     @autoreleasepool {
-        if (argc < 4) {
-            fprintf(stderr, "usage: planarframe <pack> <cache> <nvk dylib>\n");
+        if (argc < 6) {
+            fprintf(stderr, "usage: planarframe <pack> <cache> <nvk dylib> <default.metallib> <corpus.log>\n");
             return 2;
         }
         setenv("NMB_DEVICE_BASE_NSOBJECT", "1", 1);
+        setenv("NVDEC_WRITETHROUGH", "1", 0);
         id<MTLDevice> m2v = native_bridge_metal_open(argv[3], argv[2], 0, missing);
         NSString *why = nil;
         id<MTLDevice> dev = m2v ? raw_metal_device_open(argv[1], 0, m2v, &why) : nil;
@@ -61,6 +65,18 @@ int main(int argc, char **argv)
             return 1;
         }
         id<MTLCommandQueue> q = [dev newCommandQueue];
+        NSError *error = nil;
+        id<MTLLibrary> qc = [dev newLibraryWithURL:[NSURL fileURLWithPath:@(argv[4])] error:&error];
+        std::vector<id<MTLRenderPipelineState>> states;
+        for (const frame::State &st : frame::states(argv[5]))
+            if (states.size() < 32)
+                if (id<MTLRenderPipelineState> ps = [dev newRenderPipelineStateWithDescriptor:state_desc::descriptor(qc, st.line)
+                                                                                        error:&error])
+                    states.push_back(ps);
+        if (states.empty()) {
+            fprintf(stderr, "NO STATES: %s\n", error.localizedDescription.UTF8String ?: "-");
+            return 1;
+        }
         int failed = 0;
 
         struct Case {
@@ -106,17 +122,33 @@ int main(int argc, char **argv)
             td.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
             td.storageMode = MTLStorageModePrivate;
             id<MTLTexture> target = [dev newTextureWithDescriptor:td];
+            td.storageMode = MTLStorageModeMemoryless;
+            td.usage = MTLTextureUsageRenderTarget;
+            id<MTLTexture> second = [dev newTextureWithDescriptor:td];
             MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
             pass.colorAttachments[0].texture = target;
             pass.colorAttachments[0].loadAction = MTLLoadActionClear;
             pass.colorAttachments[0].storeAction = MTLStoreActionStore;
-            id<MTLCommandBuffer> cb = [q commandBuffer];
-            id<MTLRenderCommandEncoder> e = [cb renderCommandEncoderWithDescriptor:pass];
-            [e setFragmentTexture:t atIndex:0];
-            [e endEncoding];
-            [cb commit];
-            [cb waitUntilCompleted];
+            pass.colorAttachments[1].texture = second;
+            pass.colorAttachments[1].loadAction = MTLLoadActionDontCare;
+            pass.colorAttachments[1].storeAction = MTLStoreActionDontCare;
             const uint8_t *img = (const uint8_t *)raw_metal_texture_image(t, nullptr);
+            const uint8_t vertices[256] = {};
+            for (id<MTLRenderPipelineState> ps : states) {
+                id<MTLCommandBuffer> cb = [q commandBuffer];
+                id<MTLRenderCommandEncoder> e = [cb renderCommandEncoderWithDescriptor:pass];
+                [e setRenderPipelineState:ps];
+                for (NSUInteger slot = 0; slot < 31; slot++)
+                    [e setVertexBytes:vertices length:sizeof vertices atIndex:slot];
+                for (NSUInteger slot = 0; slot < 16; slot++)
+                    [e setFragmentTexture:t atIndex:slot];
+                [e drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+                [e endEncoding];
+                [cb commit];
+                [cb waitUntilCompleted];
+                if (img[0] | img[1] | img[2] | img[3])
+                    break;
+            }
             size_t bad = 0;
             for (uint32_t r = 0; r < c.h; r++)
                 for (uint32_t x = 0; x < c.w; x++) {
@@ -136,8 +168,13 @@ int main(int argc, char **argv)
             CFRelease(s);
         }
         char line[1024];
-        if (raw_metal_rates(line, sizeof line))
+        if (raw_metal_rates(line, sizeof line)) {
             printf("rates: %s\n", line);
+            if (!strstr(line, " m2v=0 ")) {
+                printf("FAIL a command buffer went to m2v\n");
+                failed++;
+            }
+        }
         printf("planarframe: %d case(s) failed\n", failed);
         return failed ? 1 : 0;
     }

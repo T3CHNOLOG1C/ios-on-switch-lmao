@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // raw GM20B path (r8-rawca): the two drivers' order on the GPU. Command buffers alternate between the raw path (blit copies
-// that chain a pattern from buffer to buffer) and m2v (a mipmap generation, which the raw path hands to m2v whole), committed
-// back to back with no wait; only the last is waited for. Over the mock's asynchronous GPU (mock_iokit.c MOCK_GPU_US: each
+// that chain a pattern from buffer to buffer) and m2v (a mipmap generation beside a compute encoder, which the raw path hands to
+// m2v whole), committed back to back with no wait; only the last is waited for. Over the mock's asynchronous GPU (mock_iokit.c MOCK_GPU_US: each
 // submission takes that long, in kick order per channel, after the acquires the kernel's Order queued for it), the commits
 // must all return long before the GPU is done (no CPU wait for GPU work), the mock's log must show every submission start
 // after the one committed before it on the other driver ended (ordercheck.py), the chain must arrive intact, and the rates line
@@ -37,6 +37,7 @@ int main(int argc, char **argv)
         }
         const unsigned pairs = argc > 4 ? unsigned(atoi(argv[4])) : 6;
         setenv("NMB_DEVICE_BASE_NSOBJECT", "1", 1);
+        setenv("NVDEC_WRITETHROUGH", "1", 0);
         id<MTLDevice> m2v = native_bridge_metal_open(argv[3], argv[2], 0, missing);
         if (!m2v) {
             fprintf(stderr, "NO M2V DEVICE: %s\n", nmb_last_error());
@@ -73,6 +74,8 @@ int main(int argc, char **argv)
             else
                 [b copyFromBuffer:chain[0] sourceOffset:0 toBuffer:chain[pairs] destinationOffset:0 size:16];
             [b endEncoding];
+            if (warm)
+                [[cb computeCommandEncoder] endEncoding];
             [cb commit];
             [cb waitUntilCompleted];
         }
@@ -91,10 +94,11 @@ int main(int argc, char **argv)
             [b copyFromBuffer:chain[k] sourceOffset:0 toBuffer:chain[k + 1] destinationOffset:0 size:bytes];
             [b endEncoding];
             [r commit];
-            id<MTLCommandBuffer> m = [q commandBuffer];  // m2v: the raw path hands mipmaps to it
+            id<MTLCommandBuffer> m = [q commandBuffer];  // m2v: the raw path hands compute to it
             b = [m blitCommandEncoder];
             [b generateMipmapsForTexture:mip];
             [b endEncoding];
+            [[m computeCommandEncoder] endEncoding];
             [m commit];
             last = m;
         }
