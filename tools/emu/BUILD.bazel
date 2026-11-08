@@ -96,6 +96,12 @@ py_library(
     deps = [":emu_lib"],
 )
 
+py_test(
+    name = "boot_test",
+    srcs = ["boot_test.py"],
+    deps = [":boot_lib"],
+)
+
 py_binary(
     name = "boot",
     srcs = ["boot.py"],
