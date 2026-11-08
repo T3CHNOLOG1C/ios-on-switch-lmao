@@ -14,7 +14,9 @@ use metal2vulkan::bind::{
 use metal2vulkan::cache::VariantKey;
 use metal2vulkan::device::{DeviceDescription, VkExtension, VkFeature};
 use metal2vulkan::error::Retry;
-use metal2vulkan::metal::{PixelFormat, SamplerAddressMode, SamplerMinMagFilter, SamplerMipFilter, TextureType};
+use metal2vulkan::metal::{
+    PixelFormat, SamplerAddressMode, SamplerMinMagFilter, SamplerMipFilter, TextureType, TextureUsage,
+};
 use metal2vulkan::pipeline::{RenderPipeline, RenderPipelineDescriptor, SlotRef, Stage};
 use std::ffi::{CString, c_char, c_void};
 use std::sync::{Arc, Mutex};
@@ -170,8 +172,8 @@ fn probe_bind_offset(stage: u32, slot: u32) -> u64 {
 }
 
 /// The bind state of probe.mm's draw `run`: every buffer slot of both stages bound (inline bytes, or the bound run's
-/// buffers at each slot's own offset), 16 textures of `format` and 16 samplers at the fragment stage
-fn probe_state(run: usize, format: PixelFormat) -> BindState {
+/// buffers at each slot's own offset), 16 textures of `format` and `samples` and 16 samplers at the fragment stage
+fn probe_state(run: usize, format: PixelFormat, samples: u32) -> BindState {
     let mut state = BindState::default();
     for stage in [Stage::Vertex, Stage::Fragment] {
         let mut table = StageTable::default();
@@ -195,7 +197,12 @@ fn probe_state(run: usize, format: PixelFormat) -> BindState {
         }
         if stage == Stage::Fragment {
             for t in 0..PROBE_TAGGED {
-                let facts = TextureFacts::new(TextureType::Type2D, format);
+                let mut facts = TextureFacts::new(TextureType::Type2D, format);
+                if samples > 1 {
+                    facts.texture_type = TextureType::Type2DMultisample;
+                    facts.sample_count = samples;
+                    facts.usage |= TextureUsage::RENDER_TARGET;
+                }
                 table.textures.insert(
                     t,
                     BoundTexture::Texture {
@@ -490,7 +497,8 @@ fn draw_of(
     draw
 }
 
-/// `texture_format`: the probe's tagged textures' MTLPixelFormat (0: BGRA8Unorm), as probe.mm binds them for the state.
+/// `texture_format`, `texture_samples`: the probe's tagged textures' MTLPixelFormat (0: BGRA8Unorm) and sample count, as
+/// probe.mm binds them for the state.
 ///
 /// # Safety
 /// `descriptor` is a valid record; `each` is valid for `ctx` for the call's length.
@@ -500,6 +508,7 @@ pub unsafe extern "C" fn nmb_render_pipeline_direct(
     descriptor: *const NmbRenderPipelineDescriptor,
     barrier: bool,
     texture_format: u64,
+    texture_samples: u32,
     each: unsafe extern "C" fn(state: *const NmbDirectState, ctx: *mut c_void) -> bool,
     ctx: *mut c_void,
 ) -> bool {
@@ -524,7 +533,7 @@ pub unsafe extern "C" fn nmb_render_pipeline_direct(
                 compile,
                 &descriptor,
                 &mut variants,
-                &probe_state(run, format),
+                &probe_state(run, format, texture_samples.max(1)),
                 &budget,
             )?);
         }

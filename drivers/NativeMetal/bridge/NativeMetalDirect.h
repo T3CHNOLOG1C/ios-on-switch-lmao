@@ -74,11 +74,12 @@ typedef struct NmbDirectState {
 } NmbDirectState;
 
 // `descriptor`'s state (its stages' linked functions included) as the translator makes it for the probe's draws, handed to
-// `each` (valid during the call). `barrier`: compiled as on a device without the pixel interlock; `textureFormat`: the
-// MTLPixelFormat of the probe's textures (0: BGRA8Unorm). False with nmb_last_error: refused, or `each`'s false
+// `each` (valid during the call). `barrier`: compiled as on a device without the pixel interlock; `textureFormat` and
+// `textureSamples`: the MTLPixelFormat and sample count of the probe's textures (0: BGRA8Unorm, 1). False with
+// nmb_last_error: refused, or `each`'s false
 bool nmb_render_pipeline_direct(NmbDevice *device, const NmbRenderPipelineDescriptor *descriptor, bool barrier,
-                                uint64_t textureFormat, bool (*each)(const NmbDirectState *state, void *ctx),
-                                void *ctx);
+                                uint64_t textureFormat, uint32_t textureSamples,
+                                bool (*each)(const NmbDirectState *state, void *ctx), void *ctx);
 
 #ifdef __cplusplus
 }

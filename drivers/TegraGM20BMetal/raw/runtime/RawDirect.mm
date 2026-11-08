@@ -8,6 +8,7 @@
 
 // Weak, so the host benchmark links without the frontend
 extern "C" bool native_bridge_metal_render_direct(id descriptor, bool barrier, NSUInteger textureFormat,
+                                                  NSUInteger textureSamples,
                                                   bool (*each)(const struct NmbDirectState *, void *), void *ctx,
                                                   const char **why) __attribute__((weak_import));
 extern "C" void *native_bridge_metal_nvk_symbol(const char *name) __attribute__((weak_import));
@@ -39,13 +40,14 @@ Direct::Direct(const Pack &pack)
       nvk_(native_bridge_metal_nvk_symbol ? DirectNvk::find(native_bridge_metal_nvk_symbol) : DirectNvk{})
 {}
 
-Compiler::Outcome Direct::form(MTLRenderPipelineDescriptor *descriptor, bool barrier, MTLPixelFormat textures,
+Compiler::Outcome Direct::form(MTLRenderPipelineDescriptor *descriptor, bool barrier, ProbeTextures textures,
                                const std::string &key, const std::vector<uint32_t> &attributes, RuntimeRecord &out,
                                std::string &why)
 {
     Asked a = {nvk_, rules_, key, attributes, out, {}};
     const char *refused = nullptr;
-    if (!native_bridge_metal_render_direct(descriptor, barrier, textures, made, &a, &refused)) {
+    if (!native_bridge_metal_render_direct(descriptor, barrier, textures.format, textures.samples, made, &a,
+                                           &refused)) {
         why = std::string("m2v refused its translation: ") + (refused ? refused : "");
         return refused && !strncmp(refused, "retry: ", 7) ? Compiler::Outcome::Failed : Compiler::Outcome::Refused;
     }
@@ -54,7 +56,7 @@ Compiler::Outcome Direct::form(MTLRenderPipelineDescriptor *descriptor, bool bar
 }
 
 Compiler::Outcome Direct::make(MTLRenderPipelineDescriptor *descriptor, const std::string &key, RuntimeRecord &out,
-                               std::string &why, MTLPixelFormat textures)
+                               std::string &why, ProbeTextures textures)
 {
     if (!native_bridge_metal_render_direct || !nvk_.complete()) {
         why = "the frontend or NVK has no direct compile";

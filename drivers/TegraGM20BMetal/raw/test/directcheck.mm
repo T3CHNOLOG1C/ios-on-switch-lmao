@@ -28,17 +28,20 @@ void missing(const char *cls, const char *sel)
     fprintf(stderr, "MISSING -[%s %s]\n", cls, sel);
 }
 
-// probe.mm's tagged textures of the raw path's own states that read codes (pack/xr.metal) or the two-plane stand-in
-MTLPixelFormat texturesOf(const std::string &line)
+// probe.mm's tagged textures of the raw path's own states that read codes (pack/xr.metal), the two-plane stand-in or, for
+// its own resolves alone (pack/resolve.metal), multisampled colours
+raw::ProbeTextures texturesOf(const std::string &line, bool ours)
 {
-    const std::pair<const char *, MTLPixelFormat> formats[] = {{"f xr_bgr10_frag", MTLPixelFormatR32Uint},
-                                                               {"f xr_bgra10_frag", MTLPixelFormatRGBA16Uint},
-                                                               {"f xr_planes_frag", MTLPixelFormatRG32Uint},
-                                                               {"f two_plane_store", MTLPixelFormatRGBA16Float}};
-    for (const auto &[fragment, format] : formats)
+    if (ours && line.find("| v resolve_vert | f resolve_") != std::string::npos)
+        return {MTLPixelFormatBGRA8Unorm, 4};
+    const std::pair<const char *, raw::ProbeTextures> sets[] = {{"f xr_bgr10_frag", {MTLPixelFormatR32Uint, 1}},
+                                                                {"f xr_bgra10_frag", {MTLPixelFormatRGBA16Uint, 1}},
+                                                                {"f xr_planes_frag", {MTLPixelFormatRG32Uint, 1}},
+                                                                {"f two_plane_store", {MTLPixelFormatRGBA16Float, 1}}};
+    for (const auto &[fragment, textures] : sets)
         if (line.find(std::string("| ") + fragment) != std::string::npos)
-            return format;
-    return MTLPixelFormatBGRA8Unorm;
+            return textures;
+    return {};
 }
 
 }  // namespace
@@ -99,7 +102,7 @@ int main(int argc, char **argv)
             if (!seen.insert(s.key).second)
                 continue;
             states++;
-            const MTLPixelFormat textures = texturesOf(line);
+            const raw::ProbeTextures textures = texturesOf(line, ours);
             const raw::PackPipeline *pp = pack.find(raw::packKeyHash(s.key));
             const bool barrier = pp && (pp->flags & raw::PipelineBarrierForm);
             raw::RuntimeRecord rec;

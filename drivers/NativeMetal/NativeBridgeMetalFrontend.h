@@ -57,7 +57,7 @@ id native_bridge_metal_function_metallib(id function, const void **bytes, size_t
 // The raw GM20B path's direct compile of a render state (bridge/NativeMetalDirect.h) of this device's functions: false with
 // `why` (valid until the next call on the thread) when the translator refuses it or `each` returns false.
 struct NmbDirectState;
-bool native_bridge_metal_render_direct(id descriptor, bool barrier, NSUInteger textureFormat,
+bool native_bridge_metal_render_direct(id descriptor, bool barrier, NSUInteger textureFormat, NSUInteger textureSamples,
                                        bool (*each)(const struct NmbDirectState *, void *), void *ctx,
                                        const char **why);
 // A symbol of the NVK this device opened (null: none)

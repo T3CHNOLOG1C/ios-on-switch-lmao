@@ -12,20 +12,26 @@ namespace raw {
 
 class Pack;
 
+// The textures a state is planned for, as the probe binds them (pack/probe.mm: BGRA8 but for the raw path's own states that
+// read codes, and the multisampled ones its resolves read)
+struct ProbeTextures {
+    MTLPixelFormat format = MTLPixelFormatBGRA8Unorm;
+    NSUInteger samples = 1;
+};
+
 class Direct {
 public:
     explicit Direct(const Pack &pack);
 
-    // The record of the state `descriptor` (of m2v's functions) describes, whose pack key is `key`; `textures`: the format of
-    // the textures it is planned for, as the probe binds them (pack/probe.mm: BGRA8 but for the raw path's own code reads)
+    // The record of the state `descriptor` (of m2v's functions) describes, whose pack key is `key`
     Compiler::Outcome make(MTLRenderPipelineDescriptor *descriptor, const std::string &key, RuntimeRecord &out,
-                           std::string &why, MTLPixelFormat textures = MTLPixelFormatBGRA8Unorm);
+                           std::string &why, ProbeTextures textures = {});
 
 private:
     PackRules rules_;
     DirectNvk nvk_;
 
-    Compiler::Outcome form(MTLRenderPipelineDescriptor *descriptor, bool barrier, MTLPixelFormat textures,
+    Compiler::Outcome form(MTLRenderPipelineDescriptor *descriptor, bool barrier, ProbeTextures textures,
                            const std::string &key, const std::vector<uint32_t> &attributes, RuntimeRecord &out,
                            std::string &why);
 };
