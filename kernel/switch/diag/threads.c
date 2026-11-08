@@ -102,3 +102,49 @@ void switch_print_blocked_kext_threads(const char *(*name_of)(const void *), uns
     lck_mtx_unlock(&tasks_threads_lock);
     printf("blocked threads with a stack: %u, shown: %u\n", blocked, printed);
 }
+
+/*
+ * One thread's scheduling state, what it waits on and, when it is not on a core, its saved return addresses: for a
+ * driver about to panic because its work loop never ran an action it was sent (an interrupt's, say).
+ */
+void switch_print_thread(const void *ref, const char *who)
+{
+    thread_t thread = (thread_t)(uintptr_t)ref;
+    if (thread == NULL) {
+        printf("%s: no thread\n", who);
+        return;
+    }
+    printf("%s: T%llu state %#x h%d pri %d/%d cpu %d event %#llx", who, thread->thread_id, (unsigned)thread->state,
+           thread->block_hint, thread->base_pri, thread->sched_pri,
+           thread->last_processor ? thread->last_processor->cpu_id : -1, (unsigned long long)thread->wait_event);
+    uint64_t owner = 0;
+    if (thread->block_hint == kThreadWaitKernelMutex) {
+        thread_waitinfo_t info = {};
+        kdp_lck_mtx_find_owner(thread->waitq.wq_q, thread->wait_event, &info);
+        owner = info.owner;
+        printf(" owner T%llu", owner);
+    }
+    printf("\n");
+    if (thread->kernel_stack && thread != current_thread() && !((unsigned int)thread->state & TH_RUN)) {
+        uint64_t frames[32];
+        switch_print_frames(frames, switch_thread_frames(thread, frames, 32));
+    }
+    if (!owner) {
+        return;
+    }
+    lck_mtx_lock(&tasks_threads_lock);
+    queue_iterate(&threads, thread, thread_t, threads)
+    {
+        if (thread->thread_id != owner) {
+            continue;
+        }
+        printf("%s: owner T%llu state %#x h%d pri %d/%d cpu %d event %#llx\n", who, thread->thread_id,
+               (unsigned)thread->state, thread->block_hint, thread->base_pri, thread->sched_pri,
+               thread->last_processor ? thread->last_processor->cpu_id : -1, (unsigned long long)thread->wait_event);
+        if (thread->kernel_stack && thread != current_thread() && !((unsigned int)thread->state & TH_RUN)) {
+            uint64_t frames[32];
+            switch_print_frames(frames, switch_thread_frames(thread, frames, 32));
+        }
+    }
+    lck_mtx_unlock(&tasks_threads_lock);
+}

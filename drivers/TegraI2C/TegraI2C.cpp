@@ -32,6 +32,8 @@
 #ifndef TEGRA_I2C_HOST_MODEL
 #include "../../kits/SwitchDMA/SwitchDcache.h"
 #include "../../kits/SwitchMMIO/SwitchMMIO.h"
+// kernel/switch/diag/threads.c
+extern "C" void switch_print_thread(const void *thread, const char *who);
 #endif
 
 extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
@@ -438,6 +440,13 @@ int sleepForAction(unsigned bus, Bus &b, uint64_t us)
                 tegra_apbdma_describe(b.dma, dma, sizeof(dma));
                 panic("TegraI2C: I2C%u DMA end of count lost: %s", bus, dma);
             }
+#ifndef TEGRA_I2C_HOST_MODEL
+            // The line fired and its source masked it, but the shared work loop never ran the action: say where its
+            // thread is (state, wait, stack) before the panic.
+            switch_print_thread(gLoop->getThread(), "TegraI2C: work loop");
+            for (unsigned other = 1; other <= kBuses; ++other)
+                IOLog("TegraI2C: I2C%u irqLock %p\n", other, gBus[other - 1].irqLock);
+#endif
             char gic[192];
             switch_interrupt_describe(intid(bus), gic, sizeof(gic));
             panic("TegraI2C: I2C%u interrupt lost (INTID %u): INT_STATUS %#x INT_MASK %#x FIFO_STATUS %#x, %s", bus,
