@@ -381,7 +381,8 @@ def _seed_raw_pack_impl(ctx):
     )
     return [
         DefaultInfo(files = depset([out])),
-        OutputGroupInfo(report = depset([linked]), buckets = depset(buckets)),
+        # report: the link's pack and report, and each bucket's states (test/directcheck makes the pack's records from them)
+        OutputGroupInfo(report = depset([linked] + corpora), buckets = depset(buckets)),
     ]
 
 seed_raw_pack = rule(

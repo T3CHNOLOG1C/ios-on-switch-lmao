@@ -2,6 +2,7 @@
 // See RawDirect.h.
 #import "RawDirect.h"
 
+#include <cstring>
 #include "NativeBridgeMetalFrontend.h"
 #include "raw_pack.h"
 
@@ -42,11 +43,11 @@ Compiler::Outcome Direct::form(MTLRenderPipelineDescriptor *descriptor, bool bar
                                const std::string &key, const std::vector<uint32_t> &attributes, RuntimeRecord &out,
                                std::string &why)
 {
-    Asked a = {nvk_, rules_, key, attributes, out};
+    Asked a = {nvk_, rules_, key, attributes, out, {}};
     const char *refused = nullptr;
     if (!native_bridge_metal_render_direct(descriptor, barrier, textures, made, &a, &refused)) {
         why = std::string("m2v refused its translation: ") + (refused ? refused : "");
-        return Compiler::Outcome::Refused;
+        return refused && !strncmp(refused, "retry: ", 7) ? Compiler::Outcome::Failed : Compiler::Outcome::Refused;
     }
     why = a.why;
     return a.outcome;

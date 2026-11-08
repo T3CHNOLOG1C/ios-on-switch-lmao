@@ -16,6 +16,7 @@
 #include "../runtime/RawDirect.h"
 #include "NativeBridgeMetalFrontend.h"
 #include "TwoPlaneStandIn.h"
+#include "bridge/NativeMetalObjects.h"
 #include "record_compare.h"
 
 namespace {
@@ -65,8 +66,8 @@ int main(int argc, char **argv)
         id<MTLLibrary> own = nil, standIn = nil;
         if (const char *path = getenv("PROBE_OWN_LIB"); path && *path) {
             own = [dev newLibraryWithURL:[NSURL fileURLWithPath:@(path)] error:&error];
-            dispatch_data_t data = dispatch_data_create(kTwoPlaneStandInLibrary, sizeof kTwoPlaneStandInLibrary, nullptr,
-                                                        DISPATCH_DATA_DESTRUCTOR_DEFAULT);
+            dispatch_data_t data = dispatch_data_create(kTwoPlaneStandInLibrary, sizeof kTwoPlaneStandInLibrary,
+                                                        nullptr, DISPATCH_DATA_DESTRUCTOR_DEFAULT);
             standIn = own ? [dev newLibraryWithData:data error:&error] : nil;
             if (!own || !standIn) {
                 fprintf(stderr, "directcheck: own library: %s\n", error.localizedDescription.UTF8String);
@@ -127,7 +128,8 @@ int main(int argc, char **argv)
             fclose(met);
         for (const auto &[what, n] : differences)
             printf("  %u x%s\n", n, what.c_str());
-        printf("directcheck: %u states made directly: %u records the same as the pack's, %u the same as its barrier forms, "
+        printf("directcheck: %u states made directly: %u records the same as the pack's, %u the same as its barrier "
+               "forms, "
                "%u set aside and refused, %u differ; %.1f ms a state\n",
                states, same, barriers, refused, bad, states ? ms / states : 0.0);
         return bad || !states ? 1 : 0;

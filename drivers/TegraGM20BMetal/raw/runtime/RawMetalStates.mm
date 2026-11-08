@@ -179,7 +179,6 @@
                                        nil);
 }
 
-// A descriptor whose functions are this device's: a copy over their twins, for the m2v device
 // A stage's linked functions as their twins; `l` itself while one has none (m2v then refuses it as another device's)
 static MTLLinkedFunctions *twinLinked(MTLLinkedFunctions *l)
 {
@@ -206,6 +205,7 @@ static MTLLinkedFunctions *twinLinked(MTLLinkedFunctions *l)
     return t;
 }
 
+// A descriptor whose functions are this device's: a copy over their twins, for the m2v device
 static MTLRenderPipelineDescriptor *twinDescriptor(MTLRenderPipelineDescriptor *d)
 {
     MTLRenderPipelineDescriptor *t = [d copy];
@@ -270,15 +270,14 @@ static raw::Pipeline *madeBefore(RMPipeline *p, MTLRenderPipelineDescriptor *d)
     return p;
 }
 
-// A state the pack lacks, of any library's functions, once its twin exists: the runtime makes its record at its creation, as
-// Metal makes a state (RawComplete.h), and the raw path draws it from its first draw. A probe that could not run is asked again
-// off this thread; m2v draws the state until then.
+// A state the pack lacks, of any library's functions: the runtime makes its record at its creation, as Metal makes a state
+// (RawComplete.h), and the raw path draws it from its first draw. A compile that could not run is asked again off this
+// thread; m2v draws the state until then.
 static void completeLater(RMPipeline *p, MTLRenderPipelineDescriptor *d)
 {
-    if (p->_raw || !p->_completable || !p->_twin || !gRM->completion)
+    if (p->_raw || !p->_completable || !gRM->completion)
         return;
     raw::Completion::Ask a;
-    a.twin = p->_twin;
     a.descriptor = twinDescriptor(d);
     a.key = p->_key;
     a.caTransform = p->_caTransform;
@@ -335,10 +334,10 @@ static id<MTLRenderPipelineState> pipelineTwin(MTLRenderPipelineDescriptor *d, M
 {
     SWITCH_API(ApiObject);
     RMPipeline *p = [self pipelineFor:d twin:nil];
+    completeLater(p, d);
     p->_twin = pipelineTwin(d, MTLPipelineOptionNone, p->_raw, error);
     if (!p->_twin && !p->_raw)
         return nil;
-    completeLater(p, d);
     if (error && p->_raw)
         *error = nil;
     return (id<MTLRenderPipelineState>)p;
@@ -352,18 +351,30 @@ static id<MTLRenderPipelineState> pipelineTwin(MTLRenderPipelineDescriptor *d, M
     SWITCH_API(ApiObject);
     if (reflection) {
         RMPipeline *p = [self pipelineFor:d twin:nil];
+        completeLater(p, d);
         const bool packed = p->_raw != nullptr;
         p->_twin = [gRM->fallback newRenderPipelineStateWithDescriptor:packedTwinDescriptor(d, packed)
                                                                options:packedTwinOptions(o, packed)
                                                             reflection:reflection
                                                                  error:error];
-        completeLater(p, d);
+        if (error && p->_raw)
+            *error = nil;
         return !p->_twin && !p->_raw ? nil : (id<MTLRenderPipelineState>)p;
     }
     RMPipeline *p = [self pipelineFor:d twin:nil];
-    p->_twin = pipelineTwin(d, o, p->_raw, error);
     completeLater(p, d);
+    p->_twin = pipelineTwin(d, o, p->_raw, error);
+    if (error && p->_raw)
+        *error = nil;
     return !p->_twin && !p->_raw ? nil : (id<MTLRenderPipelineState>)p;
+}
+
+// Made as the synchronous calls make a state (its record at its creation, its m2v twin at its first fallback), on a global queue
+// of the caller's class, which Metal calls the handler on
+static dispatch_queue_t creationQueue()
+{
+    const qos_class_t mine = qos_class_self();
+    return dispatch_get_global_queue(mine == QOS_CLASS_UNSPECIFIED ? QOS_CLASS_USER_INITIATED : mine, 0);
 }
 
 - (void)newRenderPipelineStateWithDescriptor:(MTLRenderPipelineDescriptor *)d
@@ -371,12 +382,11 @@ static id<MTLRenderPipelineState> pipelineTwin(MTLRenderPipelineDescriptor *d, M
 {
     MTLRenderPipelineDescriptor *copy = [d copy];
     RMDevice *me = self;
-    [gRM->fallback newRenderPipelineStateWithDescriptor:twinDescriptor(d)
-                                      completionHandler:^(id<MTLRenderPipelineState> twin, NSError *e) {
-                                          RMPipeline *p = [me pipelineFor:copy twin:twin];
-                                          completeLater(p, copy);
-                                          handler((!twin && !p->_raw) ? nil : (id<MTLRenderPipelineState>)p, e);
-                                      }];
+    dispatch_async(creationQueue(), ^{
+        NSError *e = nil;
+        id<MTLRenderPipelineState> state = [me newRenderPipelineStateWithDescriptor:copy error:&e];
+        handler(state, e);
+    });
 }
 
 - (void)newRenderPipelineStateWithDescriptor:(MTLRenderPipelineDescriptor *)d
@@ -384,17 +394,19 @@ static id<MTLRenderPipelineState> pipelineTwin(MTLRenderPipelineDescriptor *d, M
                            completionHandler:(MTLNewRenderPipelineStateWithReflectionCompletionHandler)handler
 {
     MTLRenderPipelineDescriptor *copy = [d copy];
-    RMPipeline *p = [self pipelineFor:copy twin:nil];
-    const bool packed = p->_raw != nullptr;
-    [gRM->fallback
-        newRenderPipelineStateWithDescriptor:packedTwinDescriptor(d, packed)
-                                     options:packedTwinOptions(o, packed)
-                           completionHandler:^(id<MTLRenderPipelineState> twin, MTLRenderPipelineReflection *r,
-                                               NSError *e) {
-                               p->_twin = twin;
-                               completeLater(p, copy);
-                               handler((!twin && !p->_raw) ? nil : (id<MTLRenderPipelineState>)p, r, p->_raw ? nil : e);
-                           }];
+    RMDevice *me = self;
+    dispatch_async(creationQueue(), ^{
+        NSError *e = nil;
+        MTLAutoreleasedRenderPipelineReflection reflection = nil;
+        id<MTLRenderPipelineState> state = [me
+            newRenderPipelineStateWithDescriptor:copy
+                                         options:o
+                                      reflection:(o & (MTLPipelineOptionArgumentInfo | MTLPipelineOptionBufferTypeInfo))
+                                                     ? &reflection
+                                                     : nil
+                                           error:&e];
+        handler(state, reflection, e);
+    });
 }
 
 - (id)wrapCarried:(id)twin

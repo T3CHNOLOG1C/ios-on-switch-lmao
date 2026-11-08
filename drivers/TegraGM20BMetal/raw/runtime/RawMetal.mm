@@ -194,8 +194,7 @@ void raw_metal_prepare(const char *packPath, uint64_t stack)
 void raw_metal_complete_states(const char *cacheDir)
 {
     if (gRM && gRM->fallback && !gRM->completion)
-        gRM->completion =
-            std::make_unique<raw::Completion>(*gRM->raw, gRM->fallback, cacheDir, gRM->raw->pack().header()->stack);
+        gRM->completion = std::make_unique<raw::Completion>(*gRM->raw, cacheDir, gRM->raw->pack().header()->stack);
 }
 
 // libdispatch SPI (dispatch/private/queue_private.h): a root queue over threads of its own, `configure` run on each as it

@@ -4,17 +4,20 @@
 //! buffer or capture. Only the translator's public API is used; the runtime device lends its compile device and its Vulkan
 //! device, on which the variants' layouts are made for NVK's stage compile.
 
-use crate::objects::{NmbDevice, NmbRenderPipelineDescriptor, e, get, guard, raw, render_descriptor};
+use crate::objects::{
+    NmbDevice, NmbRenderPipelineDescriptor, e, get, guard, raw, render_descriptor,
+};
 use ash::vk as avk;
+use metal2vulkan::Budget;
 use metal2vulkan::bind::{
     BindState, BindingPlan, BoundBuffer, BoundSampler, BoundTexture, DrawCall, DrawCommands, ImageSource,
     SamplerDescriptor, SamplerSource, StageTable, TextureFacts, WriteSource,
 };
 use metal2vulkan::cache::VariantKey;
 use metal2vulkan::device::{DeviceDescription, VkExtension, VkFeature};
+use metal2vulkan::error::Retry;
 use metal2vulkan::metal::{PixelFormat, SamplerAddressMode, SamplerMinMagFilter, SamplerMipFilter, TextureType};
 use metal2vulkan::pipeline::{RenderPipeline, RenderPipelineDescriptor, SlotRef, Stage};
-use metal2vulkan::Budget;
 use std::ffi::{CString, c_char, c_void};
 use std::sync::{Arc, Mutex};
 
@@ -93,6 +96,15 @@ pub struct NmbDirectState {
     pub draws: [NmbDirectDraw; 4],
 }
 
+/// A translation's failure as the caller's text; one the same request may get past (its deadline, the host's memory) starts
+/// "retry: ", which the caller does not keep as the state's refusal
+fn compile_error(what: &'static str) -> impl FnOnce(metal2vulkan::error::Error) -> String {
+    move |error| match error.retry() {
+        Retry::Later => format!("retry: {what}: {error:?}"),
+        _ => format!("{what}: {error:?}"),
+    }
+}
+
 /// The compile device of the probe's barrier form: the runtime's enabled description without the pixel interlock, as the
 /// pack's barrier probe ran NVK with it hidden (NVK_DEBUG=no_fsi). One per process, made at its first ask.
 static BARRIER: Mutex<Option<(usize, Arc<metal2vulkan::device::Device>)>> = Mutex::new(None);
@@ -107,11 +119,12 @@ fn barrier_device(nmb: &NmbDevice) -> Result<Arc<metal2vulkan::device::Device>, 
     let runtime = nmb.device();
     // SAFETY: the handles are the live runtime device's, used only for this query.
     let handles = unsafe { runtime.raw() };
-    let description = unsafe {
-        DeviceDescription::query(handles.instance, handles.physical_device, handles.instance_api_version)
-    }
-    .map_err(e("device description"))?;
-    let mut enabled = description.with_enabled(runtime.enabled()).map_err(e("enabled description"))?;
+    let description =
+        unsafe { DeviceDescription::query(handles.instance, handles.physical_device, handles.instance_api_version) }
+            .map_err(e("device description"))?;
+    let mut enabled = description
+        .with_enabled(runtime.enabled())
+        .map_err(e("enabled description"))?;
     enabled.generated_commands = None;
     let policy = *runtime.compile_device().policy();
     let same = metal2vulkan::device::Device::new(enabled.clone(), policy).map_err(e("compile device"))?;
@@ -137,7 +150,11 @@ fn stage_number(stage: Stage) -> u32 {
 /// probe.mm's sampler at fragment slot `s`: linear filters when s&1, a repeating U when s&2, max LOD 1 + s/2
 fn probe_sampler(s: u32) -> SamplerDescriptor {
     let mut d = SamplerDescriptor::new();
-    let filter = if s & 1 != 0 { SamplerMinMagFilter::Linear } else { SamplerMinMagFilter::Nearest };
+    let filter = if s & 1 != 0 {
+        SamplerMinMagFilter::Linear
+    } else {
+        SamplerMinMagFilter::Nearest
+    };
     d.min_filter = filter;
     d.mag_filter = filter;
     d.mip_filter = SamplerMipFilter::Nearest;
@@ -170,14 +187,23 @@ fn probe_state(run: usize, format: PixelFormat) -> BindState {
                     attribute_stride: None,
                 }
             } else {
-                BoundBuffer::Bytes { len: RUN_BYTES[run], attribute_stride: None }
+                BoundBuffer::Bytes {
+                    len: RUN_BYTES[run],
+                    attribute_stride: None,
+                }
             };
             table.buffers.insert(slot, bound);
         }
         if stage == Stage::Fragment {
             for t in 0..PROBE_TAGGED {
                 let facts = TextureFacts::new(TextureType::Type2D, format);
-                table.textures.insert(t, BoundTexture::Texture { facts, resource_id: None });
+                table.textures.insert(
+                    t,
+                    BoundTexture::Texture {
+                        facts,
+                        resource_id: None,
+                    },
+                );
                 table.samplers.insert(t, BoundSampler::new(probe_sampler(t)));
             }
         }
@@ -186,7 +212,12 @@ fn probe_state(run: usize, format: PixelFormat) -> BindState {
     state
 }
 
-const PROBE_DRAW: DrawCall = DrawCall::Primitives { vertex_start: 0, vertex_count: 4, instance_count: 1, base_instance: 0 };
+const PROBE_DRAW: DrawCall = DrawCall::Primitives {
+    vertex_start: 0,
+    vertex_count: 4,
+    instance_count: 1,
+    base_instance: 0,
+};
 
 fn slot_parts(slot: &SlotRef) -> (u32, u32) {
     (stage_number(slot.stage), slot.index)
@@ -211,7 +242,11 @@ fn write_of(w: &metal2vulkan::bind::DescriptorWrite, commands: &DrawCommands) ->
     };
     match &w.source {
         WriteSource::Buffer { slot } | WriteSource::InlineBytes { slot } => {
-            out.source = if matches!(w.source, WriteSource::Buffer { .. }) { NmbDirectSource::Buffer } else { NmbDirectSource::Bytes };
+            out.source = if matches!(w.source, WriteSource::Buffer { .. }) {
+                NmbDirectSource::Buffer
+            } else {
+                NmbDirectSource::Bytes
+            };
             (out.stage, out.slot) = slot_parts(slot);
             out.range = commands
                 .descriptor_ranges
@@ -260,7 +295,12 @@ struct Layout<'d> {
 
 impl<'d> Layout<'d> {
     fn new(device: &'d ash::Device, pipeline: &RenderPipeline) -> Result<Layout<'d>, String> {
-        let mut made = Layout { device, samplers: Vec::new(), sets: Vec::new(), pipeline: avk::PipelineLayout::null() };
+        let mut made = Layout {
+            device,
+            samplers: Vec::new(),
+            sets: Vec::new(),
+            pipeline: avk::PipelineLayout::null(),
+        };
         for set in &pipeline.layout.sets {
             let mut immutable: Vec<Vec<avk::Sampler>> = Vec::with_capacity(set.bindings.len());
             for binding in &set.bindings {
@@ -286,25 +326,39 @@ impl<'d> Layout<'d> {
                         .descriptor_type(binding.ty.into())
                         .descriptor_count(binding.count)
                         .stage_flags(binding.stages.into());
-                    if samplers.is_empty() { info } else { info.immutable_samplers(samplers) }
+                    if samplers.is_empty() {
+                        info
+                    } else {
+                        info.immutable_samplers(samplers)
+                    }
                 })
                 .collect();
             let flags: Vec<avk::DescriptorBindingFlags> = set.bindings.iter().map(|b| b.flags.into()).collect();
             let mut flags_info = avk::DescriptorSetLayoutBindingFlagsCreateInfo::default().binding_flags(&flags);
-            let mut info = avk::DescriptorSetLayoutCreateInfo::default().flags(set.flags.into()).bindings(&bindings);
+            let mut info = avk::DescriptorSetLayoutCreateInfo::default()
+                .flags(set.flags.into())
+                .bindings(&bindings);
             if flags.iter().any(|f| !f.is_empty()) {
                 info = info.push_next(&mut flags_info);
             }
             // SAFETY: `info` and its arrays are live for the call.
-            made.sets.push(unsafe { device.create_descriptor_set_layout(&info, None) }.map_err(e("set layout"))?);
+            made.sets
+                .push(unsafe { device.create_descriptor_set_layout(&info, None) }.map_err(e("set layout"))?);
         }
         let push: Vec<avk::PushConstantRange> = pipeline
             .layout
             .push_constants
             .iter()
-            .map(|range| avk::PushConstantRange::default().stage_flags(range.stages.into()).offset(range.offset).size(range.size))
+            .map(|range| {
+                avk::PushConstantRange::default()
+                    .stage_flags(range.stages.into())
+                    .offset(range.offset)
+                    .size(range.size)
+            })
             .collect();
-        let info = avk::PipelineLayoutCreateInfo::default().set_layouts(&made.sets).push_constant_ranges(&push);
+        let info = avk::PipelineLayoutCreateInfo::default()
+            .set_layouts(&made.sets)
+            .push_constant_ranges(&push);
         // SAFETY: as above.
         made.pipeline = unsafe { device.create_pipeline_layout(&info, None) }.map_err(e("pipeline layout"))?;
         Ok(made)
@@ -352,8 +406,9 @@ fn settle(
         let at = match variants.iter().position(|(key, _)| *key == plan.variant) {
             Some(at) => at,
             None => {
-                let pipeline =
-                    compile.compile_render_variant(descriptor, &plan.variant, budget).map_err(e("compile variant"))?;
+                let pipeline = compile
+                    .compile_render_variant(descriptor, &plan.variant, budget)
+                    .map_err(compile_error("compile variant"))?;
                 variants.push((plan.variant.clone(), pipeline));
                 variants.len() - 1
             }
@@ -361,10 +416,20 @@ fn settle(
         (at, variants[at].1.plan(compile, &shape).map_err(e("plan variant"))?)
     };
     let commands = plan.instantiate_draw(state, &PROBE_DRAW).map_err(e("instantiate"))?;
-    Ok(Run { variant, commands, plan })
+    Ok(Run {
+        variant,
+        commands,
+        plan,
+    })
 }
 
-fn draw_of(run: &Run, pipeline: &RenderPipeline, layout: &Layout<'_>, writes: &[NmbDirectWrite], variant: &CString) -> NmbDirectDraw {
+fn draw_of(
+    run: &Run,
+    pipeline: &RenderPipeline,
+    layout: &Layout<'_>,
+    writes: &[NmbDirectWrite],
+    variant: &CString,
+) -> NmbDirectDraw {
     let mut draw = NmbDirectDraw {
         set0: layout.set0(),
         writes: writes.as_ptr(),
@@ -387,10 +452,20 @@ fn draw_of(run: &Run, pipeline: &RenderPipeline, layout: &Layout<'_>, writes: &[
     }
     if let Some(first) = run.plan.vertex_buffers.iter().min_by_key(|b| b.binding) {
         draw.vertex_slot = first.buffer_index;
-        draw.vertex_stride = match pipeline.vertex_input.bindings.iter().find(|b| b.binding == first.binding) {
+        draw.vertex_stride = match pipeline
+            .vertex_input
+            .bindings
+            .iter()
+            .find(|b| b.binding == first.binding)
+        {
             Some(b) => match b.stride {
                 metal2vulkan::pipeline::VertexStride::Static(stride) => stride,
-                _ => run.commands.vertex_strides.iter().find(|(at, _)| *at == first.binding).map_or(0, |(_, s)| *s),
+                _ => run
+                    .commands
+                    .vertex_strides
+                    .iter()
+                    .find(|(at, _)| *at == first.binding)
+                    .map_or(0, |(_, s)| *s),
             },
             None => 0,
         };
@@ -422,11 +497,19 @@ pub unsafe extern "C" fn nmb_render_pipeline_direct(
             f => raw::<PixelFormat>(f, "texture format")?,
         };
         let budget = Budget::standard();
-        let base = compile.compile_render_pipeline(&descriptor, &budget).map_err(e("compile"))?;
+        let base = compile
+            .compile_render_pipeline(&descriptor, &budget)
+            .map_err(compile_error("compile"))?;
         let mut variants = vec![(VariantKey::new(), base)];
         let mut runs = Vec::with_capacity(RUN_BYTES.len());
         for run in 0..RUN_BYTES.len() {
-            runs.push(settle(compile, &descriptor, &mut variants, &probe_state(run, format), &budget)?);
+            runs.push(settle(
+                compile,
+                &descriptor,
+                &mut variants,
+                &probe_state(run, format),
+                &budget,
+            )?);
         }
         // SAFETY: the runtime device's own handles, used while it lives.
         let handles = unsafe { runtime.raw() };
@@ -436,7 +519,14 @@ pub unsafe extern "C" fn nmb_render_pipeline_direct(
             .collect::<Result<Vec<_>, String>>()?;
         let writes: Vec<Vec<NmbDirectWrite>> = runs
             .iter()
-            .map(|run| run.plan.descriptors.iter().take(MAX_WRITES).map(|w| write_of(w, &run.commands)).collect())
+            .map(|run| {
+                run.plan
+                    .descriptors
+                    .iter()
+                    .take(MAX_WRITES)
+                    .map(|w| write_of(w, &run.commands))
+                    .collect()
+            })
             .collect();
         let names: Vec<CString> = runs
             .iter()
@@ -445,7 +535,15 @@ pub unsafe extern "C" fn nmb_render_pipeline_direct(
         let draws: Vec<NmbDirectDraw> = runs
             .iter()
             .enumerate()
-            .map(|(k, run)| draw_of(run, &variants[run.variant].1, &layouts[run.variant], &writes[k], &names[k]))
+            .map(|(k, run)| {
+                draw_of(
+                    run,
+                    &variants[run.variant].1,
+                    &layouts[run.variant],
+                    &writes[k],
+                    &names[k],
+                )
+            })
             .collect();
 
         let first = &runs[0];
@@ -468,8 +566,14 @@ pub unsafe extern "C" fn nmb_render_pipeline_direct(
                     .collect()
             })
             .collect();
-        let infos: Vec<avk::SpecializationInfo<'_>> =
-            maps.iter().map(|map| avk::SpecializationInfo::default().map_entries(map).data(&specialization.data)).collect();
+        let infos: Vec<avk::SpecializationInfo<'_>> = maps
+            .iter()
+            .map(|map| {
+                avk::SpecializationInfo::default()
+                    .map_entries(map)
+                    .data(&specialization.data)
+            })
+            .collect();
         if pipeline.stages.len() > 2 {
             return Err(format!("{} stages", pipeline.stages.len()));
         }

@@ -12,6 +12,7 @@
 #include <string>
 #include <vector>
 #include "../runtime/raw_pack.h"
+#include "../pack/probe_record.h"
 #include "../runtime/raw_record.h"
 
 namespace probelogs {

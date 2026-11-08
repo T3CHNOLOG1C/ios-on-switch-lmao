@@ -1877,9 +1877,7 @@ fn stage_linked(
     Ok(linked)
 }
 
-pub(crate) fn render_descriptor(
-    descriptor: *const NmbRenderPipelineDescriptor,
-) -> Result<RenderPipelineDescriptor, String> {
+pub(crate) fn render_descriptor(descriptor: *const NmbRenderPipelineDescriptor) -> Result<RenderPipelineDescriptor, String> {
     let d = get(descriptor)?;
     let vertex_linked = stage_linked(
         d.vertex_linked,
@@ -2299,26 +2297,6 @@ pub extern "C" fn nmb_command_buffer_wait_completed_for(command_buffer: *mut Nmb
 pub extern "C" fn nmb_command_buffer_commit(command_buffer: *mut NmbCommandBuffer) -> bool {
     guard(false, || {
         get(command_buffer)?.0.commit().map_err(e("commit"))?;
-        Ok(true)
-    })
-}
-
-/// The `VkCommandBuffer` handles the command buffer's encoders recorded, in order, each to `each(ctx, handle)`, instead of a
-/// commit: a capture never submitted (`CommandBuffer::capture`). The command buffer cannot be committed after.
-///
-/// # Safety
-/// `each` is a valid function for `ctx` for the call's length.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn nmb_command_buffer_capture(
-    command_buffer: *mut NmbCommandBuffer,
-    each: unsafe extern "C" fn(ctx: *mut c_void, command_buffer: u64),
-    ctx: *mut c_void,
-) -> bool {
-    guard(false, || {
-        get(command_buffer)?
-            .0
-            .capture(|raw| unsafe { each(ctx, raw) })
-            .map_err(e("capture"))?;
         Ok(true)
     })
 }

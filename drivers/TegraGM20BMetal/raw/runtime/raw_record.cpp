@@ -5,6 +5,7 @@
 #include "raw_record.h"
 
 #include <cstdio>
+#include "../pack/probe_record.h"
 #include "raw_record_parts.h"
 #include "raw_srgb_table.h"
 

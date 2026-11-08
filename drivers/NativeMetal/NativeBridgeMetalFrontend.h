@@ -48,32 +48,6 @@ id native_bridge_metal_texture_in_place(id buffer, id descriptor, NSUInteger off
 // image's PTE kind, the image takes the memory's own VA. Nil where the device makes no such image there.
 id native_bridge_metal_texture_tiled_in_place(id buffer, id descriptor, NSUInteger offset);
 
-// The raw GM20B path's capture of a render state (raw/runtime/raw_capture.h): `commandBuffer`'s recorded NVK push segments handed
-// to `segment` in submission order instead of a commit, never run, and what NVK's context init set as this process's addresses
-// (*context: the pack's init relocations, raw_pack.h PackReloc). The command buffer cannot be committed after. False: refused
-// (another device's, committed, encoded with a call the frontend refused, commands left to record at commit, or an NVK without
-// the capture exports).
-typedef struct {
-    uint64_t shaderHeap, zeroPage, cb0, images, samplers;
-    uint32_t imageMax, samplerMax;
-} NBCaptureContext;
-
-bool native_bridge_metal_capture(id commandBuffer, void (^segment)(uint64_t addr, const uint32_t *cpu, uint32_t dwords),
-                                 NBCaptureContext *context);
-// Why the frontend refused a call encoded into `commandBuffer` (it fails at commit), or null
-const char *native_bridge_metal_encode_refusal(id commandBuffer);
-// The CPU's view of [va, va + bytes) of the captured command buffer's device memory, while the command buffer lives; null: none
-const void *native_bridge_metal_capture_map(id commandBuffer, uint64_t va, uint64_t bytes);
-
-// The program a captured draw binds at SET_PIPELINE_PROGRAM offset `program`: its 80-byte header, code and shader data as NVK
-// uploads them, and each constant buffer's nvk_cbuf_type. False: none of its draws binds one there.
-typedef struct {
-    const void *header, *code, *data;
-    uint32_t headerBytes, codeBytes, dataBytes, cbufCount;
-    uint8_t cbufTypes[16];
-} NBCapturedProgram;
-
-bool native_bridge_metal_capture_program(id commandBuffer, uint32_t program, NBCapturedProgram *out);
 // A render pipeline state of this device made at its first set (AsyncPipelines.h startLazy): the raw path's m2v twin of a
 // state it draws itself.
 id native_bridge_metal_render_pipeline_lazy(id device, id descriptor, NSUInteger options);
@@ -84,7 +58,8 @@ id native_bridge_metal_function_metallib(id function, const void **bytes, size_t
 // `why` (valid until the next call on the thread) when the translator refuses it or `each` returns false.
 struct NmbDirectState;
 bool native_bridge_metal_render_direct(id descriptor, bool barrier, NSUInteger textureFormat,
-                                       bool (*each)(const struct NmbDirectState *, void *), void *ctx, const char **why);
+                                       bool (*each)(const struct NmbDirectState *, void *), void *ctx,
+                                       const char **why);
 // A symbol of the NVK this device opened (null: none)
 void *native_bridge_metal_nvk_symbol(const char *name);
 

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
-// A render state's raw record made from its probe draws by pack/mkpack.py's rules, for a state the pack lacks: the runtime probes it
-// in process through m2v's twin and NVK, never submitted, and makes the record the pack generator would have. test/recordcheck
-// holds the two to each other.
+// A render state's raw record by pack/mkpack.py's rules, for a state the pack lacks: made directly (raw_direct.h) or from the
+// pack generator's probe draws (makeRecord, test/recordcheck holds it to the pack), as the pack generator would have.
 #pragma once
 #include <array>
 #include <cstdint>
@@ -11,11 +10,20 @@
 #include <string>
 #include <utility>
 #include <vector>
-#include "../pack/probe_record.h"
-#include "raw_capture.h"
 #include "raw_pack.h"
 
+namespace nvdec {
+struct ProbeSubmission;
+}  // namespace nvdec
+
 namespace raw {
+
+// A program as a record holds it
+struct CapturedProgram {
+    std::string id;  // nvdec's name: the FNV-1a of its header, code and data
+    // header + code, NAK's shader data, each constant buffer's nvk_cbuf_type
+    std::vector<uint8_t> image, data, cbufTypes;
+};
 
 // What every record of a pack shares
 struct PackRules {

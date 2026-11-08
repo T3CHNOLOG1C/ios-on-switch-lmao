@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // A corpus R line (the frontend journal's render pipeline state) as the descriptor it names, made with a library's functions: the
-// pack generator's probe (probe.mm) and the host checks of the runtime's records (raw/test/completecheck.mm, directcheck.mm) read
+// pack generator's probe (probe.mm) and the host check of the direct compile's records (raw/test/directcheck.mm) read
 // lines alike.
 #pragma once
 #import <Foundation/Foundation.h>

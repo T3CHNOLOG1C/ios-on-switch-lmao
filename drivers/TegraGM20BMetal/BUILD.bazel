@@ -29,19 +29,10 @@ filegroup(
     ]),
 )
 
-# The raw facade's Objective-C++ units (RawMetal.mm and the RawMetal*.mm beside it, RawAlias.mm, RawComplete.mm, RawProbe.mm)
+# The raw facade's Objective-C++ units (RawMetal.mm and the RawMetal*.mm beside it, RawAlias.mm, RawComplete.mm, RawDirect.mm)
 filegroup(
     name = "raw_facade_srcs",
     srcs = glob(["raw/runtime/Raw*.mm"]),
-)
-
-# What the runtime's capture of a state compiles beside it: pack/nvdec (the generator's decoder) and Mesa's MME simulator
-filegroup(
-    name = "raw_capture_headers",
-    srcs = glob([
-        "raw/pack/*.h",
-        "raw/pack/mesa/**/*.h",
-    ]) + ["raw/fx/test/twod_sim.h"],
 )
 
 # Not a hand run's leftovers: a .pyc of the modules (the host Python's) in a checkout would change the raw pack's action key

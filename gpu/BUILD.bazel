@@ -145,18 +145,12 @@ metal_plugin(
         METAL + ":frontend_headers",
         METAL_ABI,
         GM20B_METAL + ":raw_runtime_headers",
-        GM20B_METAL + ":raw_capture_headers",
         GM20B_ABI,
         GM20B_LAYOUT,
         "//kits/SwitchRefusal:SwitchRefusal.h",
         "//kits/SwitchRefusal:SwitchRefusalSite.h",
     ],
     bridge = ":bridge_ios",
-    # Mesa's MME simulator: the raw path's capture of a state runs NVK's macros (raw/runtime/raw_capture.h)
-    c_srcs = [
-        GM20B_METAL + ":raw/pack/mesa/mme_fermi.c",
-        GM20B_METAL + ":raw/pack/mesa/mme_fermi_sim.c",
-    ],
     cc_srcs = [
         GM20B_METAL + ":raw/runtime/raw_gpu.cpp",
         GM20B_METAL + ":raw/runtime/raw_alias.cpp",
@@ -167,8 +161,6 @@ metal_plugin(
         GM20B_METAL + ":raw/runtime/raw_ycbcr.cpp",
         GM20B_METAL + ":raw/runtime/raw_zeta.cpp",
         GM20B_METAL + ":raw/runtime/raw_comp.cpp",
-        GM20B_METAL + ":raw/runtime/raw_capture.cpp",
-        GM20B_METAL + ":raw/runtime/raw_record.cpp",
         GM20B_METAL + ":raw/runtime/raw_record_parts.cpp",
         GM20B_METAL + ":raw/runtime/raw_direct.cpp",
         GM20B_METAL + ":raw/runtime/raw_emit.cpp",
@@ -177,8 +169,6 @@ metal_plugin(
         GM20B_METAL + ":raw/runtime/raw_metallib.cpp",
         GM20B_METAL + ":raw/runtime/raw_completed.cpp",
         GM20B_METAL + ":raw/runtime/raw_compute.cpp",
-        GM20B_METAL + ":raw/pack/nvdec.cpp",
-        GM20B_METAL + ":raw/pack/nvdec_compute.cpp",
     ],
     frameworks = [
         "Foundation",
