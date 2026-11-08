@@ -72,12 +72,11 @@
 #include "../TegraGPIO/TegraGPIO.h"
 #include "../TegraI2C/TegraI2C.h"
 #include "../SwitchTouch/SwitchHID.h"
+#include "../../kits/SwitchCAR/SwitchPMC.h"
 #include "../../kits/SwitchRefusal/SwitchRefusal.h"
 #include "SwitchALSMath.h"
 #include "SwitchBrightness.h"
 #include "TegraPanel.h"
-
-extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 
 namespace {
 using namespace switch_als;
@@ -177,11 +176,9 @@ void describeBus(char *buffer, size_t size)
     const int controls[4] = {tegra_gpio_read(TEGRA_GPIO(J, 1)), tegra_gpio_read(TEGRA_GPIO(J, 0)),
                              tegra_gpio_read(TEGRA_GPIO(F, 0)), tegra_gpio_read(TEGRA_GPIO(F, 1))};
     uint32_t pmc[4] = {};
-    if (auto *page = reinterpret_cast<volatile uint8_t *>(ml_io_map(0x7000E000, 0x1000))) {
-        const uint32_t offsets[4] = {0x44, 0xe4, 0x1bc, 0x1c4};  // NO_IOPOWER, PWR_DET_VAL, IO_DPD(2)_STATUS
-        for (unsigned i = 0; i < 4; ++i)
-            pmc[i] = *reinterpret_cast<volatile uint32_t *>(page + 0x400 + offsets[i]);
-    }
+    const uint32_t offsets[4] = {0x44, 0xe4, 0x1bc, 0x1c4};  // NO_IOPOWER, PWR_DET_VAL, IO_DPD(2)_STATUS
+    for (unsigned i = 0; i < 4; ++i)
+        pmc[i] = switch_pmc_read(offsets[i]);
     char acks[64] = "";
     size_t used = 0;
     unsigned found = 0;

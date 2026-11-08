@@ -77,8 +77,8 @@
 #include "SwitchMAX77620.h"
 #include "SwitchMonotonicClock.h"
 #include "SwitchPower.h"
+#include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
 
-extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 // NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
 extern "C" boolean_t preemption_enabled(void);
 // NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
@@ -118,7 +118,7 @@ constexpr uint32_t kPowerDownUS = 2000000;  // the PMIC cuts power within millis
 // PMC_CNTRL (APBDEV_PMC_CNTRL, PMC at 0x7000E400) MAIN_RST: the SoC's warm reset (hekate, L4T tegra_pmc_restart).
 constexpr vm_offset_t kPmcPA = 0x7000E000;
 constexpr uint32_t kPmcCntrl = 0x400, kPmcMainReset = 1u << 4;
-volatile uint32_t *gPmc;  // mapped at start: nothing is mapped on the restart path
+volatile uint8_t *gPmc;  // mapped at start: nothing is mapped on the restart path
 
 // The Wi-Fi/Bluetooth module's 32 kHz clock on, as L4T has it (top of file); read-modify-write, other bits kept.
 // One line to the log (not the console) when it was off, which is every boot after a PMIC power-off.
@@ -373,7 +373,7 @@ int haltRestart(unsigned int type)
     if (restart) {
         psciSystemReset();
         if (gPmc)
-            gPmc[kPmcCntrl / 4] |= kPmcMainReset;
+            switch_mmio_rmw32(gPmc, kPmcCntrl, 0, kPmcMainReset);
         IODelay(kPowerDownUS);
     }
     if (dark)
@@ -632,7 +632,7 @@ namespace {
 void reportClocks(const char *when)
 {
     using namespace switchclk;
-    volatile uint8_t *car = reinterpret_cast<volatile uint8_t *>(ml_io_map(kCarPA, 0x1000));
+    volatile uint8_t *car = switch_mmio_map(kCarPA, 0x1000);
     if (!car) {
         IOLog("SwitchClocks %s: CAR not mapped\n", when);
         return;
@@ -780,7 +780,7 @@ extern "C" int switch_pmic_start(void)
 #if DEVELOPMENT || DEBUG
         switch_pmic_mark_start();
 #endif
-        gPmc = (volatile uint32_t *)ml_io_map(kPmcPA, 0x1000);
+        gPmc = switch_mmio_map(kPmcPA, 0x1000);
         PE_halt_restart = haltRestart;
     }
     (void)switch_monotonic_clock_start(rtcSecs, rtcStamp);

@@ -353,9 +353,7 @@ bool run(Engine &e, uint32_t in, uint32_t out)
         snprintf(gWhy, sizeof gWhy, "operation error (INT_STATUS %#x ERR_STATUS %#x)", e.status, error);
         return false;  // the operation's algorithm decides (a programming problem, not the engine)
     }
-    for (unsigned i = 0;
-         (rd(e, STATUS) & kStatusBusy) || (*reinterpret_cast<volatile uint32_t *>(gAhb + kAhbWrque) & e.ahbMaster);
-         ++i) {
+    for (unsigned i = 0; (rd(e, STATUS) & kStatusBusy) || (switch_mmio_read32(gAhb, kAhbWrque) & e.ahbMaster); ++i) {
         if (i > 100000) {
             if (e.proven)
                 panic("TegraSE: %s output never drained (STATUS %#x)", e.name, rd(e, STATUS));
