@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalInternal.h"
+#include <optional>
+#include "raw_compute.h"
 
 // The copy engine's copies of those rows: one copy of every row where they lie a pitch apart, else one per row
 static void copyRows(raw::BlitEncoder *be, uint64_t bufferVa, const BufferRows &r, uint64_t offset,
@@ -51,6 +53,7 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
     }
     raw::RenderEncoder *re = nullptr;
     raw::BlitEncoder *be = nullptr;
+    std::optional<raw::ComputeEncoder> ce;
 
     auto fail = [&](RMPred p, const char *w, uint64_t a = 0, uint64_t b = 0) {
         *why = w;
@@ -308,7 +311,16 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
     };
     for (size_t at = from; at < to; at++) {
         const Cmd &c = cb->_tape[at];
+        if (isKernelCommand(c.op)) {
+            if (const char *w = nullptr; !encodeKernel(*ce, *rc, cb, c, &w))
+                return fail(PredCompute, w, c.op);
+            continue;
+        }
         switch (c.op) {
+        case OpCompute:
+            ce.emplace(*rc, d);
+            ce->setSerial(c.a == MTLDispatchTypeSerial);
+            break;
         case OpRender: {
             const RMPass &pass = cb->_passes[c.x];
             if (cb->_sampledShadows)
@@ -385,6 +397,10 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
                 re->end();
             if (be)
                 be->end();
+            if (ce) {
+                ce->end();
+                ce.reset();
+            }
             for (RMTexture *t : standInStores)
                 if (standInPass(t, true))
                     return false;
@@ -562,6 +578,8 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
         re->end();
     if (be)
         be->end();
+    if (ce)
+        ce->end();
     for (RMTexture *t : standInStores)
         if (standInPass(t, true))
             return false;

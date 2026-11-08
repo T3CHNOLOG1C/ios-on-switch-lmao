@@ -49,6 +49,9 @@ namespace raw {
 
 class Device;
 class CommandBuffer;
+class ComputeEncoder;
+struct ComputeState;
+struct ComputeRecord;
 
 constexpr uint32_t kPteKindPitch = 0;
 
@@ -547,6 +550,7 @@ private:
     friend class Device;
     friend class RenderEncoder;
     friend class BlitEncoder;
+    friend class ComputeEncoder;
     Device *dev_ = nullptr;
     std::vector<TegraGM20BAbiPush> segments_;
     std::vector<std::pair<uintptr_t, uint64_t>> clean_, flush_;  // CPU ranges to clean / clean+invalidate before Exec
@@ -836,6 +840,8 @@ public:
         // backings on compressed memory made, their bytes, and compressed memory the kernel could not make; full-target clears
         // of compressed targets to a value the boot ZBC table holds (no texels written) and to one it does not
         std::atomic<uint64_t> compBackings{0}, compBytes{0}, compFailed{0}, zbcHits{0}, zbcMisses{0};
+        // compute launches encoded (raw_compute.h)
+        std::atomic<uint64_t> dispatches{0};
     } stats;
 
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
@@ -860,6 +866,9 @@ private:
     friend class CommandBuffer;
     friend class RenderEncoder;
     friend class BlitEncoder;
+    friend class ComputeEncoder;
+    friend const ComputeState *placeCompute(Device &dev, const ComputeRecord &r);
+    friend const ComputeState *computeState(Device &dev, uint64_t keyHash);
 
     struct Ring {
         Bo bo;

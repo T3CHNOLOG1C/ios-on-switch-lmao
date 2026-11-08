@@ -51,6 +51,10 @@ void forEachWritten(RMCommandBuffer *cb, size_t from, size_t to, void (*written)
             if (compute)
                 written(c.obj);
             break;
+        case OpKernelBuffer:
+        case OpKernelTexture:
+            written(c.obj);
+            break;
         case OpInvocation:  // compute and other recorded calls: every buffer and texture they name
             raw::forEachObject((__bridge NSInvocation *)c.obj, [written](id o) {
                 written((__bridge void *)o);
