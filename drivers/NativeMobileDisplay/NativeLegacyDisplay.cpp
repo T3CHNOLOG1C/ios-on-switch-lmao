@@ -126,6 +126,11 @@ extern "C" __attribute__((weak)) int tegra_gm20b_surface_tiled(uint64_t)
     return 0;
 }
 
+extern "C" __attribute__((weak)) int tegra_gm20b_scanout_outstanding(const void *)
+{
+    return 0;
+}
+
 extern "C" __attribute__((weak)) void tegra_gm20b_frame_take(struct SwitchFrameGpu *out)
 {
     *out = {};
@@ -752,7 +757,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     // GPU frame copy (double-buffered hardware rotation only; TegraScanoutCopy.h): the GPU driver's copy
     // engine writes the swapped surface into the buffer window A does not scan, and its completion flips window A to it, as the CPU
     // copy's end does. gpuScanout: the outstanding offer (gpuRequest) is such a copy, not the sheng presenter's. The completion comes
-    // through gpuDoneSource from any context; one not in by its deadline panics.
+    // through gpuDoneSource from any context; one not in by its deadline that the GPU driver no longer holds panics.
     bool gpuCopy = false, gpuScanout = false, gpuPresentDeferred = false;
     uint64_t gpuSequence = 0, gpuOfferedAt = 0;
     IOMemoryDescriptor *gpuSource = nullptr;  // retained from the offer to the completion
@@ -764,6 +769,11 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     bool gpuDonePending = false;  // written by native_legacy_gpu_complete before it signals gpuDoneSource
     uint64_t gpuDoneAt = 0;       // the frame timeline: when it came
     static constexpr unsigned kGpuCopyDeadlineMS = 1000;
+    // The GPU driver's verdict on a late offer (a named panic, or a hung client killed) comes within a second of its own
+    // deadline; an offer it still holds after this many of ours is one it lost track of.
+    static constexpr unsigned kGpuCopyDeadlines = 10;
+    unsigned gpuDeadlines = 0;
+    uint64_t gpuLostFrames = 0;
     // The refresh tick runs on the family's work loop, the loop of the command gate that registers and removes the vsync clients, so the
     // client queue (vsyncClientList) never changes while the sender walks it.
     IOTimerEventSource *vsyncTimer = nullptr;
@@ -4336,6 +4346,7 @@ public:
         gpuOfferedAt = mach_absolute_time();
         ring.claim(target);  // the GPU writes it until finishGpuCopy
         __atomic_store_n(&gpuScanout, true, __ATOMIC_RELEASE);
+        gpuDeadlines = 0;
         gpuDeadline->setTimeoutMS(kGpuCopyDeadlineMS);
         native_legacy_swap_stage(1);
         gpuRequest = request;
@@ -4357,24 +4368,37 @@ public:
         self->finishGpuSwap(__atomic_load_n(&self->gpuStatus, __ATOMIC_RELAXED));
     }
 
+    // A completion signalled but not handled yet (the gate was busy) only moves the deadline, as does an offer the GPU driver
+    // still holds: its own deadline names what the copy waits for and recovers or panics (TegraScanoutCopy.h). The
+    // completion is looked for again after the driver's answer, which may come between its release and the signal.
     static void gpuDeadlineFired(OSObject *owner, IOTimerEventSource *)
     {
         NativeLegacyDisplay *self = static_cast<NativeLegacyDisplay *>(owner);
         if (!self->gpuScanout)
             return;
-        // A completion signalled but not handled yet (the gate was busy) only moves the deadline.
-        if (__atomic_load_n(&self->gpuDonePending, __ATOMIC_ACQUIRE)) {
+        const bool held = tegra_gm20b_scanout_outstanding(self) != 0;
+        if (held)
+            self->gpuDeadlines += 1;
+        if (__atomic_load_n(&self->gpuDonePending, __ATOMIC_SEQ_CST) ||
+            (held && self->gpuDeadlines < kGpuCopyDeadlines)) {
             self->gpuDeadline->setTimeoutMS(kGpuCopyDeadlineMS);
             return;
         }
-        panic("SwitchDisplay: GPU frame copy %llu into %#x not completed in %u ms (tegra_gm20b_scanout_copy "
-              "accepted it)",
-              self->gpuSequence, self->surfaceAddress(self->ring.drawing), kGpuCopyDeadlineMS);
+        const unsigned waited = (held ? self->gpuDeadlines : self->gpuDeadlines + 1) * kGpuCopyDeadlineMS;
+        if (self->gpuDirect != kNoBuffer) {
+            panic("SwitchDisplay: GPU present %llu (fence only, direct slot %d) not completed in %u ms: %s",
+                  self->gpuSequence, self->gpuDirect - kSlot0, waited,
+                  held ? "the GPU driver still holds it" : "the GPU driver released it with no completion");
+        }
+        panic("SwitchDisplay: GPU frame copy %llu into %#x not completed in %u ms: %s", self->gpuSequence,
+              self->surfaceAddress(self->ring.drawing), waited,
+              held ? "the GPU driver still holds it" : "the GPU driver released it with no completion");
     }
 
     // Under the gate: the GPU frame copy is done (status 0) or failed. Done, window A flips to it (after SC7: at the resume) and the swap
     // retires, or, retired at the offer, the next one may go. Failed, nothing is flipped: a swap still queued is copied on the CPU at
-    // once, one retired at the offer is lost (the next frame replaces it), and the next kick uses the CPU copy either way.
+    // once, one retired at the offer is lost (the next frame replaces it), and the next kick uses the CPU copy either way. A source
+    // whose rendering was lost (dropLostFrame) is neither shown nor copied.
     void finishGpuCopy(int status)
     {
         const OriginalLegacySwapRequest *request = gpuRequest;
@@ -4389,6 +4413,10 @@ public:
         }
         const int directEntry = gpuDirect;
         gpuDirect = kNoBuffer;
+        if (status == TEGRA_SCANOUT_SOURCE_LOST) {
+            dropLostFrame(request, directEntry);
+            return;
+        }
         if (status &&
             directEntry != kNoBuffer) {  // the rendering never finished on the GPU: copy it on the CPU instead
             native_legacy_gpu_fallback_observed(status);
@@ -4422,6 +4450,26 @@ public:
             return;
         }  // the controller is unclocked: finishResume presents it
         presentGpuCopy();
+    }
+
+    // A frame whose rendering the GPU driver killed (TEGRA_SCANOUT_SOURCE_LOST): the copy's target is never flipped to, and the
+    // swap retires unshown, as a frame the console holds back does; the screen keeps the frame before it.
+    // NOLINTNEXTLINE(misc-no-recursion): kickSwapQueue's kicking flag stops re-entry; a nested kick only loops
+    void dropLostFrame(const OriginalLegacySwapRequest *request, int directEntry)
+    {
+        ++gpuLostFrames;
+        IOLog("SwitchDisplay: frame %llu not shown: its rendering was lost on the GPU (%llu so far)\n", gpuSequence,
+              gpuLostFrames);
+        if (directEntry == kNoBuffer)
+            ring.release();
+        if (latchRetire && request) {
+            retireUnshown(seqOf(request));
+        } else if (!latchRetire && !gpuRetired && request && pendingSwapRequest() == request) {
+            retireSwap(request, true);
+        }
+        gpuRetired = false;
+        transferred = false;
+        kickSwapQueue();
     }
 
     void presentGpuCopy()
@@ -4713,6 +4761,7 @@ public:
         gpuSource = memory;
         gpuOfferedAt = mach_absolute_time();
         __atomic_store_n(&gpuScanout, true, __ATOMIC_RELEASE);
+        gpuDeadlines = 0;
         gpuDeadline->setTimeoutMS(kGpuCopyDeadlineMS);
         gpuRequest = request;
         gpuLength = static_cast<uint64_t>(width) * height * 4;
