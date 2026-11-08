@@ -1104,6 +1104,20 @@ static void cpuTiled(RMTexture *t, MTLRegion r, uint8_t *bytes, NSUInteger row, 
     return twin;
 }
 
+// Answered here, not by the twin (a residency set's allocatedSize sums its allocations'): the memory this texture owns. A view and
+// a texture over a buffer own none; a twin-only texture's is its twin's.
+- (NSUInteger)allocatedSize
+{
+    if (_kind == RMTextureView || _kind == RMTextureBuffer || _raw.memoryless)
+        return 0;
+    if (_surface)
+        return IOSurfaceGetAllocSize(_surface);
+    if (_raw.span.valid())
+        return NSUInteger(_raw.span.bytes);
+    id twin = _twin;
+    return twin ? [(id<MTLTexture>)twin allocatedSize] : 0;
+}
+
 // A mipmapped texture's m2v texture of every level (made on first need)
 - (id)rmMipTwin
 {
@@ -3428,6 +3442,13 @@ static void giveRecording(RMCommandBuffer *b)
 - (void)useResidencySet:(id)set
 {
     _residency.add(&set, 1);
+}
+
+// (QuartzCore 27, per command buffer: the kernel charges GPU time to the task that submits it, this one)
+- (void)setResponsibleTaskIDs:(const uint32_t *)taskIDs count:(uint32_t)count
+{
+    (void)taskIDs;
+    (void)count;
 }
 
 - (void)useResidencySets:(const __unsafe_unretained id *)sets count:(NSUInteger)count

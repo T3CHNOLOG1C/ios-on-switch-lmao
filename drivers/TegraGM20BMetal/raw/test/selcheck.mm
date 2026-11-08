@@ -111,9 +111,12 @@ int main(int argc, char **argv)
             {"RMBuffer", "newLinearTextureWithDescriptor:offset:bytesPerRow:bytesPerImage:"},
             {"RMTexture", "waitUntilComplete"},
             {"RMBuffer", "waitUntilComplete"},
-            // residency sets (iOS 18 on, Core Animation 27's): everything is resident on the raw path
+            // residency sets (iOS 18 on, Core Animation 27's): everything is resident on the raw path; a set's allocatedSize
+            // asks each allocation's
             {"RMCommandBuffer", "useResidencySet:"},
             {"RMCommandBuffer", "useResidencySets:count:"},
+            {"RMCommandBuffer", "setResponsibleTaskIDs:count:"},
+            {"RMTexture", "allocatedSize"},
             {"RMQueue", "addResidencySet:"},
             {"RMQueue", "addResidencySets:count:"},
             {"RMQueue", "removeResidencySet:"},
