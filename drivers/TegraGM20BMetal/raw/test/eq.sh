@@ -9,8 +9,8 @@ O=$3
 L=$4
 shift 4
 NVK=${NVK:-${HERE}/../../../../bazel-bin/gpu/nvk/host/libvulkan_nouveau.dylib} # bazel build //gpu/nvk:host
-QC=${HERE}/../../eq/qc/QuartzCore.framework/default.metallib                   # the path suffix the facade keys QuartzCore by
-C=${HERE}/../../precompile/corpus.log
+QC=${QC:-${HERE}/../../eq/qc/QuartzCore.framework/default.metallib}            # the path suffix the facade keys QuartzCore by
+C=${CORPUS:-${HERE}/../../precompile/corpus.log}
 mkdir -p "${O}/cache-${L}"
 # the states the frame may use: the pack's (FRAME_KEYS=all: every corpus state, the ones m2v draws included)
 if [[ "${FRAME_KEYS:-}" != all ]]; then
