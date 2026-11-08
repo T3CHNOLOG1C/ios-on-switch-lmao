@@ -138,7 +138,8 @@ STUTTER = [
         RENDER,
         REPORT,
         process=KERNEL,
-        regex=r'longest block (?P<longest>\d+) us, user pc (?P<pc>\S+) lr \S+, kernel continuation (?P<kernel>0x[0-9a-f]+)',
+        regex=r'longest block (?P<longest>\d+) us, user pc (?P<pc>\S+) lr \S+, '
+        r'kernel continuation (?P<kernel>0x[0-9a-f]+)',
         show=('kernel', 'pc'),
         source='kernel/switch/sched/render.c',
         note="where CA's display thread waited in slow frames (ipsw dyld a2s the pc)",
