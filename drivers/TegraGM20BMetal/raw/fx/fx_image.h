@@ -20,6 +20,10 @@ namespace fx {
 bool volumeLayout(uint32_t width, uint32_t height, uint32_t depth, uint32_t levels, uint32_t bpp, bool view2d,
                   MipChain &out);
 
+// NIL's layout of a 2D array of `layers` layers (a cube's six faces, a cube array's six a cube), each a 2D image of `levels`
+// levels (mipChainLayout's), `arrayStride` apart
+bool arrayLayout(uint32_t width, uint32_t height, uint32_t layers, uint32_t levels, uint32_t bpp, MipChain &out);
+
 // Byte offset of texel byte (xB, y) of plane z in level `l`, from the image's base, in the CPU's view (TegraColor GOBs)
 uint64_t volumeOffset(const MipChain &c, uint32_t l, uint32_t xB, uint32_t y, uint32_t z);
 

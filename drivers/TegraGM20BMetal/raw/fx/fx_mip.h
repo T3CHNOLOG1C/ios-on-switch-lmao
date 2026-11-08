@@ -55,6 +55,9 @@ struct MipChain {
     // A 3D image's depth and level 0's GOBS_PER_BLOCK_DEPTH (fx_image.h); a 2D chain's are 1 and 0
     uint32_t depth = 1;
     uint8_t zLog2 = 0;
+    // An array's (or a cube's: six a cube) layers, each `arrayStride` bytes from the one before (fx_image.h)
+    uint32_t layers = 1;
+    uint64_t arrayStride = 0;
 };
 
 // The number of levels of a full chain (Metal's mipmapLevelCount for a full chain): floor(log2(max(w, h))) + 1
@@ -84,7 +87,7 @@ inline uint32_t gobOffset(uint32_t xB, uint32_t y)
 uint32_t gobOffsetFermi(uint32_t xB, uint32_t y);
 
 // TEXHEAD_BL TEXTURE_TYPE (clb097tex.h), NIL pipe_to_nv_texture_type of a view's type
-constexpr uint32_t kTexOneD = 0, kTexTwoD = 1, kTexThreeD = 2;
+constexpr uint32_t kTexOneD = 0, kTexTwoD = 1, kTexThreeD = 2, kTexCube = 3, kTexTwoDArray = 5, kTexCubeArray = 8;
 
 // The texture header of the chain at GPU address `va` (512-byte aligned): word 0 from `tic0` (the format's components, data
 // types and swizzle: raw::formatInfo()->tic0), a view of levels [baseLevel, baseLevel + levelCount). NIL nvb097 for a view of

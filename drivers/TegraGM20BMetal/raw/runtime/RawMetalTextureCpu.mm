@@ -83,3 +83,23 @@ void cpuVolume(RMTexture *t, MTLRegion r, uint8_t *bytes, NSUInteger row, NSUInt
         cacheLines(x.cpu, c.bytes, true);
     raw::fx::readVolume(c, x.cpu, 0, origin, size, bytes, row, planeBytes);
 }
+
+// replaceRegion/getBytes of a rectangle of a layer of a 2D array or cube: the layer's 2D image, arrayStride on
+void cpuLayer(RMTexture *t, MTLRegion r, NSUInteger slice, uint8_t *bytes, NSUInteger row, bool write)
+{
+    const raw::Texture &x = t->_raw;
+    raw::fx::MipChain c;
+    if (!raw::fx::arrayLayout(x.width, x.height, x.layers, 1, x.bpp, c))
+        return;
+    uint8_t *layer = x.cpu + slice * c.arrayStride;
+    if (write) {
+        raw::fx::writeLevel(c, layer, 0, uint32_t(r.origin.x), uint32_t(r.origin.y), uint32_t(r.size.width),
+                            uint32_t(r.size.height), bytes, row);
+        cacheLines(layer, c.arrayStride, false);
+        return;
+    }
+    if (t->_gpuDirty.exchange(false))
+        cacheLines(x.cpu, c.bytes, true);
+    raw::fx::readLevel(c, layer, 0, uint32_t(r.origin.x), uint32_t(r.origin.y), uint32_t(r.size.width),
+                       uint32_t(r.size.height), bytes, row);
+}

@@ -156,6 +156,7 @@ bool chainShape(MTLTextureDescriptor *d);
 bool lineShape(MTLTextureDescriptor *d);
 bool volumeShape(MTLTextureDescriptor *d);
 bool volumeRendered(MTLTextureDescriptor *d);
+uint32_t arrayType(MTLTextureDescriptor *d);
 bool zetaDescriptor(MTLTextureDescriptor *d);
 uint32_t rawShapeTerm(MTLTextureDescriptor *d);
 // A texture the raw path does not keep: its predicate, and the predicate's first line with the texture's details
@@ -193,6 +194,7 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed);
 void cpuTiled(RMTexture *t, MTLRegion r, uint8_t *bytes, NSUInteger row, bool write);
 void cpuLevel(RMTexture *t, MTLRegion r, NSUInteger level, uint8_t *bytes, NSUInteger row, bool write);
 void cpuVolume(RMTexture *t, MTLRegion r, uint8_t *bytes, NSUInteger row, NSUInteger image, bool write);
+void cpuLayer(RMTexture *t, MTLRegion r, NSUInteger slice, uint8_t *bytes, NSUInteger row, bool write);
 
 // RawMetalDevice.mm
 const char *ycbcrPlan(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteger plane, raw::YcbcrPlan &out);

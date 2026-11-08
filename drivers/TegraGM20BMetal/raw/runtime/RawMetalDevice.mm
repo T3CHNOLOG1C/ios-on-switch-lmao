@@ -182,7 +182,8 @@
         }
     }
     const bool line = lineShape(d), volume = volumeShape(d);
-    if (!rawShape(d) && !zetaDescriptor(d) && !line && !volume) {
+    const uint32_t array = arrayType(d);
+    if (!rawShape(d) && !zetaDescriptor(d) && !line && !volume && !array) {
         RMTexture *w = (RMTexture *)[self wrapTwin:[gRM->fallback newTextureWithDescriptor:d] descriptor:d];
         if (w)
             refuseTexture(w, PredTexShape, rawShapeTerm(d), d.pixelFormat, @"twin-only", nil);
@@ -198,6 +199,12 @@
         t->_kind = RMTexturePool;
         t->_rawOk = gRM->raw->createVolume(uint32_t(d.width), uint32_t(d.height), uint32_t(d.depth),
                                            uint32_t(d.pixelFormat), volumeRendered(d), t->_raw);
+    } else if (array) {
+        t->_kind = RMTexturePool;
+        const NSUInteger faces = array == raw::fx::kTexTwoDArray ? 1 : 6;
+        t->_rawOk = gRM->raw->createArray(uint32_t(d.width), uint32_t(d.height),
+                                          uint32_t(std::max<NSUInteger>(d.arrayLength, 1) * faces),
+                                          uint32_t(d.pixelFormat), array, t->_raw);
     } else if (d.storageMode == MTLStorageModeMemoryless) {
         t->_kind = RMTextureMemoryless;
         t->_rawOk = gRM->raw->createMemoryless(uint32_t(d.width), uint32_t(d.height), uint32_t(d.pixelFormat), t->_raw);

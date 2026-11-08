@@ -300,138 +300,87 @@ struct NilView {
     uint32_t rowBytes, zLog2;
     uint32_t header[8];
     uint64_t hash;
+    uint32_t layers;
+    bool cube;
+    uint64_t arrayStride;
 };
 
+// (one image a line: nilimage's output, in its order)
+// clang-format off
 const NilView kNilViews[] = {
-    {1,
-     1024,
-     1,
-     1,
-     4,
-     false,
-     32768,
-     4096,
-     4096,
-     0,
-     {0x58d24908, 0x00100000, 0x00600000, 0x00070000, 0xe00003ff, 0x80000000, 0x03000000, 0},
-     0x12598af5ff51af25},
-    {3,
-     17,
-     17,
-     17,
-     4,
-     false,
-     98304,
-     8192,
-     128,
-     4,
-     {0x58d24908, 0x00100000, 0x00600000, 0x00070100, 0xe1000010, 0x80100010, 0x03000000, 0},
-     0xb7b73f69140b8432},
-    {3,
-     17,
-     17,
-     17,
-     4,
-     true,
-     53248,
-     4096,
-     128,
-     0,
-     {0x58d24908, 0x00100000, 0x00600000, 0x00070000, 0xe1000010, 0x80100010, 0x03000000, 0},
-     0xbf352aae0dc31cb6},
-    {3,
-     33,
-     33,
-     33,
-     8,
-     false,
-     614400,
-     8192,
-     320,
-     4,
-     {0x58d7ff83, 0x00100000, 0x00600000, 0x00070100, 0xe1000020, 0x80200020, 0x03000000, 0},
-     0xa3ae3ecb66f064aa},
-    {3,
-     5,
-     300,
-     2,
-     4,
-     false,
-     40960,
-     4096,
-     64,
-     1,
-     {0x58d24908, 0x00100000, 0x00600000, 0x00070040, 0xe1000004, 0x8001012b, 0x03000000, 0},
-     0xe8066eb5bd6c7d71},
-    {3,
-     64,
-     64,
-     64,
-     4,
-     false,
-     1048576,
-     8192,
-     256,
-     4,
-     {0x58d24908, 0x00100000, 0x00600000, 0x00070100, 0xe100003f, 0x803f003f, 0x03000000, 0},
-     0x4a69c3a125f58076},
-    {3,
-     1,
-     1,
-     11,
-     16,
-     false,
-     8192,
-     8192,
-     64,
-     4,
-     {0x58d7ff81, 0x00100000, 0x00600000, 0x00070100, 0xe1000000, 0x800a0000, 0x03000000, 0},
-     0xfad2be41f8779e65},
-    {3,
-     129,
-     70,
-     6,
-     2,
-     false,
-     184320,
-     4096,
-     320,
-     3,
-     {0x7012491b, 0x00100000, 0x00600000, 0x000700c0, 0xe1000080, 0x80050045, 0x03000000, 0},
-     0xe0c2d6f8c35d1a2d},
+    {1, 1024, 1, 1, 4, false, 32768, 4096, 4096, 0, {0x58d24908, 0x00100000, 0x00600000, 0x00070000, 0xe00003ff, 0x80000000, 0x03000000, 0},
+     0x12598af5ff51af25, 1, false, 32768},
+    {3, 17, 17, 17, 4, false, 98304, 8192, 128, 4, {0x58d24908, 0x00100000, 0x00600000, 0x00070100, 0xe1000010, 0x80100010, 0x03000000, 0},
+     0xb7b73f69140b8432, 1, false, 98304},
+    {3, 17, 17, 17, 4, true, 53248, 4096, 128, 0, {0x58d24908, 0x00100000, 0x00600000, 0x00070000, 0xe1000010, 0x80100010, 0x03000000, 0},
+     0xbf352aae0dc31cb6, 1, false, 52224},
+    {3, 33, 33, 33, 8, false, 614400, 8192, 320, 4, {0x58d7ff83, 0x00100000, 0x00600000, 0x00070100, 0xe1000020, 0x80200020, 0x03000000, 0},
+     0xa3ae3ecb66f064aa, 1, false, 614400},
+    {3, 5, 300, 2, 4, false, 40960, 4096, 64, 1, {0x58d24908, 0x00100000, 0x00600000, 0x00070040, 0xe1000004, 0x8001012b, 0x03000000, 0},
+     0xe8066eb5bd6c7d71, 1, false, 38912},
+    {3, 64, 64, 64, 4, false, 1048576, 8192, 256, 4, {0x58d24908, 0x00100000, 0x00600000, 0x00070100, 0xe100003f, 0x803f003f, 0x03000000, 0},
+     0x4a69c3a125f58076, 1, false, 1048576},
+    {3, 1, 1, 11, 16, false, 8192, 8192, 64, 4, {0x58d7ff81, 0x00100000, 0x00600000, 0x00070100, 0xe1000000, 0x800a0000, 0x03000000, 0},
+     0xfad2be41f8779e65, 1, false, 8192},
+    {3, 129, 70, 6, 2, false, 184320, 4096, 320, 3, {0x7012491b, 0x00100000, 0x00600000, 0x000700c0, 0xe1000080, 0x80050045, 0x03000000, 0},
+     0xe0c2d6f8c35d1a2d, 1, false, 184320},
+    {2, 2, 2, 1, 4, false, 4096, 4096, 64, 0, {0x58d24908, 0x00100000, 0x00600000, 0x00070000, 0xe2800001, 0x80020001, 0x03000000, 0},
+     0x0cc5a288dca2dce5, 3, false, 512},
+    {2, 64, 64, 1, 4, false, 98304, 4096, 256, 0, {0x58d24908, 0x00100000, 0x00600000, 0x00070018, 0xe180003f, 0x8000003f, 0x03000000, 0},
+     0xe26af6459727f0d1, 6, true, 16384},
+    {2, 32, 32, 1, 8, false, 98304, 4096, 256, 0, {0x58d7ff83, 0x00100000, 0x00600000, 0x00070010, 0xe400001f, 0x8001001f, 0x03000000, 0},
+     0x42cfeb0b5268b305, 12, true, 8192},
+    {2, 300, 200, 1, 4, false, 1245184, 8192, 1216, 0, {0x58d24908, 0x00100000, 0x00600000, 0x00070020, 0xe280012b, 0x800300c7, 0x03000000, 0},
+     0x0669d097886e5521, 4, false, 311296},
+    {2, 128, 128, 1, 2, false, 196608, 8192, 256, 0, {0x7012491b, 0x00100000, 0x00600000, 0x00070020, 0xe180007f, 0x8000007f, 0x03000000, 0},
+     0x2814460b41d6dfd5, 6, true, 32768},
+    {2, 33, 9, 1, 16, false, 49152, 4096, 576, 0, {0x58d7ff81, 0x00100000, 0x00600000, 0x00070000, 0xe2800020, 0x80040008, 0x03000000, 0},
+     0x670c8a7e7b780e8e, 5, false, 9216},
 };
+// clang-format on
 
-TEST(Layout, OneAndThreeDimensionalImagesAreNils)
+uint32_t viewType(const NilView &n)
+{
+    if (n.dim != 2)
+        return n.dim == 1 ? raw::fx::kTexOneD : raw::fx::kTexThreeD;
+    return n.cube ? (n.layers > 6 ? raw::fx::kTexCubeArray : raw::fx::kTexCube) : raw::fx::kTexTwoDArray;
+}
+
+TEST(Layout, OneThreeDimensionalArrayAndCubeImagesAreNils)
 {
     for (const NilView &n : kNilViews) {
         raw::fx::MipChain c;
-        const uint32_t type = n.dim == 1 ? raw::fx::kTexOneD : raw::fx::kTexThreeD;
-        ASSERT_TRUE(n.dim == 1 ? raw::fx::mipChainLayout(n.width, n.height, 1, n.bpp, c)
-                               : raw::fx::volumeLayout(n.width, n.height, n.depth, 1, n.bpp, n.view2d, c))
-            << n.width << "x" << n.height << "x" << n.depth;
-        EXPECT_EQ(c.bytes, n.bytes) << n.width << "x" << n.height << "x" << n.depth;
-        EXPECT_EQ(c.align, n.align) << n.width << "x" << n.height << "x" << n.depth;
+        ASSERT_TRUE(n.dim == 1   ? raw::fx::mipChainLayout(n.width, n.height, 1, n.bpp, c)
+                    : n.dim == 3 ? raw::fx::volumeLayout(n.width, n.height, n.depth, 1, n.bpp, n.view2d, c)
+                                 : raw::fx::arrayLayout(n.width, n.height, n.layers, 1, n.bpp, c))
+            << n.width << "x" << n.height << "x" << n.depth << "x" << n.layers;
+        EXPECT_EQ(c.bytes, n.bytes) << n.width << "x" << n.height << "x" << n.depth << "x" << n.layers;
+        EXPECT_EQ(c.align, n.align) << n.width << "x" << n.height << "x" << n.depth << "x" << n.layers;
+        EXPECT_EQ(c.arrayStride, n.arrayStride) << n.width << "x" << n.height << "x" << n.depth << "x" << n.layers;
         EXPECT_EQ(c.level[0].rowBytes, n.rowBytes);
         EXPECT_EQ(c.zLog2, n.zLog2);
         uint32_t header[8];
-        raw::fx::mipChainTic(c, 0x100000, n.header[0], false, 0, 1, header, type);
+        raw::fx::mipChainTic(c, 0x100000, n.header[0], false, 0, 1, header, viewType(n));
         for (int w = 0; w < 8; w++)
-            EXPECT_EQ(header[w], n.header[w]) << n.width << "x" << n.height << "x" << n.depth << " word " << w;
+            EXPECT_EQ(header[w], n.header[w])
+                << n.width << "x" << n.height << "x" << n.depth << "x" << n.layers << " word " << w;
         const size_t row = size_t(n.width) * n.bpp, plane = row * n.height;
-        std::vector<uint8_t> linear(plane * n.depth), tiled(c.bytes, 0);
+        std::vector<uint8_t> linear(plane * n.depth * n.layers), tiled(c.bytes, 0);
         for (size_t k = 0; k < linear.size(); k++)
             linear[k] = uint8_t(k * 131 + k / 251 + 7);
         const uint32_t origin[3] = {0, 0, 0}, size[3] = {n.width, n.height, n.depth};
-        if (n.dim == 1)
-            raw::fx::writeLevel(c, tiled.data(), 0, 0, 0, n.width, 1, linear.data(), row);
-        else
+        if (n.dim == 3)
             raw::fx::writeVolume(c, tiled.data(), 0, origin, size, linear.data(), row, plane);
+        else
+            for (uint32_t l = 0; l < n.layers; l++)
+                raw::fx::writeLevel(c, tiled.data() + l * c.arrayStride, 0, 0, 0, n.width, n.height,
+                                    linear.data() + l * plane, row);
         uint64_t hash = 0xcbf29ce484222325ull;
         for (uint8_t b : tiled)
             hash = (hash ^ b) * 0x100000001b3ull;
-        EXPECT_EQ(hash, n.hash) << n.width << "x" << n.height << "x" << n.depth;
-        std::vector<uint8_t> back(linear.size(), 0);
+        EXPECT_EQ(hash, n.hash) << n.width << "x" << n.height << "x" << n.depth << "x" << n.layers;
         if (n.dim == 3) {
+            std::vector<uint8_t> back(linear.size(), 0);
             raw::fx::readVolume(c, tiled.data(), 0, origin, size, back.data(), row, plane);
             EXPECT_EQ(back, linear);
         }

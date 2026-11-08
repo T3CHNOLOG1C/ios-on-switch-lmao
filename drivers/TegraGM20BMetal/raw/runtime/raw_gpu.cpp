@@ -1025,6 +1025,11 @@ void Device::writeTic(const Texture &t)
     const FormatInfo *f = formatInfo(t.format);
     uint32_t w[8] = {f->tic0};
     fx::MipChain one;
+    if (t.layers > 1 && fx::arrayLayout(t.width, t.height, t.layers, 1, t.bpp, one)) {
+        fx::mipChainTic(one, t.va, f->tic0, f->srgb, 0, 1, w, t.type);
+        memcpy(tic_.cpu + 32 * t.tic, w, 32);
+        return;
+    }
     if (t.type == fx::kTexThreeD && fx::volumeLayout(t.width, t.height, t.depth, 1, t.bpp, !t.blockDepth, one)) {
         fx::mipChainTic(one, t.va, f->tic0, f->srgb, 0, 1, w, t.type);
         memcpy(tic_.cpu + 32 * t.tic, w, 32);
@@ -1152,6 +1157,32 @@ bool Device::createVolume(uint32_t width, uint32_t height, uint32_t depth, uint3
     t.type = fx::kTexThreeD;
     t.depth = depth;
     t.blockDepth = c.zLog2;
+    if (!(t.tic = allocTic())) {
+        Lease *none = nullptr;
+        freeSpan(t.span, Memory::Bl, none);
+        return false;
+    }
+    writeTic(t);
+    return true;
+}
+
+bool Device::createArray(uint32_t width, uint32_t height, uint32_t layers, uint32_t format, uint32_t type, Texture &t)
+{
+    fx::MipChain c;
+    if (!shape(width, height, format, t) || xrForm(format) != XrForm::None ||
+        !fx::arrayLayout(width, height, layers, 1, t.bpp, c))
+        return false;
+    std::lock_guard<std::mutex> l(lock_);
+    if (!blAlloc(c.bytes, c.align, t.span))
+        return false;
+    t.va = t.span.va;
+    t.cpu = t.span.cpu;
+    t.pitch = c.level[0].rowBytes;
+    t.blockLinear = true;
+    t.blockHeight = c.level[0].yLog2;
+    t.layerBytes = c.arrayStride;
+    t.type = uint8_t(type);
+    t.layers = layers;
     if (!(t.tic = allocTic())) {
         Lease *none = nullptr;
         freeSpan(t.span, Memory::Bl, none);
@@ -3320,10 +3351,13 @@ struct CopySide {
     uint8_t blockDepth = 0;
 };
 
+// z: a 3D texture's plane, or an array's layer (its own 2D image, layerBytes on: NVK's array_stride step)
 CopySide sideOf(const Texture &t, uint32_t x, uint32_t y, uint32_t z)
 {
     if (!t.blockLinear)
         return {t.va + uint64_t(y) * t.pitch + uint64_t(x) * t.bpp, t.pitch};
+    if (t.layers > 1)
+        return {t.va + z * t.layerBytes, t.pitch, x, y, t.pitch / t.bpp, t.height, true, t.blockHeight};
     return {t.va, t.pitch, x, y, t.pitch / t.bpp, t.height, true, t.blockHeight, t.depth, z, t.blockDepth};
 }
 
