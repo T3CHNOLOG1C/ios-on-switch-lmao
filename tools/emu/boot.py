@@ -42,16 +42,18 @@ def bazel(base: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
-def build_package(kind: str, flags: list[str]) -> Path:
+def build_package(kind: str, flags: list[str]) -> tuple[Path, Path]:
+    """Build //:boot for the kind; return it and the prelinked kernel it carries (its symbols find the live log)."""
     base = output_base()
     options = [f'--//ipsw:kind={KINDS[kind]}', *flags]
     bazel(base, 'build', *options, '//:boot')
-    relative = bazel(base, 'cquery', *options, '--output=files', '//:boot')
-    return Path(bazel(base, 'info', *options, 'execution_root')) / relative
+    root = Path(bazel(base, 'info', *options, 'execution_root'))
+    package, kernel = bazel(base, 'cquery', *options, '--output=files', '//:boot', '//kernel:prelinked').splitlines()
+    return root / package, root / kernel
 
 
 def default_image(kind: str) -> Path | None:
-    """Return the first part of `bazel run //:image`'s install image for the kind, here or in the main checkout."""
+    """Return the first part of the kind's install image: in this checkout's or the main one's out/sd, or shared."""
     common = subprocess.run(
         ['git', 'rev-parse', '--path-format=absolute', '--git-common-dir'],
         cwd=workspace(),
@@ -59,8 +61,10 @@ def default_image(kind: str) -> Path | None:
         text=True,
         check=False,
     ).stdout.strip()
-    name = f'out/sd/switchroot/ios/IOS{kind[3:]}.SII.001'
-    for root in (workspace(), Path(common).parent if common else None):
+    name = f'switchroot/ios/IOS{kind[3:]}.SII.001'
+    roots = [workspace() / 'out/sd', Path(common).parent / 'out/sd' if common else None]
+    roots.append(Path.home() / f'Library/Caches/switch-ios/sd-{KINDS[kind]}')
+    for root in roots:
         if root and (root / name).exists():
             return root / name
     return None
@@ -97,7 +101,7 @@ def run_machine(run: Path, inputs: machine.Inputs, seconds: float) -> None:
         while time.monotonic() < deadline and process.poll() is None:
             time.sleep(0.5)
         if process.poll() is None:
-            report.capture(monitor, run)
+            report.capture(monitor, run, inputs.kernel)
             with contextlib.suppress(OSError, RuntimeError):
                 monitor.command('quit')
         monitor.close()
@@ -116,20 +120,33 @@ def parse() -> argparse.Namespace:
     parser.add_argument('--bootargs', help='switchroot/ios/bootargs.txt for this run, e.g. -v')
     parser.add_argument('--out', type=Path, help='the run directory (default out/emu/<kind>-<time>)')
     parser.add_argument('--package', type=Path, help='a //:boot output to boot instead of building one')
+    parser.add_argument('--kernel', type=Path, help="--package's prelinked kernel, for the live kernel log")
     parser.add_argument('--bazel-flag', action='append', default=[], help='a flag for the //:boot build')
     parser.add_argument('--qemu', type=Path, help='this qemu-system-aarch64 instead of the cached build')
+    parser.add_argument('--icount', action='store_true', help='guest time from instructions (one host thread)')
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse()
-    package = args.package.resolve() if args.package else build_package(args.kind, args.bazel_flag)
+    if args.package:
+        package, kernel = args.package.resolve(), args.kernel
+    else:
+        package, kernel = build_package(args.kind, args.bazel_flag)
     binary = args.qemu.resolve() if args.qemu else qemu.ensure()
     run = (args.out or workspace() / 'out/emu' / f'{args.kind}-{time.strftime("%Y%m%d-%H%M%S")}').resolve()
     run.mkdir(parents=True, exist_ok=True)
     image = None if args.sd == 'none' else Path(args.sd) if args.sd else default_image(args.kind)
     card = sdcard.card_for_run(image, run, card_files(package, run, args.bootargs))
-    inputs = machine.Inputs(qemu=binary, package=package, regwrite=regwrite(), sd=card, qmp=socket_path())
+    inputs = machine.Inputs(
+        qemu=binary,
+        package=package,
+        regwrite=regwrite(),
+        sd=card,
+        qmp=socket_path(),
+        kernel=kernel,
+        icount=args.icount,
+    )
     run_machine(run, inputs, args.seconds)
     print(report.summarize(run), end='')
 

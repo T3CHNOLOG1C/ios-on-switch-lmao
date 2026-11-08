@@ -12,14 +12,16 @@ bazel run //tools/emu:build                                  # only the emulator
 ```
 
 `--kind` builds `//:boot` with `--//ipsw:kind` in the output base `bazel run` itself uses. `--bazel-flag` passes
-flags to that build (for example `--bazel-flag=--config=agent`), and `--package DIR` boots an existing `//:boot`
-output instead. The run directory is `out/emu/<kind>-<time>` unless `--out` names one:
+flags to that build (for example `--bazel-flag=--config=agent`). `--package DIR` boots an existing `//:boot` output
+instead, and `--kernel` names its prelinked kernel for the live log. `--icount` makes guest time follow executed
+instructions: slower, since it runs one host thread, but a busy Mac can no longer expire a driver's timeout before the
+device it waits for has run. The run directory is `out/emu/<kind>-<time>` unless `--out` names one:
 
 | File | What |
 |---|---|
 | `summary.txt` | How far it got: firmware, secondary cores, core PCs, the panic, the last kernel lines |
 | `uart-a.log` | bl31, U-Boot, the boot script, the exporter and the loader, on UART-A |
-| `kernel.log`, `panic.txt` | The kernel's log and panic, read from its RAM log at `0xB0000000` |
+| `kernel.log`, `panic.txt` | The kernel's log (XNU's msgbuf, read live through a core's MMU) and its panic record |
 | `screen.png`, `framebuffer.png` | What display controller A scans out, and hekate's framebuffer |
 | `registers.txt` | Every core's registers when the run stopped |
 
@@ -29,11 +31,14 @@ Core 0 starts in `firmware/regwrite.S`, which replays the register writes in `he
 the memory controller's carveouts, the microsecond timer and the BL31 parameters in PMC scratch. It then enters
 switchroot's `bl31.bin` the way hekate's l4t launcher does. From there on everything is the real thing: bl31,
 switchroot's U-Boot (its console on UART-A, as hekate's `uart_port=1` sets it), the boot script, the SD exporter, the
-loader and XNU. Secondary cores start through bl31's PSCI and the flow controller, on Tegra's own GIC.
+loader and XNU. Secondary cores start through bl31's PSCI and the flow controller, on Tegra's own GIC. Idle cores
+power down in C7 through bl31's CPU_SUSPEND, and the flow controller brings them back through their reset vector
+when the GIC (an SGI or SPI) or the legacy interrupt controller (TMR10-13) has something pending for them.
 
 The SD card is a 2 TiB VMDK of flat extents. It holds hekate's hybrid MBR and GPT, a FAT with the run's boot files
 and `bootargs.txt`, and the iOS partition, which maps straight onto the install image from `bazel run //:image`
-(`out/sd/switchroot/ios/IOS<NN>.SII.*` in this checkout or the main one). QEMU writes to a snapshot overlay, so a run
+(`out/sd/switchroot/ios/IOS<NN>.SII.*` in this checkout or the main one, else
+`~/Library/Caches/switch-ios/sd-<build>/switchroot/ios/`). QEMU writes to a snapshot overlay, so a run
 never changes the image. The card is 2 TiB rather than the real 1 TB because QEMU only takes power-of-two cards.
 
 ## Caches

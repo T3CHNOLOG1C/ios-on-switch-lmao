@@ -16,6 +16,8 @@ class Inputs:
     regwrite: Path
     sd: Path | None
     qmp: Path
+    kernel: Path | None = None
+    icount: bool = False
 
 
 def _load(path: str, address: int) -> list[str]:
@@ -60,6 +62,10 @@ def command(run: Path, inputs: Inputs) -> list[str]:
         '-global', f'driver=tegra.evp,property=cpu-reset-vector,value={IRAM_STUB:#x}',
     ]  # fmt: skip
     args += stage(run, inputs.package, inputs.regwrite)
+    if inputs.icount:
+        # Guest time follows executed instructions, so a loaded host cannot expire a driver's timeout before the
+        # device it waits for has run; it costs MTTCG's parallel cores.
+        args += ['-icount', 'shift=auto']
     if inputs.sd:
         args += ['-drive', f'if=sd,index=0,format=vmdk,file={inputs.sd},snapshot=on']
     return args

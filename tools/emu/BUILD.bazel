@@ -37,6 +37,7 @@ py_library(
         "hekate.py",
         "machine.py",
         "monitor.py",
+        "msgbuf.py",
         "qemu.py",
         "report.py",
         "sdcard.py",
