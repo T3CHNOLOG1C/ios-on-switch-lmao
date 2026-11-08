@@ -15,6 +15,7 @@
 #include <set>
 #include <string>
 #include <vector>
+#include "nvdec_comp.h"
 #include "probe_record.h"
 
 namespace nvdec {
@@ -59,6 +60,9 @@ public:
     // The capture's own (pack/cap.cpp): NVDEC_SCRUB's zeroing of what a probe draw read, NVDEC_DESCRIBE's naming of an address
     std::function<void(uint64_t va, uint64_t bytes)> scrub;
     std::function<void(uint64_t va)> describe;
+    // The PTE kind a VA is bound with (the mock's model of the kext, pack/mock_comp.h): compressed targets' counts (comp)
+    std::function<uint32_t(uint64_t va)> vaKind;
+    CompCounts comp, compSubmit;
     // The draw's facts, as NVDEC_PROBE prints them (P lines)
     void probeRecord(ProbeRecord &out);
     // A program the known ones lack, by its SET_PIPELINE_PROGRAM offset: the recording driver's own (raw_capture.cpp asks NVK);
@@ -126,6 +130,7 @@ private:
     void draw(const char *kind, uint32_t a, uint32_t b);
     void probeDump(uint32_t first, uint32_t count);
     void clear(uint32_t data);
+    void countComp(uint32_t clearData);
     void barrier(const std::string &what);
 
     uint32_t r3(uint32_t mthd) const

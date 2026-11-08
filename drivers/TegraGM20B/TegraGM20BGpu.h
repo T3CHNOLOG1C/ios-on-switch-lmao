@@ -98,6 +98,9 @@ int tgm_vm_unmap_pages(struct tgm_vm *vm, uint64_t va, uint64_t range, uint8_t p
 /* A zero-bandwidth-clear entry (ds, l2 as TegraGM20BAbiZbc has them): its table index, or -EINVAL (format), -ENOSPC
  * (table full), -ENODEV (no compression). */
 int tgm_zbc_add(int depth, uint32_t format, const uint32_t ds[4], const uint32_t l2[4]);
+/* 0 when booted with switch-no-gpu-compression (TegraGM20B.cpp): GetInfo leaves TegraGM20BInfoCompression clear, so no
+ * client binds a compressible kind or adds ZBC entries. */
+int switch_gpu_compression_on(void);
 /* Kernel range: map `mem` somewhere at or above TGM_KERNEL_VA and return the address. */
 int tgm_vm_kmap(struct tgm_vm *vm, struct tgm_mem *mem, uint64_t bytes, uint64_t *va);
 

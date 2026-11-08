@@ -92,6 +92,12 @@ RawState *gRM;
     if (!twin)
         SWITCH_REFUSE_DETAIL("raw", "twin.missing", uintptr_t(selector), "-[%s %s] with no m2v twin",
                              class_getName(object_getClass(self)), sel_getName(selector));
+    else
+        SWITCH_REFUSE_DETAIL("raw", "twin.forward", uintptr_t(selector), "-[%s %s] answered by its m2v twin",
+                             class_getName(object_getClass(self)), sel_getName(selector));
+#if SWITCH_FRAME_TIMELINE
+    gRM->stats.twinForwards.fetch_add(1, std::memory_order_relaxed);
+#endif
     return twin;
 }
 

@@ -64,6 +64,13 @@
     return nil;
 }
 
+// One its caller dropped without ending it is ended here, so the tape's encoders stay closed
+- (void)dealloc
+{
+    if (!_ended && _cb)
+        [self endEncoding];
+}
+
 - (void)endEncoding
 {
     SWITCH_API(ApiEncoder);
@@ -158,10 +165,14 @@ static bool rawDepthStencil(MTLRenderPassDescriptor *pass)
     MTLRenderPassDescriptor *pass = [d copy];
     [self retain:pass];
     e->_pass = pass;
+    e->_passAt = uint32_t(_passes.size());
+    RMPass &facts = _passes.emplace_back();
     for (unsigned c = 0; c < 8; c++) {
-        id<MTLTexture> t = pass.colorAttachments[c].texture;
+        MTLRenderPassColorAttachmentDescriptor *a = pass.colorAttachments[c];
+        id<MTLTexture> t = a.texture;
         if (!t)
             continue;
+        facts.color[c] = {t, a.level, a.loadAction, a.storeAction, a.clearColor};
         [self retain:t];
         [self retain:pass.colorAttachments[c].resolveTexture];
         RMTexture *x = (RMTexture *)t;
@@ -201,6 +212,13 @@ static bool rawDepthStencil(MTLRenderPassDescriptor *pass)
             e->_count = c + 1;
         }
     }
+    facts.depth = pass.depthAttachment.texture;
+    facts.depthLoad = pass.depthAttachment.loadAction;
+    facts.stencilLoad = pass.stencilAttachment.loadAction;
+    facts.clearDepth = pass.depthAttachment.clearDepth;
+    facts.clearStencil = pass.stencilAttachment.clearStencil;
+    facts.width = pass.renderTargetWidth;
+    facts.height = pass.renderTargetHeight;
     if (pass.depthAttachment.texture || pass.stencilAttachment.texture) {
         [self retain:pass.depthAttachment.texture];
         [self retain:pass.stencilAttachment.texture];
@@ -222,6 +240,7 @@ static bool rawDepthStencil(MTLRenderPassDescriptor *pass)
     }
     Cmd m = cmd(OpRender);
     m.obj = (__bridge void *)pass;
+    m.x = e->_passAt;
     [self record:m];
     return (id<MTLRenderCommandEncoder>)e;
 }

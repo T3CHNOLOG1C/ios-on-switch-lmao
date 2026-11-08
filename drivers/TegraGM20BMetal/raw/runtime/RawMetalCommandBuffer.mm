@@ -7,6 +7,7 @@
 // allocate none of it
 struct RMRecording {
     std::vector<Cmd> tape;
+    std::vector<RMPass> passes;
     std::vector<uint8_t> bytes;
     std::vector<uint64_t> extra;
     std::vector<id> owners;
@@ -22,6 +23,7 @@ static void takeRecording(RMCommandBuffer *b)
         if (!gRecordings.empty()) {
             RMRecording &r = gRecordings.back();
             b->_tape.swap(r.tape);
+            b->_passes.swap(r.passes);
             b->_bytes.swap(r.bytes);
             b->_extra.swap(r.extra);
             b->_owners.swap(r.owners);
@@ -42,10 +44,12 @@ static void giveRecording(RMCommandBuffer *b)
         return;
     RMRecording r;
     r.tape.swap(b->_tape);
+    r.passes.swap(b->_passes);
     r.bytes.swap(b->_bytes);
     r.extra.swap(b->_extra);
     r.owners.swap(b->_owners);
     r.tape.clear();
+    r.passes.clear();
     r.bytes.clear();
     r.extra.clear();
     r.owners.clear();
@@ -98,6 +102,24 @@ static void giveRecording(RMCommandBuffer *b)
 {
     _whole = true;
     [self takeReason:reason why:why];
+}
+
+// Answered here, not recorded as invocations (each one sent the whole command buffer to m2v)
+- (NSMutableDictionary *)userDictionary
+{
+    std::lock_guard<std::mutex> l(_lock);
+    if (!_userDictionary)
+        _userDictionary = [NSMutableDictionary dictionary];
+    return _userDictionary;
+}
+
+- (uint64_t)globalTraceObjectID
+{
+    static std::atomic<uint64_t> ids{0};
+    std::lock_guard<std::mutex> l(_lock);
+    if (!_traceId)
+        _traceId = ++ids;
+    return _traceId;
 }
 
 - (void)useResidencySet:(id)set
