@@ -66,18 +66,18 @@ xcrun clang++ -dynamiclib "$GPU/mock_iokit.o" "$GPU/cap.o" "$GPU/nvdec.o" "$GPU/
 xcrun clang++ -O1 -g -std=c++17 -fobjc-arc -Wno-deprecated-declarations -I "$TREE/drivers/NativeMetal" -I "$METAL_ABI" -I "$TREE/drivers/TegraGM20B" \
     -x objective-c++ "$HERE/alias_frame.mm" "$RAW"/runtime/Raw*.mm \
     "$TREE/drivers/NativeMetal/NativeBridgeMetalFrontend.mm" -x c++ "$RAW/runtime/raw_gpu.cpp" "$RAW/runtime/raw_alias.cpp" \
-    "$RAW/fx/fx_mip.cpp" "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_pack.cpp" "$RAW/runtime/raw_ycbcr.cpp" "$RAW/runtime/raw_zeta.cpp" "$RAW/runtime/raw_comp.cpp" "$RAW/runtime/raw_capture.cpp" "$RAW/runtime/raw_record.cpp" \
+    "$RAW/fx/fx_mip.cpp" "$RAW/fx/fx_image.cpp" "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_pack.cpp" "$RAW/runtime/raw_ycbcr.cpp" "$RAW/runtime/raw_zeta.cpp" "$RAW/runtime/raw_comp.cpp" "$RAW/runtime/raw_capture.cpp" "$RAW/runtime/raw_record.cpp" \
     "$RAW/runtime/raw_cache.cpp" "$RAW/runtime/raw_compiler.cpp" "$RAW/runtime/raw_metallib.cpp" "$RAW/runtime/raw_completed.cpp" "$RAW/runtime/raw_compute.cpp" "$TREE/kits/SwitchRefusal/SwitchRefusal.c" -x none "$1" \
     -L "$GPU" -lmock_iokit -Wl,-rpath,"$GPU" -lobjc -framework Foundation -framework Metal -framework IOSurface \
     -framework IOKit -framework CoreFoundation -o "$GPU/alias_frame"
 xcrun clang++ -O1 -g -std=c++17 -Wall -I "$TREE/third_party/mesa/include" -I "$TREE/drivers/TegraGM20B" "$HERE/nvk_alias.cpp" \
-    "$RAW/runtime/raw_kernel.cpp" "$RAW/fx/fx_mip.cpp" -L "$GPU" -lmock_iokit -Wl,-rpath,"$GPU" -framework IOKit \
+    "$RAW/runtime/raw_kernel.cpp" "$RAW/fx/fx_mip.cpp" "$RAW/fx/fx_image.cpp" -L "$GPU" -lmock_iokit -Wl,-rpath,"$GPU" -framework IOKit \
     -o "$GPU/nvk_alias"
 xcrun clang++ -O1 -g -std=c++17 -Wall -I "$TREE/third_party/mesa/include" -I "$TREE/drivers/TegraGM20B" \
     "$HERE/surface_layout.cpp" -L "$GPU" -lmock_iokit -Wl,-rpath,"$GPU" -o "$GPU/surface_layout"
 xcrun clang++ -O1 -g -std=c++17 -fobjc-arc -Wno-deprecated-declarations -I "$TREE/drivers/NativeMetal" -I "$METAL_ABI" -I "$TREE/drivers/TegraGM20B" \
     -x objective-c++ "$HERE/layout_frame.mm" "$TREE/drivers/NativeMetal/NativeBridgeMetalFrontend.mm" \
-    -x c++ "$RAW/runtime/raw_kernel.cpp" "$RAW/fx/fx_mip.cpp" -x none "$1" -L "$GPU" -lmock_iokit -Wl,-rpath,"$GPU" -lobjc \
+    -x c++ "$RAW/runtime/raw_kernel.cpp" "$RAW/fx/fx_mip.cpp" "$RAW/fx/fx_image.cpp" -x none "$1" -L "$GPU" -lmock_iokit -Wl,-rpath,"$GPU" -lobjc \
     -framework Foundation -framework Metal -framework IOSurface -framework IOKit -framework CoreFoundation \
     -o "$GPU/layout_frame"
 xcrun clang++ -O1 -g -std=c++17 -fobjc-arc -Wno-deprecated-declarations -I "$TREE/drivers/NativeMetal" -I "$METAL_ABI" -I "$TREE/drivers/TegraGM20B" \

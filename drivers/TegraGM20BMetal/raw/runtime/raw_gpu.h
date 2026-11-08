@@ -196,8 +196,11 @@ struct Texture {
     bool blockLinear = false;
     uint8_t blockHeight = 0;
     uint64_t layerBytes = 0;
-    // A block-linear texture's header type (fx::kTexOneD, kTexTwoD); a pitch header is always TWO_D_NO_MIPMAP
+    // A block-linear texture's header type (fx::kTexOneD, kTexTwoD, kTexThreeD); a pitch header is always TWO_D_NO_MIPMAP
     uint8_t type = fx::kTexTwoD;
+    // A 3D texture's (fx_image.h): its depth and its blocks' depth in planes, log2 (0 for one made 2D-view compatible)
+    uint32_t depth = 1;
+    uint8_t blockDepth = 0;
 
     // Depth32Float_Stencil8 (raw_zeta.h): block-linear zeta memory, bound with its own PTE kind; never sampled, copied or a
     // colour target
@@ -483,14 +486,15 @@ public:
     // buffer<->image copies of linear images)
     void copyRect(uint64_t src, uint32_t srcPitch, uint64_t dst, uint32_t dstPitch, uint32_t width, uint32_t lines,
                   uint32_t bpp);
-    // `w` x `h` texels from (sx, sy) of `src` to (dx, dy) of `dst`, each pitch or block-linear (vkCmdCopyImage)
-    void copyTexels(const Texture &src, uint32_t sx, uint32_t sy, const Texture &dst, uint32_t dx, uint32_t dy,
-                    uint32_t w, uint32_t h);
+    // `w` x `h` texels from (sx, sy) of plane sz of `src` to (dx, dy) of plane dz of `dst`, each pitch or block-linear (a 2D
+    // texture's plane is 0) (vkCmdCopyImage)
+    void copyTexels(const Texture &src, uint32_t sx, uint32_t sy, uint32_t sz, const Texture &dst, uint32_t dx,
+                    uint32_t dy, uint32_t dz, uint32_t w, uint32_t h);
     // `w` x `h` texels between rows `pitch` bytes apart at `va` (both multiples of the texel's component, at most 4 bytes) and
-    // (x, y) of `t`, pitch or block-linear: into `t` where `toTexture`, else out of it (vkCmdCopyBufferToImage,
+    // (x, y) of plane z of `t`, pitch or block-linear: into `t` where `toTexture`, else out of it (vkCmdCopyBufferToImage,
     // vkCmdCopyImageToBuffer)
-    void copyBufferTexels(uint64_t va, uint32_t pitch, const Texture &t, uint32_t x, uint32_t y, uint32_t w, uint32_t h,
-                          bool toTexture);
+    void copyBufferTexels(uint64_t va, uint32_t pitch, const Texture &t, uint32_t x, uint32_t y, uint32_t z, uint32_t w,
+                          uint32_t h, bool toTexture);
     // A planar texture's image from its surface's planes (Texture::planar): two remapped copies, the luma codes into green
     // (alpha 255), then the chroma pairs into red (Cr) and blue (Cb), each leaving the other components as they are
     void convertPlanar(const Texture &t);
@@ -664,6 +668,9 @@ public:
     // A 1D texture: NIL's 1D image, one block-linear row (y_log2 0) under a ONE_D header, in block-linear memory the CPU
     // writes through its tiled view (a 1D header takes no pitch layout)
     bool createLine(uint32_t width, uint32_t format, Texture &t);
+    // A 3D texture of one level: NIL's 3D image (fx_image.h) under a THREE_D header. `view2d`: one plane a block, as m2v makes
+    // a 3D render target (2D-array compatible), so its twin over the same memory reads the same texels
+    bool createVolume(uint32_t width, uint32_t height, uint32_t depth, uint32_t format, bool view2d, Texture &t);
     // A mipmapped 2D texture of `levels` levels: level 0 of its block-linear chain (Texture::chain), its header the chain's.
     // False: not one the raw path keeps (not a render target format, extended range, no memory).
     bool createMipTexture(uint32_t width, uint32_t height, uint32_t format, uint32_t levels, Texture &t);

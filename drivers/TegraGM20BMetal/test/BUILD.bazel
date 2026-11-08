@@ -71,6 +71,8 @@ host_test(
         "raw_layout_test.cpp",
         "//drivers/TegraDisplayFlip:TegraScanoutCopy.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_image.cpp",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_image.h",
         "//drivers/TegraGM20BMetal:raw/fx/fx_mip.cpp",
         "//drivers/TegraGM20BMetal:raw/fx/fx_mip.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_push.h",
