@@ -148,8 +148,7 @@ void finish(RMCommandBuffer *cb, NSError *error)
             cb->_scheduledDone = true;
         }
         cb->_changed.notify_all();
-        cb->_owners.clear();  // the resources may die now: no submission uses them any more
-        cb->_owners.shrink_to_fit();
+        cb->_owners.clear();  // the resources may die now: no submission uses them any more (its capacity is recycled)
         if (gRM->committed.fetch_sub(1, std::memory_order_acq_rel) == 1)
             gRawRelease.drained();
 #if SWITCH_FRAME_TIMELINE
