@@ -8,6 +8,7 @@
 #include <cmath>
 #import <objc/message.h>
 #include <algorithm>
+#include <chrono>
 #include <mach/mach.h>
 #include "../test/frame.h"
 #include "state_desc.h"
@@ -120,6 +121,7 @@ int main(int argc, char **argv)
         }
         std::vector<frame::State> all = frame::states(argv[4]);
         std::vector<id<MTLRenderPipelineState>> uber, blur, extra;
+        double createUs = 0;  // the frame's states' creation (newRenderPipelineStateWithDescriptor), on this thread
         for (auto &s : all) {
             if (s.extra) {
                 if (id<MTLRenderPipelineState> p = [dev newRenderPipelineStateWithDescriptor:descriptor(qc, s.line)
@@ -136,8 +138,10 @@ int main(int argc, char **argv)
                 continue;
             if (s.blur && blur.size() >= 4 && !getenv("FRAME_ALL_STATES"))
                 continue;
-            id<MTLRenderPipelineState> p = [dev newRenderPipelineStateWithDescriptor:descriptor(qc, s.line)
-                                                                               error:&error];
+            MTLRenderPipelineDescriptor *made = descriptor(qc, s.line);
+            const auto creating = std::chrono::steady_clock::now();
+            id<MTLRenderPipelineState> p = [dev newRenderPipelineStateWithDescriptor:made error:&error];
+            createUs += std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - creating).count();
             if (!p) {
                 fprintf(stderr, "REFUSED %s\n", s.key.c_str());
 #ifdef RAW_FACADE
@@ -149,6 +153,8 @@ int main(int argc, char **argv)
             printf("STATE %s %s\n", s.uber ? "uber" : "blur", s.key.c_str());
             statesOut(s);
         }
+        printf("CREATE %zu states, %.0f us a state\n", uber.size() + blur.size(),
+               uber.size() + blur.size() ? createUs / double(uber.size() + blur.size()) : 0.0);
         id<MTLCommandQueue> queue = [dev newCommandQueue];
         id<MTLTexture> tex[frame::TEX_COUNT];
         IOSurfaceRef surfaces[frame::TEX_COUNT] = {};

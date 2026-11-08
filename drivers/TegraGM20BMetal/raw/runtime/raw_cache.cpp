@@ -299,19 +299,36 @@ RecordCache::Found decodeEntry(const std::string &bytes, const CacheKey &k, Runt
 
 bool RecordCache::open(const std::string &dir, uint64_t stack, uint64_t capBytes)
 {
+    if (!attach(dir, stack, capBytes))
+        return false;
+    tidy();
+    return true;
+}
+
+bool RecordCache::attach(const std::string &dir, uint64_t stack, uint64_t capBytes)
+{
     std::lock_guard<std::mutex> l(lock_);
-    const std::string name = "raw-" + hex16(stack);
-    const std::string mine = dir + "/" + name;
+    const std::string mine = dir + "/raw-" + hex16(stack);
     if (dir.empty() || (mkdir(mine.c_str(), 0700) != 0 && errno != EEXIST) || access(mine.c_str(), W_OK) != 0)
         return false;
-    removeStale(dir, name);
+    parent_ = dir;
     dir_ = mine;
     stack_ = stack;
     cap_ = capBytes;
     bytes_ = 0;
-    for (const File &f : files(dir_, ".rec"))
-        bytes_ += f.bytes;
     return true;
+}
+
+void RecordCache::tidy()
+{
+    if (dir_.empty())
+        return;
+    removeStale(parent_, "raw-" + hex16(stack_));
+    uint64_t bytes = 0;
+    for (const File &f : files(dir_, ".rec"))
+        bytes += f.bytes;
+    std::lock_guard<std::mutex> l(lock_);
+    bytes_ = bytes;
 }
 
 std::string RecordCache::path(const CacheKey &k) const
@@ -381,7 +398,7 @@ Compiler::Compiler(RecordCache *cache, Make make, uint64_t retryUs)
     : cache_(cache), make_(std::move(make)), retryUs_(retryUs),
       queue_(dispatch_queue_create(
           "com.brunostjohn.switch.raw.compile",
-          dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_BACKGROUND, 0)))
+          dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INITIATED, 0)))
 {}
 
 Compiler::~Compiler()
@@ -420,6 +437,41 @@ bool Compiler::retryable(const Entry &e, uint64_t &wait) const
     return true;
 }
 
+RecordCache::Found Compiler::lookup(const CacheKey &k, RuntimeRecord &record, std::string &why)
+{
+    const uint64_t began = nowUs();
+    {
+        std::lock_guard<std::mutex> l(lock_);
+        const auto it = entries_.find(k.name());
+        if (it != entries_.end()) {
+            const Entry &e = it->second;
+            if (e.state == State::Ready)
+                record = *e.record;
+            why = e.why;
+            return e.state == State::Ready     ? RecordCache::Found::Record
+                   : e.state == State::Refused ? RecordCache::Found::Refusal
+                                               : RecordCache::Found::None;
+        }
+    }
+    auto loaded = std::make_unique<RuntimeRecord>();
+    const RecordCache::Found found = cache_ ? cache_->load(k, *loaded, why) : RecordCache::Found::None;
+    if (found == RecordCache::Found::None)
+        return found;
+    if (found == RecordCache::Found::Record)
+        record = *loaded;
+    std::lock_guard<std::mutex> l(lock_);
+    stats_.hits++;
+    stats_.lookupHits++;
+    stats_.lookupUs += nowUs() - began;
+    // an ask that came in since keeps its own entry (its job finds the same entry on disk)
+    if (const auto [it, first] = entries_.try_emplace(k.name()); first) {
+        it->second.state = found == RecordCache::Found::Record ? State::Ready : State::Refused;
+        it->second.why = why;
+        it->second.record = found == RecordCache::Found::Record ? std::move(loaded) : nullptr;
+    }
+    return found;
+}
+
 bool Compiler::retryAfter(const CacheKey &k, uint64_t &us) const
 {
     std::lock_guard<std::mutex> l(lock_);
@@ -434,6 +486,47 @@ void Compiler::queue(const CacheKey &k)
     dispatch_async_f(static_cast<dispatch_queue_t>(queue_), new Job{this, k}, run);
 }
 
+// The disk's entry for `k`, else make_'s result (kept on disk unless the make could not run)
+Compiler::Outcome Compiler::produce(const CacheKey &k, RuntimeRecord &record, std::string &why,
+                                    RecordCache::Found &found)
+{
+    std::lock_guard<std::mutex> m(making_);
+    found = cache_ ? cache_->load(k, record, why) : RecordCache::Found::None;
+    const Outcome outcome = found == RecordCache::Found::Record    ? Outcome::Made
+                            : found == RecordCache::Found::Refusal ? Outcome::Refused
+                                                                   : make_(k, record, why);
+    if (found == RecordCache::Found::None && outcome != Outcome::Failed && cache_)
+        cache_->store(k, outcome == Outcome::Made ? &record : nullptr, why);
+    return outcome;
+}
+
+// The state's entry set to `outcome`; the asks that waited for it, and in *made its record (null: none)
+std::vector<Compiler::Done> Compiler::settle(const CacheKey &k, Outcome outcome, RecordCache::Found found,
+                                             std::unique_ptr<RuntimeRecord> record, const std::string &why,
+                                             uint64_t began, const RuntimeRecord **made)
+{
+    std::lock_guard<std::mutex> l(lock_);
+    Entry &e = entries_[k.name()];
+    std::vector<Done> waiters;
+    waiters.swap(e.waiters);
+    e.why = why;
+    *made = nullptr;
+    if (outcome == Outcome::Made) {
+        e.record = std::move(record);
+        *made = e.record.get();
+    }
+    (found == RecordCache::Found::None ? stats_.misses : stats_.hits)++;
+    stats_.refusals += outcome == Outcome::Refused;
+    stats_.failures += outcome == Outcome::Failed;
+    stats_.makeUs += nowUs() - began;
+    if (outcome == Outcome::Failed) {
+        e.failures++;
+        e.failedUs = nowUs();
+    }
+    e.state = outcome == Outcome::Made ? State::Ready : outcome == Outcome::Refused ? State::Refused : State::Failed;
+    return waiters;
+}
+
 void Compiler::run(void *context)
 {
     std::unique_ptr<Job> job(static_cast<Job *>(context));
@@ -441,40 +534,48 @@ void Compiler::run(void *context)
     const uint64_t began = nowUs();
     auto record = std::make_unique<RuntimeRecord>();
     std::string why;
-    const RecordCache::Found found = c.cache_ ? c.cache_->load(job->key, *record, why) : RecordCache::Found::None;
-    Outcome outcome = found == RecordCache::Found::Record    ? Outcome::Made
-                      : found == RecordCache::Found::Refusal ? Outcome::Refused
-                                                             : c.make_(job->key, *record, why);
-    if (found == RecordCache::Found::None && outcome != Outcome::Failed && c.cache_)
-        c.cache_->store(job->key, outcome == Outcome::Made ? record.get() : nullptr, why);
+    RecordCache::Found found;
+    const Outcome outcome = c.produce(job->key, *record, why, found);
     const RuntimeRecord *made = nullptr;
-    std::vector<Done> waiters;
-    {
-        std::lock_guard<std::mutex> l(c.lock_);
-        Entry &e = c.entries_[job->key.name()];
-        waiters.swap(e.waiters);
-        e.why = why;
-        if (outcome == Outcome::Made) {
-            e.record = std::move(record);
-            made = e.record.get();
-        }
-        (found == RecordCache::Found::None ? c.stats_.misses : c.stats_.hits)++;
-        c.stats_.refusals += outcome == Outcome::Refused;
-        c.stats_.failures += outcome == Outcome::Failed;
-        c.stats_.makeUs += nowUs() - began;
-        if (outcome == Outcome::Failed) {
-            e.failures++;
-            e.failedUs = nowUs();
-        }
-        e.state = outcome == Outcome::Made      ? State::Ready
-                  : outcome == Outcome::Refused ? State::Refused
-                                                : State::Failed;
-    }
-    for (const Done &done : waiters)
+    for (const Done &done : c.settle(job->key, outcome, found, std::move(record), why, began, &made))
         done(made, why);
     std::lock_guard<std::mutex> l(c.lock_);
     c.queued_--;
     c.idle_.notify_all();
+}
+
+Compiler::State Compiler::makeNow(const CacheKey &k, RuntimeRecord &record, std::string &why)
+{
+    switch (lookup(k, record, why)) {
+    case RecordCache::Found::Record:
+        return State::Ready;
+    case RecordCache::Found::Refusal:
+        return State::Refused;
+    case RecordCache::Found::None:
+        break;
+    }
+    {
+        std::lock_guard<std::mutex> l(lock_);
+        const auto [it, first] = entries_.try_emplace(k.name());
+        Entry &e = it->second;
+        uint64_t wait = 0;
+        if (!first && (e.state != State::Failed || !retryable(e, wait) || wait)) {
+            if (e.state == State::Ready)
+                record = *e.record;
+            return e.state;
+        }
+        e.state = State::Pending;
+    }
+    const uint64_t began = nowUs();
+    auto made = std::make_unique<RuntimeRecord>();
+    RecordCache::Found found;
+    const Outcome outcome = produce(k, *made, why, found);
+    if (outcome == Outcome::Made)
+        record = *made;
+    const RuntimeRecord *kept = nullptr;
+    for (const Done &done : settle(k, outcome, found, std::move(made), why, began, &kept))
+        done(kept, why);
+    return outcome == Outcome::Made ? State::Ready : outcome == Outcome::Refused ? State::Refused : State::Failed;
 }
 
 void Compiler::drain()

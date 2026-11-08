@@ -86,7 +86,7 @@ size_t raw_metal_rates(char *out, size_t size)
     snprintf(diag, sizeof diag,
              " sp=%llu/%llu abortenc=%.0fus/a replay=%.0fus/m rclean=%.0fKB/m rt128=%llu(pitch %u va&255 %u) "
              "rtmix=%llu lvl=%llu "
-             "mir=%llu/%llu states=%llu/%llu/%llu/%llu/%.0fms why=%s",
+             "mir=%llu/%llu states=%llu/%llu/%llu/%llu/%.0fms atcreate=%llu/%.0fus why=%s",
              (unsigned long long)sp, (unsigned long long)segs,
              (s.abortUs.load() - gRates.abortUs) / double(aborts ? aborts : 1),
              (s.replayUs.load() - gRates.replayUs) / double(m2vs),
@@ -97,7 +97,8 @@ size_t raw_metal_rates(char *out, size_t size)
              (unsigned long long)(k.mirrorsOut.load() - gRates.mirrorsOut),
              (unsigned long long)(k.mirrorsIn.load() - gRates.mirrorsIn), (unsigned long long)made.hits,
              (unsigned long long)made.misses, (unsigned long long)made.refusals, (unsigned long long)made.failures,
-             made.makeUs / 1000.0, *preds ? preds : "-");
+             made.makeUs / 1000.0, (unsigned long long)made.lookupHits,
+             made.lookupHits ? double(made.lookupUs) / double(made.lookupHits) : 0.0, *preds ? preds : "-");
 #if SWITCH_FRAME_TIMELINE
     {
         const size_t used = strlen(diag);

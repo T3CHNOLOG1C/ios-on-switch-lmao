@@ -32,8 +32,12 @@ struct CacheKey {
 
 class RecordCache {
 public:
-    // false: no entry can be kept (`dir` unusable); loads miss and stores do nothing then
+    // false: no entry can be kept (`dir` unusable); loads miss and stores do nothing then. attach() then tidy().
     bool open(const std::string &dir, uint64_t stack, uint64_t capBytes);
+    // The directory taken for loads and stores at once (a mkdir); tidy() removes another build's entries and a dead writer's
+    // temporaries and counts the bytes kept, which stores need for the cap: it may run later, on another thread
+    bool attach(const std::string &dir, uint64_t stack, uint64_t capBytes);
+    void tidy();
 
     enum class Found : uint8_t {
         None,
@@ -54,6 +58,7 @@ private:
     std::string dir_;
     uint64_t stack_ = 0, cap_ = 0, bytes_ = 0;
     std::mutex lock_;
+    std::string parent_;
     std::string path(const CacheKey &k) const;
     void evict(uint64_t room);
 };
@@ -94,12 +99,19 @@ public:
     // The state's result so far; the first ask of it queues its making. Every ask made while it is being made has its `done`
     // called once it is
     State ask(const CacheKey &k, Done done, const RuntimeRecord **record = nullptr);
+    // The state's record or refusal if it is made or on disk, on the caller's thread: what a state's creation takes at once (the
+    // disk's entry is kept as the state's result). None: not made yet (being made, or never asked)
+    RecordCache::Found lookup(const CacheKey &k, RuntimeRecord &record, std::string &why);
+    // The state made now, on the caller's thread (one make at a time, the queue's among them), as a queued ask would: Ready with
+    // its record, Refused, Failed (a later ask tries again), or Pending (the queue is making it)
+    State makeNow(const CacheKey &k, RuntimeRecord &record, std::string &why);
     // A state whose probe failed and may be tried again: true, and in *us how long until an ask tries it
     bool retryAfter(const CacheKey &k, uint64_t &us) const;
     void drain();  // host tests: waits for everything asked so far
 
     struct Stats {
         uint64_t hits = 0, misses = 0, refusals = 0, failures = 0, makeUs = 0;
+        uint64_t lookupHits = 0, lookupUs = 0;  // hits found by lookup() at a state's creation, and their cost
     };
 
     Stats stats() const;
@@ -118,6 +130,7 @@ private:
 
     RecordCache *cache_;
     Make make_;
+    std::mutex making_;  // make_ runs one state at a time
     uint64_t retryUs_;
     void *queue_;
     mutable std::mutex lock_;
@@ -126,6 +139,10 @@ private:
     std::map<uint64_t, Entry> entries_;
     Stats stats_;
     static void run(void *job);
+    Outcome produce(const CacheKey &k, RuntimeRecord &record, std::string &why, RecordCache::Found &found);
+    std::vector<Done> settle(const CacheKey &k, Outcome outcome, RecordCache::Found found,
+                             std::unique_ptr<RuntimeRecord> record, const std::string &why, uint64_t began,
+                             const RuntimeRecord **made);
     void queue(const CacheKey &k);
     bool retryable(const Entry &e, uint64_t &wait) const;
 };
