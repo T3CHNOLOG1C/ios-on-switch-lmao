@@ -17,7 +17,7 @@ class Inputs:
     sd: Path | None
     qmp: Path
     kernel: Path | None = None
-    icount: bool = False
+    icount: bool = True
 
 
 def _load(path: str, address: int) -> list[str]:
@@ -66,7 +66,7 @@ def command(run: Path, inputs: Inputs) -> list[str]:
     args += stage(run, inputs.package, inputs.regwrite)
     if inputs.icount:
         # Guest time follows executed instructions, so a loaded host cannot expire a driver's timeout before the
-        # device it waits for has run; it costs MTTCG's parallel cores.
+        # device it waits for has run (with MTTCG at load ~50, drivers panicked on interrupts that had not been lost).
         args += ['-icount', 'shift=auto']
     if inputs.sd:
         args += ['-drive', f'if=sd,index=0,format=vmdk,file={inputs.sd},snapshot=on']

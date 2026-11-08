@@ -128,7 +128,7 @@ def parse() -> argparse.Namespace:
     parser.add_argument('--kernel', type=Path, help="--package's prelinked kernel, for the live kernel log")
     parser.add_argument('--bazel-flag', action='append', default=[], help='a flag for the //:boot build')
     parser.add_argument('--qemu', type=Path, help='this qemu-system-aarch64 instead of the cached build')
-    parser.add_argument('--icount', action='store_true', help='guest time from instructions (one host thread)')
+    parser.add_argument('--mttcg', action='store_true', help='one host thread per core, guest time from the clock')
     return parser.parse_args()
 
 
@@ -150,7 +150,7 @@ def main() -> None:
         sd=card,
         qmp=socket_path(),
         kernel=kernel,
-        icount=args.icount,
+        icount=not args.mttcg,
     )
     run_machine(run, inputs, args.seconds)
     print(report.summarize(run), end='')
