@@ -196,6 +196,25 @@ class NativeLayoutTests(unittest.TestCase):
         self.assertEqual(ranges['trustcache']['start'], result['kernel_phys_base'] - 0x8000)
         self.assertEqual(result['entry_pa'], P + ROOM + 0x200000 + 0x10)
 
+    def test_full_ram_refuses_trust_caches_that_would_move_the_kernel(self):
+        self.kernel.write_bytes(macho(base=0xFFFFFFF00427C000))
+        chosen = [('darwinboot-memory-size', struct.pack('<Q', 4 << 30)), ('switch-ram-ledger', bytes(1584))]
+        self.tree.write_bytes(
+            node('device-tree', children=[node('chosen', chosen, [node('memory-map', [('TrustCache', bytes(16))])])])
+        )
+        cache = self.root / 'trustcache'
+        request = {'physical_base': 0xB2000000, 'window_size': 770 << 20, 'full_ram': True, 'trustcache_path': cache}
+        cache.write_bytes(trustcache([i.to_bytes(20, 'big') for i in range(1, 0x7C000 // 24 + 1)]))
+        self.assertGreater(len(cache.read_bytes()), 0x7C000)
+        with self.assertRaisesRegex(layout.LayoutError, 'trust caches must fit the 0x7c000 bytes below it'):
+            self.build(**request)
+        self.assertFalse(self.output.exists())
+        cache.write_bytes(trustcache([i.to_bytes(20, 'big') for i in range(1, 0x7C000 // 24)]))
+        self.assertLessEqual(len(cache.read_bytes()), 0x7C000)
+        result = self.build(**request)
+        self.assertEqual((result['kernel_phys_base'], result['boot_phys_base']), (0xB207C000, 0x80000000))
+        self.assertEqual(result['boot_virt_base'], 0xFFFFFFF00427C000 - 0xB207C000 + 0x80000000)
+
     def test_a_window_off_the_kernels_2_mib_offset_puts_the_kernel_at_its_next_one(self):
         result = self.build(physical_base=P + 0x1000)
         data = (self.output / 'kernel-window.bin').read_bytes()

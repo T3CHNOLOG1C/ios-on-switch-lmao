@@ -518,9 +518,12 @@ def _boot_memory(request: LayoutRequest, kernel: Kernel, adt: Adt, kernel_pa: in
     boot_virt = kernel.base - kernel_pa + boot_phys
     boot_size = (4 << 30) if full_ram else window_size
     boot_actual = ((4 << 30) - (3 << 20)) if full_ram else window_size
-    if full_ram and (
-        kernel_pa != 0xB207C000 or adt.properties.get(('/chosen', 'switch-ram-ledger'), (0, 0))[1] != 1584
-    ):
+    if full_ram and kernel_pa != 0xB207C000:
+        raise LayoutError(
+            f'full RAM puts the kernel at 0xB207C000 (boot_layout.h SWITCH_KERNEL_PHYS_BASE), not {kernel_pa:#x}: the '
+            f'trust caches must fit the {0xB207C000 - physical_base:#x} bytes below it'
+        )
+    if full_ram and adt.properties.get(('/chosen', 'switch-ram-ledger'), (0, 0))[1] != 1584:
         raise LayoutError('full RAM requires the measured native profile and runtime ledger')
     return _BootMemory(boot_phys, boot_virt, boot_size, boot_actual)
 

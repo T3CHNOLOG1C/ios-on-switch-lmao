@@ -305,13 +305,7 @@ def _check_layout(m: dict, payload: bytes) -> None:
     )
     _require(0 < len(payload) <= LIMIT and not len(payload) % 8, 'image exceeds aligned bounded staging region')
     _require(m['phys_base'] == WINDOW_BASE and m['owned_window_size'] == WINDOW_SIZE, 'not the root-boot window')
-    bundle = m['sources'].get('TrustCache', {}).get('size_bytes', 0)
-    _require(
-        m['kernel_phys_base'] == KERNEL_PHYS_BASE,
-        f'the kernel lands at {m["kernel_phys_base"]:#x}, not SWITCH_KERNEL_PHYS_BASE {KERNEL_PHYS_BASE:#x}: the '
-        f'{bundle}-byte trust cache bundle must fit the {KERNEL_PHYS_BASE - WINDOW_BASE:#x} bytes below it (raise '
-        "KERNEL_PHYS_BASE and boot_layout.h's SWITCH_KERNEL_PHYS_BASE together by 2 MiB for more)",
-    )
+    _require(m['kernel_phys_base'] == KERNEL_PHYS_BASE, 'the kernel is not at boot_layout.h SWITCH_KERNEL_PHYS_BASE')
     for key in (
         'phys_base',
         'kernel_phys_base',
