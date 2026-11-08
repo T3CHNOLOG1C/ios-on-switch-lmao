@@ -18,7 +18,8 @@
 //    control on output element 1, which VirtualAudio reads as the port's hardware volume range); the kernel routes the
 //    RT5639 to the jack whenever a plug is in, so this device's output and the speaker's share one ring.
 //  - "Hawking" (built in): one silent mono input, the Hawking port (phki) of the J120's routing tables, which
-//    otherwise put the null input in its place.
+//    otherwise put the null input in its place. Published only where the IPSW's iPad has one (SWITCH_AUDIO_HAWKING):
+//    J120 does (audio-data,hawking), J181 has no such device or port and its kernel names none.
 // Speaker and Codec run on the service's one timeline (one clock domain, so their aggregate needs no drift
 // correction); Hawking keeps its own on the host clock and never starts the hardware.
 // Objects: the plug-in (1); Speaker (2) with its output (3), tap (4) and output volume (5); Codec (6) with its input
@@ -91,7 +92,11 @@ enum {
     kJackIsConnected = 'jack'
 };
 
-#define kSpeakerUID "Speaker"  // VirtualAudio's names for a J120's devices (DeviceFactory_Aspen)
+#ifndef SWITCH_AUDIO_HAWKING
+#define SWITCH_AUDIO_HAWKING 0
+#endif
+
+#define kSpeakerUID "Speaker"  // VirtualAudio's names for an iPad's built-in devices (DeviceFactory_Aspen)
 #define kHawkingUID "Hawking"
 #define kCodecUID   "Codec"
 #define kModelUID   "SwitchAudioModel"
@@ -634,7 +639,7 @@ static OSStatus GetPropertyData(AudioServerPlugInDriverRef d, AudioObjectID o, p
         case kAudioObjectPropertyOwnedObjects:
         case kAudioPlugInPropertyDeviceList: {
             static const AudioObjectID devices[] = {kSpeaker, kCodec, kHawking};
-            UInt32 n = 3;
+            UInt32 n = SWITCH_AUDIO_HAWKING ? 3 : 2;
             if (inDataSize / sizeof(AudioObjectID) < n)
                 n = inDataSize / (UInt32)sizeof(AudioObjectID);
             memcpy(outData, devices, n * sizeof(AudioObjectID));
@@ -648,7 +653,7 @@ static OSStatus GetPropertyData(AudioServerPlugInDriverRef d, AudioObjectID o, p
                 device = kSpeaker;
             if (uid && CFStringCompare(uid, CFSTR(kCodecUID), 0) == kCFCompareEqualTo)
                 device = kCodec;
-            if (uid && CFStringCompare(uid, CFSTR(kHawkingUID), 0) == kCFCompareEqualTo)
+            if (SWITCH_AUDIO_HAWKING && uid && CFStringCompare(uid, CFSTR(kHawkingUID), 0) == kCFCompareEqualTo)
                 device = kHawking;
             REPLY(AudioObjectID, device);
         }
