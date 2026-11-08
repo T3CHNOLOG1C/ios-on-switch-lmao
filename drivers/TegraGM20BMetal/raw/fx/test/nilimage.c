@@ -6,8 +6,12 @@
 // usage: nilimage <libvulkan_nouveau.dylib> <dim 1|2|3> WxHxDxL <bytes a texel 1|2|4|8|16> <2d-view 0|1> <view: plain|cube>...
 // prints per image: "dim W H D L bpp view2d view | size align array_stride | level offset row_stride y_log2 z_log2 ... |
 // header words | hash"
-// build: xcrun clang -O1 -I <nil.h's directory (bazel build //third_party/mesa/src/nouveau/nil:nil_h)>
-//        -I third_party/mesa/include -I third_party/mesa/src -I third_party/mesa/src/nouveau/headers nilimage.c -o nilimage
+// build: nil.h from cbindgen (bazel build //third_party/mesa/src/nouveau/nil:nil_h), util/format/u_format_gen.h generated beside
+// it (uv run --with pyyaml python3 third_party/mesa/src/util/format/u_format_table.py <its u_format.yaml> --enums), then
+//   xcrun clang -O1 -DHAVE_FUNC_ATTRIBUTE_PACKED -I <that directory> -I third_party/mesa/include -I third_party/mesa/src
+//       -I third_party/mesa/src/nouveau/headers nilimage.c -o nilimage
+// (-DHAVE_FUNC_ATTRIBUTE_PACKED: NVK's build packs nv_device_info's enum; without it every field after `type` moves and NIL
+// reads another engine class)
 #include <dlfcn.h>
 #include <inttypes.h>
 #include <stdio.h>
