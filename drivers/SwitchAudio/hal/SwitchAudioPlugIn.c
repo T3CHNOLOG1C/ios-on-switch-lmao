@@ -71,6 +71,7 @@
 #include "SwitchAudioAbi.h"
 #include "SwitchAudioConvert.h"
 #include "SwitchAudioFormat.h"
+#include "../../../kits/SwitchDMA/SwitchDcache.h"
 #include "../../../kits/SwitchRefusal/SwitchRefusal.h"
 
 enum {
@@ -273,14 +274,6 @@ static UInt32 latencyFrames(void)
 static UInt32 inputSafetyFrames(void)
 {
     return latencyFrames() + (gControl ? gControl->period_frames : SWITCH_AUDIO_PERIOD_FRAMES);
-}
-
-// The Tegra backend's DMA reads the ring from memory and does not snoop the caches: write back what was mixed.
-static void cleanToMemory(const void *start, size_t bytes)
-{
-    for (uintptr_t at = (uintptr_t)start & ~(uintptr_t)63, end = (uintptr_t)start + bytes; at < end; at += 64)
-        __asm__ volatile("dc cvac, %0" ::"r"(at) : "memory");
-    __asm__ volatile("dsb sy" ::: "memory");
 }
 
 static AudioStreamBasicDescription format(UInt32 channels, Float64 rate)
@@ -1045,10 +1038,12 @@ static OSStatus DoIOOperation(AudioServerPlugInDriverRef d, AudioObjectID o, Aud
         const uint32_t at = (uint32_t)(first % SWITCH_AUDIO_RING_FRAMES);
         const uint32_t run = switch_audio_ring_mix(gOut, SWITCH_AUDIO_RING_FRAMES, 2, first, main, frames,
                                                    stream == kSpeakerOut ? gain() : 1.0f);
+        // The Tegra backend's DMA reads the ring from memory and does not snoop the caches: write back what was mixed.
         if (gControl->backend == SwitchAudioBackendTegraI2S && total) {
-            cleanToMemory(gOut + 2 * at, run * 2 * sizeof(switch_audio_sample_t));
+            switch_dcache_clean_lines(gOut + 2 * at, run * 2 * sizeof(switch_audio_sample_t));
             if (run < total)
-                cleanToMemory(gOut, (total - run) * 2 * sizeof(switch_audio_sample_t));
+                switch_dcache_clean_lines(gOut, (total - run) * 2 * sizeof(switch_audio_sample_t));
+            switch_dcache_sync();
         }
         const uint64_t t = first + frames;
         if (t > gControl->out_written)

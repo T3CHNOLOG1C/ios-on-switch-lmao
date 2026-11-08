@@ -5,7 +5,9 @@
 // pitch); pitch otherwise, for good. A surface that becomes block-linear has what it holds (rows the CPU or a pitch writer
 // left there) tiled in place by the copy engine, behind the GPU writers it had, before anyone is told it is tiled. From then
 // on the GPU and the display read its own pages tiled (tegra_gm20b_surface_tiled); a CPU lock sees its texels as rows.
-// The decision is made under the entry's lock, so concurrent askers wait for it and get the same answer.
+// The decision is made under the entry's lock, so concurrent askers wait for it and get the same answer. A move's
+// scratch is cleaned and invalidated before the copy engine fills it: a new one was zero-filled through the CPU's cache,
+// and a dirty line written back between the move's two copies would land over the rows the second one reads.
 #include <IOKit/IOLib.h>
 #include <stdint.h>
 #include <string.h>
@@ -69,6 +71,8 @@ Decision decide(tgm_coh *c, tgm_tiled &t, uint32_t width, uint32_t height, uint3
 		tgm_scratch_get(static_cast<uint64_t>(bytesPerRow) * height, 0, &rows);
 	tgm_relayout_writer writers[TGM_RELAYOUT_MAX_WAITS];
 	const uint32_t n = tgm_coh_writers(c, writers, TGM_RELAYOUT_MAX_WAITS);
+	if (scratch)
+		tgm_cpu_clean_pages(rows.pas, rows.npages);
 	const int ret = scratch ? tgm_relayout(&pages, &rows, &t.layout, bytesPerRow,
 					       TGM_RELAYOUT_TILE_IN_PLACE, writers, n)
 				: -12;
@@ -127,6 +131,8 @@ extern "C" void tgm_tiled_untile(struct tgm_coh *c)
 			tgm_scratch_get(uint64_t(t->bytes_per_row) * t->layout.height, 0, &rows);
 		tgm_relayout_writer writers[TGM_RELAYOUT_MAX_WAITS];
 		const uint32_t n = tgm_coh_writers(c, writers, TGM_RELAYOUT_MAX_WAITS);
+		if (scratch)
+			tgm_cpu_clean_pages(rows.pas, rows.npages);
 		const int ret = scratch ? tgm_relayout(&pages, &rows, &t->layout, t->bytes_per_row,
 						       TGM_RELAYOUT_UNTILE_IN_PLACE, writers, n)
 					: -12;

@@ -11,6 +11,7 @@
 #include <pexpert/pexpert.h>
 #include <pexpert/device_tree.h>
 #include "SwitchSD.h"
+#include "../../kits/SwitchDMA/SwitchDcache.h"
 #include "SwitchFiles.h"
 #include "storage/sdmmc_read.h"
 #include "storage/sdmmc_dma.h"
@@ -165,15 +166,12 @@ static int dma_cache(void *context, void *address, uint32_t length, int after_re
     if (b != &board || address != b->dma.bytes || !length || length > SWITCH_SD_DMA_BYTES ||
         ((uintptr_t)address & 63) || (after_read != 0 && after_read != 1))
         return -1;
-    uintptr_t end = (uintptr_t)address + ((length + 63u) & ~63u);
-    for (uintptr_t at = (uintptr_t)address; at < end; at += 64) {
-        if (after_read) {
-            __asm__ volatile("dc ivac, %0" ::"r"(at) : "memory");
-        } else {
-            __asm__ volatile("dc civac, %0" ::"r"(at) : "memory");
-        }
+    const size_t lines = (length + SWITCH_DCACHE_LINE - 1) & ~(size_t)(SWITCH_DCACHE_LINE - 1);
+    if (after_read) {
+        switch_dcache_invalidate(address, lines);
+    } else {
+        switch_dcache_clean_invalidate(address, lines);
     }
-    __asm__ volatile("dsb sy" ::: "memory");
     return 0;
 }
 

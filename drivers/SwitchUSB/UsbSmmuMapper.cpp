@@ -47,7 +47,7 @@ void publishTables()
     uintptr_t low = 0;
     uintptr_t high = 0;
     if (gDomain.takeDirty(&low, &high))
-        xudc::cacheFlush(reinterpret_cast<const void *>(low), high - low);
+        switch_dcache_clean_invalidate(reinterpret_cast<const void *>(low), high - low);
     tegra_smmu_flush(kAsid);
 }
 
@@ -82,7 +82,7 @@ bool switch_usb_smmu_start(uint64_t firmwarePa, uint64_t firmwareBytes, uint64_t
         snprintf(why, whySize, "the SMMU tables cannot hold the window and the identity maps");
         return false;
     }
-    xudc::cacheFlush(gTables.va, gTables.size);
+    switch_dcache_clean_invalidate(gTables.va, gTables.size);
     uintptr_t low = 0;
     uintptr_t high = 0;
     (void)gDomain.takeDirty(&low, &high);

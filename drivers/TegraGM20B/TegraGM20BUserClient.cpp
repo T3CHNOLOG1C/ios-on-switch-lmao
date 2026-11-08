@@ -31,13 +31,14 @@ using tgm_scan::PushCounts;
 using tgm_scan::PushParse;
 using tgm_scan::scanPush;
 #include "../TegraDisplayFlip/TegraScanoutCopy.h"
+#include "../../kits/SwitchDMA/SwitchDcache.h"
 
 namespace
 {
 constexpr uint32_t kMaxChannels = 8;  // fence slots: 16 bytes each in the connection's fence page
 constexpr uint64_t kMaxBoBytes = 256ULL << 20;
 constexpr uint32_t kFenceToken = 0xfe000001u;
-// Connections system-wide: 16, or 64 with every process on the GPU (gpu.c TGM_FENCE_PAGES: one fence page each).
+// Connections system-wide: 16, or 64 with every process on the GPU (gpu.c TGM_FENCE_USER_PAGES: one fence page each).
 constexpr uint32_t kMaxConnections = 16, kMaxConnectionsAll = 64;
 // GPU pool pages are outside the VM (arm_vm_init.c switch_ram_init), so the kernel reports them as device
 // memory, and for a physical descriptor IOKit fixes the user mapping's memory type from that default when the descriptor
@@ -350,10 +351,7 @@ void cleanZeros(void *va, uint64_t bytes, bool zero)
 {
 	if (zero)
 		bzero(va, bytes);
-	for (uint64_t a = reinterpret_cast<uint64_t>(va) & ~63ULL;
-	     a < reinterpret_cast<uint64_t>(va) + bytes; a += 64)
-		__asm__ volatile("dc civac, %0" ::"r"(a) : "memory");
-	__asm__ volatile("dsb sy" ::: "memory");
+	switch_dcache_clean_invalidate(va, bytes);
 }
 
 // The page list of a wired kernel buffer.

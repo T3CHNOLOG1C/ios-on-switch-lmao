@@ -10,10 +10,11 @@
 // the XUDC interrupt (GIC SPI 44, INTID 76; CTRL.IE and the IPFS IP_INT mask are set by powerOn()).
 //
 // The controller does not snoop the A57 caches: every ring, context and data buffer is cleaned before the
-// controller reads it and invalidated before the CPU reads what the controller wrote (cacheFlush).
+// controller reads it and invalidated before the CPU reads what the controller wrote (switch_dcache_clean_invalidate).
 #pragma once
 #include <IOKit/IOBufferMemoryDescriptor.h>
 #include <libkern/c++/OSObject.h>
+#include "../../kits/SwitchDMA/SwitchDcache.h"
 #include "XudcTransfer.h"
 #include "XudcIsoch.h"
 
@@ -67,8 +68,6 @@ struct DmaBuffer {
     bool allocate(uint32_t bytes);
     void release();
 };
-
-void cacheFlush(const volatile void *p, size_t n);  // clean+invalidate by VA, then DSB
 
 // UTMI pad 0 bring-up (PLLU, UTMIPLL, fuse calibration, bias tracking); fusePage is 0x7000F000. Also used by the host
 // controller (XusbHost.cpp).

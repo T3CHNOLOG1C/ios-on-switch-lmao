@@ -147,6 +147,7 @@
 #include "SwitchJoyConHID.h"
 #include "SwitchJoyConForward.h"
 #include "SwitchJoyConSession.h"
+#include "../../kits/SwitchDMA/SwitchDcache.h"
 
 extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 
@@ -866,13 +867,10 @@ bool SwitchJoyConRail::takeDma(Side &s)
         for (uint32_t done = 0; done < count;) {
             const uint32_t start = (from + done) % size;
             const uint32_t run = count - done < size - start ? count - done : size - start;
-            for (uintptr_t line = reinterpret_cast<uintptr_t>(s.dmaRing.va + start) & ~static_cast<uintptr_t>(63),
-                           end = reinterpret_cast<uintptr_t>(s.dmaRing.va + start + run);
-                 line < end; line += 64)
-                __asm__ volatile("dc civac, %0" ::"r"(line) : "memory");
+            switch_dcache_clean_invalidate_lines(s.dmaRing.va + start, run);
             done += run;
         }
-        __asm__ volatile("dsb sy" ::: "memory");
+        switch_dcache_sync();
         if (!s.dmaChecked) {
             // The first reply since the start begins at offset 0: the reply magic, after any zeros (uartAction's
             // "Obird workaround"). Anything else: the channel's position or data are not what the driver thinks.
@@ -926,10 +924,7 @@ void SwitchJoyConRail::startDmaLocked(Side &s)
     s.dmaBytes = 0;
     s.dmaChecked = false;
     s.dmaLapsAtStart = tegra_apbdma_interrupts(s.dma);
-    for (uintptr_t line = reinterpret_cast<uintptr_t>(s.dmaRing.va), end = line + s.dmaRing.size; line < end;
-         line += 64)
-        __asm__ volatile("dc civac, %0" ::"r"(line) : "memory");
-    __asm__ volatile("dsb sy" ::: "memory");
+    switch_dcache_clean_invalidate(s.dmaRing.va, s.dmaRing.size);
     const unsigned request = s.cfg->uart == 'B' ? TEGRA_APBDMA_REQ_UARTB : TEGRA_APBDMA_REQ_UARTC;
     tegra_apbdma_start_ring(s.dma, static_cast<uint32_t>(kUartPA + s.cfg->uartOffset + RBR_THR), request, s.dmaRing.pa,
                             s.dmaRing.size);

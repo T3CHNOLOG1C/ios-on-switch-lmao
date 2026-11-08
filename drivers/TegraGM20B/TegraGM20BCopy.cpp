@@ -39,8 +39,8 @@ struct Copier {
 	tgm_chan *chan;
 	tgm_mem *push, *fence;
 	uint32_t *pushCpu;
-	void *fenceCpu;
-	uint64_t pushPa, fencePa, fenceGpu;
+	volatile uint32_t *fenceCpu;
+	uint64_t pushPa, fenceGpu;
 	thread_call_t reap;
 	bool failed;
 	Job jobs[kJobs];
@@ -55,17 +55,23 @@ bool openSpace()
 {
 	Copier &c = gCopy;
 	uint64_t pas[kJobs];
+	uint64_t fencePage = 0;
+	uint32_t fenceOffset = 0;
 	c.pushCpu = static_cast<uint32_t *>(tgm_pool_alloc(kPage * kJobs, 0, &c.pushPa));
-	c.fenceCpu = tgm_pool_alloc(kPage, 0, &c.fencePa);
-	if (!c.pushCpu || !c.fenceCpu || tgm_vm_new(&c.vm))
+	if (!c.pushCpu ||
+	    tgm_fence_kernel(TGM_FENCE_KERNEL_COPY, &c.fenceCpu, &fencePage, &fenceOffset) ||
+	    tgm_vm_new(&c.vm))
 		return false;
 	tgm_vm_claim(c.vm, &gCopy);
 	for (uint32_t i = 0; i < kJobs; i++)
 		pas[i] = c.pushPa + i * kPage;
-	return (tgm_mem_new(c.vm, pas, kJobs, &c.push) == 0) &&
-	       (tgm_vm_map_ordered(c.vm, kPushVa, kPage * kJobs, c.push, 0, 0, 1, nullptr) == 0) &&
-	       (tgm_mem_new(c.vm, &c.fencePa, 1, &c.fence) == 0) &&
-	       (tgm_vm_kmap(c.vm, c.fence, kPage, &c.fenceGpu) == 0);
+	if ((tgm_mem_new(c.vm, pas, kJobs, &c.push) != 0) ||
+	    (tgm_vm_map_ordered(c.vm, kPushVa, kPage * kJobs, c.push, 0, 0, 1, nullptr) != 0) ||
+	    (tgm_mem_new(c.vm, &fencePage, 1, &c.fence) != 0) ||
+	    (tgm_vm_kmap(c.vm, c.fence, kPage, &c.fenceGpu) != 0))
+		return false;
+	c.fenceGpu += fenceOffset;
+	return true;
 }
 
 // lock held: the channel, made again after a fault killed the last one (once its copies were reaped)
@@ -82,8 +88,7 @@ tgm_chan *channel()
 	if (!c.vm && !c.failed && !openSpace())
 		c.failed = true;
 	if (!c.chan && c.vm &&
-	    !tgm_chan_new(c.vm, &gCopy, static_cast<volatile uint32_t *>(c.fenceCpu), c.fenceGpu,
-			  "ce-copy", 0, &c.chan))
+	    !tgm_chan_new(c.vm, &gCopy, c.fenceCpu, c.fenceGpu, "ce-copy", 0, &c.chan))
 		tgm_chan_on_fence(c.chan, fenced, nullptr);
 	return c.chan;
 }
@@ -203,8 +208,8 @@ struct Surface {
 			tgm_coherency_put(coh);
 	}
 
-	// lock held: its GPU writers' fences, appended at waits[n]
-	void writers(tgm_relayout_wait *waits, uint32_t &n) const
+	// lock held: its GPU writers' fences, appended at waits[n] (TegraGM20BRelayout.h tgm_relayout_waits)
+	void writers(uint32_t self, tgm_relayout_wait *waits, uint32_t &n) const
 	{
 		if (!coh)
 			return;
@@ -212,10 +217,7 @@ struct Surface {
 		tgm_coh_lock(coh);
 		const uint32_t found = tgm_coh_writers(coh, w, TGM_RELAYOUT_MAX_WAITS - n);
 		tgm_coh_unlock(coh);
-		for (uint32_t i = 0; i < found; i++) {
-			if (!tgm_writer_fence_va(gCopy.vm, w[i].uid, &waits[n].va))
-				waits[n++].seqno = w[i].seqno;
-		}
+		n = tgm_relayout_waits(gCopy.vm, self, w, found, waits, n);
 	}
 
 	bool whole(const tegra_gm20b_ce_plane &p, uint32_t rowBytes, uint32_t rows) const
@@ -268,8 +270,8 @@ extern "C" int tegra_gm20b_ce_copy_plane(const struct tegra_gm20b_ce_plane *src,
 	const Surface to(dstMemory);
 	tgm_relayout_wait waits[TGM_RELAYOUT_MAX_WAITS];
 	uint32_t nwaits = 0;
-	from.writers(waits, nwaits);
-	to.writers(waits, nwaits);
+	from.writers(tgm_chan_uid(chan), waits, nwaits);
+	to.writers(tgm_chan_uid(chan), waits, nwaits);
 	int ret = shapeOk(from, to, *src, *dst, row_bytes, rows) ? 0 : -22;
 	const uint64_t srcBytes =
 		from.tiled ? from.layout.bytes : uint64_t(src->pitch) * (rows - 1) + row_bytes;

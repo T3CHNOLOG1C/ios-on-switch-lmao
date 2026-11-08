@@ -91,7 +91,8 @@ void tgm_deadline_clock(uint64_t ns, uint64_t pt);
 uint64_t tgm_deadline_pt_ns(uint64_t pt_span);
 /* gpu.c, interrupt pass: the present queued at `queued` completed. */
 void tgm_deadline_presented(uint64_t queued);
-/* gpu.c: system sleep (every hold released, none until the wake) and the wake. */
+/* gpu.c: system sleep and rail-down (every hold released, no callout touching the GPU until the wake or rail-up), and
+ * the wake and rail-up. */
 void tgm_deadline_suspend(void);
 void tgm_deadline_resume(void);
 void tgm_deadline_stats(char *buf, unsigned int len);

@@ -217,6 +217,19 @@ int tegra_gm20b_sync_for_cpu(const void *va, uint64_t bytes, uint64_t timeout_ns
 /* Fence pages: one per connection, from one pool range the GPU present maps whole (gpu.c). Zeroed; 0 or -ENOMEM. */
 int tgm_fence_page_get(volatile uint32_t **va, uint64_t *pa);
 void tgm_fence_page_put(const volatile uint32_t *va);
+
+/* The kernel's own client channels whose writes other channels follow on the GPU (the copy engine's plane copies, the
+ * tiling moves): each one's fence (a TegraGM20BAbiFence) is in the fence range every address space maps, as a
+ * connection's channels' are, never handed out again. *page_pa is its 4 KiB page, which the channel's own space maps
+ * writable, and *offset the fence's place in it. */
+enum tgm_fence_kernel_channel {
+	TGM_FENCE_KERNEL_COPY,
+	TGM_FENCE_KERNEL_RELAYOUT,
+	TGM_FENCE_KERNEL_CHANNELS,
+};
+
+int tgm_fence_kernel(unsigned int which, volatile uint32_t **va, uint64_t *page_pa,
+		     uint32_t *offset);
 /* A channel's fence word is a TegraGM20BAbiFence: its kill record zeroed, for a channel about to be made on it. */
 void tgm_fence_kill_clear(volatile uint32_t *fence);
 

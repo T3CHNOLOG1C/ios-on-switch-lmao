@@ -62,6 +62,7 @@ ios_binary(
         "SwitchAudioAbi.h",
         "SwitchAudioFormat.h",
         "hal/SwitchAudioConvert.h",
+        "//kits/SwitchDMA:SwitchDcache.h",
         "//kits/SwitchRefusal:SwitchRefusal.h",
     ],
     copts = [

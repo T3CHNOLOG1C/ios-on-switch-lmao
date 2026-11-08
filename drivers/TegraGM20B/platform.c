@@ -41,6 +41,7 @@
 #include <stdint.h>
 #include "shim/include/nvxnu.h"
 #include "../TegraI2C/TegraI2C.h"
+#include "../../kits/SwitchMMIO/SwitchMMIO.h"
 
 #define CAR_PA 0x60006000ULL
 #define PMC_PA 0x7000e400ULL
@@ -89,42 +90,31 @@
 #define GPU_ENABLE_RAMP_US \
 	5000 /* DT nx-pmic.dtsi:47 regulator-enable-ramp-delay, what the L4T regulator core waits */
 
-static volatile uint32_t *car, *pmc, *fuse, *mc;
+static volatile uint8_t *car, *pmc, *fuse, *mc;
 static uint8_t max77812_addr;
-
-static uint32_t rd(volatile uint32_t *base, uint32_t off)
-{
-	return base[off / 4];
-}
-
-static void wr(volatile uint32_t *base, uint32_t off, uint32_t v)
-{
-	__asm__ volatile("dmb oshst" ::: "memory");
-	base[off / 4] = v;
-	(void)base[off / 4]; /* read back: posts the write before any delay that follows */
-}
 
 int tegra_gm20b_platform_map(void)
 {
 	if (car)
 		return 0;
-	car = (volatile uint32_t *)nvxnu_ioremap(CAR_PA, 0x1000, 0);
-	pmc = (volatile uint32_t *)nvxnu_ioremap(PMC_PA, 0x400, 0);
-	fuse = (volatile uint32_t *)nvxnu_ioremap(FUSE_PA, 0x400, 0);
-	mc = (volatile uint32_t *)nvxnu_ioremap(MC_PA, 0x1000, 0);
+	car = (volatile uint8_t *)nvxnu_ioremap(CAR_PA, 0x1000, 0);
+	pmc = (volatile uint8_t *)nvxnu_ioremap(PMC_PA, 0x400, 0);
+	fuse = (volatile uint8_t *)nvxnu_ioremap(FUSE_PA, 0x400, 0);
+	mc = (volatile uint8_t *)nvxnu_ioremap(MC_PA, 0x1000, 0);
 	if (!car || !pmc || !fuse || !mc) {
 		car = NULL;
 		return -12;
 	}
-	wr(car, CLK_ENB_H_SET, CLK_H_FUSE);
-	wr(car, MISC_CLK_ENB, rd(car, MISC_CLK_ENB) | MISC_FUSE_VISIBLE);
-	max77812_addr = (rd(fuse, FUSE_ODM28_B01) & 1) ? MAX77812_PHASE211 : 0x31;
+	switch_mmio_write32_flush(car, CLK_ENB_H_SET, CLK_H_FUSE);
+	switch_mmio_write32_flush(car, MISC_CLK_ENB,
+				  switch_mmio_read32(car, MISC_CLK_ENB) | MISC_FUSE_VISIBLE);
+	max77812_addr = (switch_mmio_read32(fuse, FUSE_ODM28_B01) & 1) ? MAX77812_PHASE211 : 0x31;
 	return 0;
 }
 
 uint32_t tegra_gm20b_fuse_read(uint32_t offset)
 {
-	return rd(fuse, FUSE_CACHE + offset);
+	return switch_mmio_read32(fuse, FUSE_CACHE + offset);
 }
 
 /* VDD_GPU: MAX77812 M1 on I2C5. I2C5 is shared with firmware (see TegraI2C.h): one register per transaction,
@@ -225,10 +215,12 @@ int tegra_gm20b_rail_enable(int on)
 	if (!on) {
 		/* nvgpu gm20b_tegra_railgate() (platform_gk20a_tegra.c:315-325): block the GPU's MC client, clamp and hold
 		 * the GPU in reset before its rail goes away. tegra.c has already gated the clocks, so no drain wait. */
-		wr(mc, MC_HOTRESET_CTRL_1, rd(mc, MC_HOTRESET_CTRL_1) | MC_HOTRESET_GPU);
-		wr(pmc, PMC_GPU_RG_CNTRL, 1);
+		switch_mmio_write32_flush(mc, MC_HOTRESET_CTRL_1,
+					  switch_mmio_read32(mc, MC_HOTRESET_CTRL_1) |
+						  MC_HOTRESET_GPU);
+		switch_mmio_write32_flush(pmc, PMC_GPU_RG_CNTRL, 1);
 		nvxnu_udelay(10);
-		wr(car, RST_DEV_X_SET, X_GPU);
+		switch_mmio_write32_flush(car, RST_DEV_X_SET, X_GPU);
 		nvxnu_udelay(10);
 	}
 	nvxnu_step("tegra-gm20b: M1 step: MAX77812 EN_CTRL %02x -> %02x (vdd-gpu %s)\n", en,
@@ -332,16 +324,16 @@ int tegra_gm20b_clk_enable(int id, int on)
 	uint32_t v = 0;
 	switch (id) {
 	case TEGRA_GM20B_CLK_GPU:
-		wr(car, on ? CLK_ENB_X_SET : CLK_ENB_X_CLR, X_GPU);
+		switch_mmio_write32_flush(car, on ? CLK_ENB_X_SET : CLK_ENB_X_CLR, X_GPU);
 		return 0;
 	case TEGRA_GM20B_CLK_REF:
 		if (on) /* "Only enable" (hekate clock.h:638) */
-			wr(car, CLK_ENB_X_SET, X_PLLG_REF);
+			switch_mmio_write32_flush(car, CLK_ENB_X_SET, X_PLLG_REF);
 		return 0;
 	case TEGRA_GM20B_CLK_PWR:
-		v = rd(car, PLLP_OUTC);
+		v = switch_mmio_read32(car, PLLP_OUTC);
 		v = on ? (v | PLLP_OUT5_CLKEN | PLLP_OUT5_RSTN) : (v & ~PLLP_OUT5_CLKEN);
-		wr(car, PLLP_OUTC, v);
+		switch_mmio_write32_flush(car, PLLP_OUTC, v);
 		nvxnu_udelay(2); /* clk_pll_out_enable() */
 		return 0;
 	default:
@@ -358,7 +350,7 @@ unsigned long tegra_gm20b_clk_get_rate(int id)
 	case TEGRA_GM20B_CLK_REF:
 		return OSC_RATE;
 	case TEGRA_GM20B_CLK_PWR:
-		div = (rd(car, PLLP_OUTC) >> PLLP_OUT5_DIV_SHIFT) & 0xff;
+		div = (switch_mmio_read32(car, PLLP_OUTC) >> PLLP_OUT5_DIV_SHIFT) & 0xff;
 		return PLLP_RATE * 2 / (div + 2);
 	default:
 		break;
@@ -377,19 +369,19 @@ int tegra_gm20b_clk_set_rate(int id, unsigned long rate)
 	div = div < 2 ? 0 : div - 2;
 	if (div > 0xff)
 		div = 0xff;
-	v = rd(car, PLLP_OUTC) & ~(0xffu << PLLP_OUT5_DIV_SHIFT);
-	wr(car, PLLP_OUTC, v | (div << PLLP_OUT5_DIV_SHIFT));
+	v = switch_mmio_read32(car, PLLP_OUTC) & ~(0xffu << PLLP_OUT5_DIV_SHIFT);
+	switch_mmio_write32_flush(car, PLLP_OUTC, v | (div << PLLP_OUT5_DIV_SHIFT));
 	return 0;
 }
 
 void tegra_gm20b_reset(int assert)
 {
-	wr(car, assert ? RST_DEV_X_SET : RST_DEV_X_CLR, X_GPU);
+	switch_mmio_write32_flush(car, assert ? RST_DEV_X_SET : RST_DEV_X_CLR, X_GPU);
 }
 
 int tegra_gm20b_unclamp(void)
 {
-	wr(pmc, PMC_GPU_RG_CNTRL, 0);
+	switch_mmio_write32_flush(pmc, PMC_GPU_RG_CNTRL, 0);
 	return 0;
 }
 
@@ -398,11 +390,11 @@ int tegra_gm20b_unclamp(void)
  * only what the MC refused since, and an error status latched with them is free to record the next refusal. */
 void tegra_gm20b_mc_errors(uint32_t *intstatus, uint32_t *status, uint32_t *addr)
 {
-	*intstatus = mc ? rd(mc, 0x000) : 0;
-	*status = mc ? rd(mc, 0x008) : 0;
-	*addr = mc ? rd(mc, 0x00c) : 0;
+	*intstatus = mc ? switch_mmio_read32(mc, 0x000) : 0;
+	*status = mc ? switch_mmio_read32(mc, 0x008) : 0;
+	*addr = mc ? switch_mmio_read32(mc, 0x00c) : 0;
 	if (*intstatus)
-		wr(mc, 0x000, *intstatus);
+		switch_mmio_write32_flush(mc, 0x000, *intstatus);
 }
 
 /* hekate bdk/mem/mc_t210.h; hekate l4t.c makes carveout 2 the GPU's WPR1 (ACR's) and saves its BOM, SIZE_128KB and CFG0 for
@@ -420,26 +412,26 @@ void tegra_gm20b_mc_gpu_wpr(uint32_t v[5])
 					 MC_SECURITY_CARVEOUT2_CLIENT_ACCESS2,
 					 MC_SECURITY_CARVEOUT2_CLIENT_ACCESS4};
 	for (int i = 0; i < 5; i++)
-		v[i] = mc ? rd(mc, regs[i]) : 0;
+		v[i] = mc ? switch_mmio_read32(mc, regs[i]) : 0;
 }
 
 /* flush=1: block GPU memory traffic and wait until it drained; flush=0: unblock. No interrupt reports the drain: a
  * bounded spin like tegra_mc_flush(), which takes the status only after 5 identical reads (L4T mc.c:158-176,208-230). */
 int tegra_gm20b_mc_flush(int flush)
 {
-	uint32_t v = rd(mc, MC_HOTRESET_CTRL_1);
+	uint32_t v = switch_mmio_read32(mc, MC_HOTRESET_CTRL_1);
 	uint32_t s = 0;
 	int i = 0;
 	int j = 0;
 	if (!flush) {
-		wr(mc, MC_HOTRESET_CTRL_1, v & ~MC_HOTRESET_GPU);
+		switch_mmio_write32_flush(mc, MC_HOTRESET_CTRL_1, v & ~MC_HOTRESET_GPU);
 		return 0;
 	}
-	wr(mc, MC_HOTRESET_CTRL_1, v | MC_HOTRESET_GPU);
+	switch_mmio_write32_flush(mc, MC_HOTRESET_CTRL_1, v | MC_HOTRESET_GPU);
 	for (i = 0; i < 1000; i++) {
 		nvxnu_udelay(10);
-		s = rd(mc, MC_HOTRESET_STATUS_1);
-		for (j = 0; j < 5 && rd(mc, MC_HOTRESET_STATUS_1) == s; j++)
+		s = switch_mmio_read32(mc, MC_HOTRESET_STATUS_1);
+		for (j = 0; j < 5 && switch_mmio_read32(mc, MC_HOTRESET_STATUS_1) == s; j++)
 			;
 		if (j == 5 && (s & MC_HOTRESET_GPU))
 			return 0;
