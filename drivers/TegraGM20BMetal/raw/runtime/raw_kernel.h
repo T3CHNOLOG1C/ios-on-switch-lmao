@@ -91,6 +91,8 @@ public:
 
     // `channel` is dead (an Exec or WaitFence answered so, or its kill record says so): lost() and the cause from GetStatus
     void markLost(uint32_t channel);
+    // GetStatus: false when the kernel has no such channel (destroyed) or refused the call
+    bool status(uint32_t channel, TegraGM20BAbiStatus &st);
 
     // `last`: the channel's last submitted seqno (0 if none), waited on when the GPFIFO is full
     // `surfaces` (null: none): the host imports the submission touches, named to the kernel (ExecSurfaces, method 17,
