@@ -136,15 +136,6 @@ bool gUp, gWedged, gSuspended, gPublished;
 TegraVICBuffer gConfig, gFilter;
 TegraVICTraits gTraits;
 
-// A job's pages through the physical aperture, without the barrier: the caller's switch_dcache_sync() completes them.
-void cachePages(switch_dcache_op op, const uint64_t *pages, uint32_t count)
-{
-    for (uint32_t i = 0; i < count; i++) {
-        if (switch_dma_pa_managed(pages[i]))
-            switch_dcache_phys_lines(op, pages[i] & ~SWITCH_HW_PAGE_MASK, SWITCH_HW_PAGE_SIZE);
-    }
-}
-
 const char *falconState()
 {
     static char text[160];
@@ -509,11 +500,6 @@ extern "C" uint64_t tegra_vic_config_address(void)
 extern "C" uint64_t tegra_vic_filter_address(void)
 {
     return gFilter.pa;
-}
-
-extern "C" void tegra_vic_cache_pages(switch_dcache_op op, const uint64_t *pages, uint32_t count)
-{
-    cachePages(op, pages, count);
 }
 
 extern "C" void tegra_vic_lock(void)

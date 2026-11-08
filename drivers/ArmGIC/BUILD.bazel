@@ -30,6 +30,7 @@ kernel_headers()
 kernel_driver(
     name = "ArmGIC",
     hdr_deps = [
+        "kits/SwitchDT",
         "kits/SwitchIdle",
         "kits/SwitchMMIO",
     ],

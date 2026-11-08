@@ -62,9 +62,6 @@ int tegra_vic_run_after(const TegraVICJob *job, const TegraVICAcquire *acquire, 
 uint32_t tegra_vic_syncpt(void);
 uint64_t tegra_vic_config_address(void);
 uint64_t tegra_vic_filter_address(void);
-// A job's pages (managed RAM only) through the physical aperture, with no barrier: the caller's switch_dcache_sync()
-// completes them, once for every list it batches.
-void tegra_vic_cache_pages(switch_dcache_op op, const uint64_t *pages, uint32_t count);
 void tegra_vic_lock(void);  // held across a job's map, run and unmap (one job at a time)
 void tegra_vic_unlock(void);
 

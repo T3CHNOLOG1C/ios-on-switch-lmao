@@ -65,8 +65,8 @@ TEST(SdCqSource, DriverGuards)
     // queue's code are the engine's settle() between read-backs of a card slow to show a byte and (r18-sdcq) between
     // probes of a queue a card has not opened yet.
     const std::string command = body("int NativeSwitchBlock::cqCommand(");
-    EXPECT_THAT(command, HasSubstr("waitSignal(awaited,"));
-    EXPECT_THAT(command, HasSubstr("panic(\"SwitchSD: SDMMC1 interrupt lost"));
+    EXPECT_THAT(command, HasSubstr("awaitStatus(done, limit)"));
+    EXPECT_THAT(body("uint32_t NativeSwitchBlock::awaitStatus("), HasSubstr("interruptLost(signals)"));
     EXPECT_THAT(command, Not(HasSubstr("IOSleep")));
     EXPECT_THAT(command, Not(HasSubstr("IODelay")));
     // r16-sdcq: a CMD49's busy (the byte applied, a flush done) ends in transfer complete; DAT0 confirms it before the

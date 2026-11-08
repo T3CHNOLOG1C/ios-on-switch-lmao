@@ -311,7 +311,8 @@ void planeStartRegisters()
 void planeWriteRegisters(const PlaneSet &p)
 {
     using namespace native_planes;
-    volatile uint32_t *win = dc + kWinBBase, *buf = dc + kWinbufBBase;
+    const SwitchMMIOWords win = dc + kWinBBase;
+    const SwitchMMIOWords buf = dc + kWinbufBBase;
     if (!p.on) {
         win[kOptions] = 0;
         return;
@@ -355,7 +356,7 @@ void planeBlendA(bool over, uint32_t &update, uint32_t &request)
 {
     if (over == planeBlending)
         return;
-    volatile uint32_t *a = dc + kWinABase;
+    const SwitchMMIOWords a = dc + kWinABase;
     if (over) {
         a[native_planes::kBlendLayer] = native_planes::kBlendPremultiplied;
         a[native_planes::kBlendMatch] = native_planes::kBlendOver;
@@ -633,6 +634,7 @@ struct PlaneProbeIo {
 
 void planeProbeWritePixel(uint32_t value)
 {
+    // NOLINTNEXTLINE(clang-analyzer-osx.cocoa.RetainCount): surfaceMapping lends the display's own mapping
     *reinterpret_cast<volatile uint32_t *>(surfaceMapping(planeProbeBuffer)->getVirtualAddress()) = value;
     __asm__ volatile("dsb sy" ::: "memory");
 }
@@ -660,7 +662,7 @@ bool planeProbeTick()
         IOLog("SwitchDisplay: plane probe not run: the first client frame came before it; planes off\n");
         return false;
     }
-    if (!doubleBuffer || !probeTables || !SWITCH_PORTRAIT_NATIVE || hwSuspended || scanoutStopped ||
+    if (!doubleBuffer || !probeTables.memory || !SWITCH_PORTRAIT_NATIVE || hwSuspended || scanoutStopped ||
         gPanicRestore.panicking || probe.active() || frameEnds < 30)
         return false;
     planeProbeRan = true;
@@ -675,10 +677,10 @@ void planeProbeStart()
     const uint32_t start = windowActive(kWinbufStartAddr);
     const uint32_t stride = windowActive(kWinLineStride) & 0xffff;
     const unsigned char *from = nullptr;
-    if (tapeAttached && tapeBuffer && tapeBuffer->getBytesNoCopy() && start >= tapeAddress &&
+    if (tapeAttached && tapeBuffer.va && start >= tapeAddress &&
         static_cast<uint64_t>(start - tapeAddress) + kTapeWindow <= kTapeBytes && stride == kTapeStride) {
         // The console wrote the tape through its write-combined view; the cacheable alias, invalidated, reads DRAM.
-        from = static_cast<const unsigned char *>(tapeBuffer->getBytesNoCopy()) + (start - tapeAddress);
+        from = static_cast<const unsigned char *>(tapeBuffer.va) + (start - tapeAddress);
         switch_dcache_clean_invalidate(from, kTapeWindow);
     } else if (start == surfaceAddress(0) && stride == 2880) {
         from = reinterpret_cast<const unsigned char *>(bootMapping->getVirtualAddress());
@@ -702,7 +704,8 @@ void planeProbeStart()
     chainPanicHook();
     gPanicRestore.planes = true;
     planeStartRegisters();
-    volatile uint32_t *win = dc + kWinBBase, *buf = dc + kWinbufBBase;
+    const SwitchMMIOWords win = dc + kWinBBase;
+    const SwitchMMIOWords buf = dc + kWinbufBBase;
     win[native_planes::kColorDepth] = windowActive(kWinColorDepth);
     win[native_planes::kByteSwap] = 0;
     win[native_planes::kPosition] = 0;
@@ -734,8 +737,7 @@ void planeProbeStart()
 // be set; plane slot 0 onto the probe's copy; then the swgroup with window B's client (display0b) translated.
 bool planeDomainAttach()
 {
-    if (!directAttached && !planesAttached &&
-        !probeDomain.init(probeTables->getBytesNoCopy(), probeTablesPa, kProbeTables)) {
+    if (!directAttached && !planesAttached && !probeDomain.init(probeTables.va, probeTables.pa, kProbeTables)) {
         snprintf(planeProbeLine, sizeof(planeProbeLine), "the table buffer cannot hold a directory");
         return false;
     }

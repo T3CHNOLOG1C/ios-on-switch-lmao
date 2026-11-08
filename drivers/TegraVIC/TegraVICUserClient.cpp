@@ -240,7 +240,7 @@ void copiedBack(void *arg, int err)
     Job *job = static_cast<Job *>(arg);
     tegra_vic_bounce_back_landed(job->backFrom);
     // The CPU may have pulled destination lines in while the engines wrote: readers must see DRAM.
-    tegra_vic_cache_pages(SWITCH_DCACHE_CLEAN_INVALIDATE, job->dstPages, job->dstPageCount);
+    switch_dcache_hw_pages(SWITCH_DCACHE_CLEAN_INVALIDATE, job->dstPages, job->dstPageCount);
     switch_dcache_sync();
     IODelete(job->dstPages, uint64_t, job->dstPageCount);
     job->dstPages = nullptr;
@@ -284,8 +284,8 @@ bool runJob(Job *job, IOReturn *status)
     // VIC and the copy engine do not snoop the CPU's caches: what the CPU wrote to the source must be in DRAM, and no
     // dirty line of the destination may be written back over what they write.
     if (readsSource)
-        tegra_vic_cache_pages(SWITCH_DCACHE_CLEAN, gPages[TEGRA_VIC_WINDOW_SRC], pages[0]);
-    tegra_vic_cache_pages(SWITCH_DCACHE_CLEAN_INVALIDATE, gPages[TEGRA_VIC_WINDOW_DST], pages[1]);
+        switch_dcache_hw_pages(SWITCH_DCACHE_CLEAN, gPages[TEGRA_VIC_WINDOW_SRC], pages[0]);
+    switch_dcache_hw_pages(SWITCH_DCACHE_CLEAN_INVALIDATE, gPages[TEGRA_VIC_WINDOW_DST], pages[1]);
     switch_dcache_sync();
     TegraVICBounce *srcBounce = &bounce[TEGRA_VIC_WINDOW_SRC];
     TegraVICBounce *dstBounce = &bounce[TEGRA_VIC_WINDOW_DST];
@@ -375,7 +375,7 @@ bool runJob(Job *job, IOReturn *status)
         job->dstPages = nullptr;
     }
     // The CPU may have pulled destination lines in while VIC wrote: readers must see DRAM.
-    tegra_vic_cache_pages(SWITCH_DCACHE_CLEAN_INVALIDATE, gPages[TEGRA_VIC_WINDOW_DST], pages[1]);
+    switch_dcache_hw_pages(SWITCH_DCACHE_CLEAN_INVALIDATE, gPages[TEGRA_VIC_WINDOW_DST], pages[1]);
     switch_dcache_sync();
     tegra_vic_surface_complete(&job->dst);
     tegra_vic_surface_complete(&job->src);
