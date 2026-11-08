@@ -2592,11 +2592,14 @@ void RenderEncoder::setStencilReference(uint32_t front, uint32_t back)
     dsDirty_ = true;
 }
 
+// The full barrier m2v puts between passes: the shaders' data writes flushed (storage buffers and textures; ROP writes are
+// behind the wait for idle) and their data and texture caches invalidated
 void RenderEncoder::barrier()
 {
     if (p_.room() < 64)
         reserve();
     p_.m(WAIT_FOR_IDLE, 0);
+    p_.m(INVALIDATE_SHADER_CACHES, 0x14);
     p_.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
     writtenBits_ = storageWrittenBits_ = 0;
     written_.clear();

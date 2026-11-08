@@ -9,6 +9,7 @@
 //   from VA 0 with no limit.
 // - A pass with an empty color slot below a target disables the slot, as NVK does, and counts through the target.
 // - A freed texture header is the null descriptor, never zeroes (a buffer texture at VA 0).
+// - A memory barrier inside a pass flushes the shaders' data writes, as the barrier between passes does.
 // - A commit whose later Exec the kernel refuses leaves nothing of its rings in flight, and the next command buffer a new
 //   channel.
 // - A wait that fails on a channel destroyed meanwhile marks no new channel of the same id lost.
@@ -35,6 +36,7 @@ extern "C" uint64_t cap_draws(void);
 extern "C" uint32_t cap_reg3d(uint32_t mthd);
 extern "C" bool cap_read(uint64_t va, void *out, uint64_t bytes);
 extern "C" uint64_t cap_instruction_invalidates(void);
+extern "C" uint64_t cap_shader_invalidates(void);
 extern "C" void mock_iokit_kill_next(uint32_t error);
 extern "C" void mock_iokit_fail_next(unsigned method, unsigned count, int kr);
 extern "C" void mock_iokit_fail_after(unsigned method, unsigned skip, unsigned count, int kr);
@@ -154,6 +156,32 @@ void holeTarget(raw::Device &dev, Pass &pass, const Expect &expect)
     std::printf("hole: target 0 format 0x%x, CT_SELECT 0x%x\n", cap_reg3d(kTargetFormat0), cap_reg3d(kCtSelect));
     expect(cap_reg3d(kTargetFormat0) == 0 && (cap_reg3d(kCtSelect) & 0xf) == 2,
            "slot 0 DISABLED, CT_SELECT counting through slot 1");
+}
+
+// A memory barrier between two draws of a pass flushes what the shaders wrote (INVALIDATE_SHADER_CACHES FLUSH_DATA): one
+// more than the same pass without it
+void barrierFlush(raw::Device &dev, Pass &pass, const Expect &expect)
+{
+    auto run = [&](bool barrier) -> uint64_t {
+        const uint64_t before = cap_shader_invalidates();
+        raw::CommandBuffer *cb = dev.begin();
+        raw::RenderEncoder *e = cb ? cb->render(pass.desc) : nullptr;
+        if (!e)
+            return ~0ull;
+        const char *why = nullptr;
+        e->setPipeline(pass.state);
+        e->draw(3, 0, 3, 1, 0, &why);
+        if (barrier)
+            e->barrier();
+        e->draw(3, 0, 3, 1, 0, &why);
+        e->end();
+        uint32_t seq = 0;
+        return cb->commit(seq) && dev.wait(seq) ? cap_shader_invalidates() - before : ~0ull;
+    };
+    const uint64_t plain = run(false), barrier = run(true);
+    std::printf("shader cache flushes: %llu without the barrier, %llu with\n", (unsigned long long)plain,
+                (unsigned long long)barrier);
+    expect(plain != ~0ull && barrier == plain + 1, "the barrier flushes the shaders' data");
 }
 
 uint64_t method64(uint32_t hi)
@@ -454,6 +482,7 @@ int main(int argc, char **argv)
     instances(dev, pass, expect);
     unboundStream(dev, pass, expect);
     holeTarget(dev, pass, expect);
+    barrierFlush(dev, pass, expect);
     freedHeader(dev, expect);
     partialCommit(dev, expect);
     lostReused(expect);

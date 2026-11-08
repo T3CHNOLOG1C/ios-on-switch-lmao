@@ -228,6 +228,13 @@ extern "C" uint64_t cap_instruction_invalidates(void)
     return gC.instructionInval;
 }
 
+extern "C" uint64_t
+cap_shader_invalidates(void)  // INVALIDATE_SHADER_CACHES (flush and invalidate, with a wait for idle)
+{
+    std::lock_guard<std::mutex> l(gLock);
+    return gC.shaderInval;
+}
+
 // `bytes` at GPU VA `va` as the GPU reads them; false where they are not in one bound range
 extern "C" bool cap_read(uint64_t va, void *out, uint64_t bytes)
 {
