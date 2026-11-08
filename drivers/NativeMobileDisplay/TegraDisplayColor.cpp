@@ -15,6 +15,23 @@ static constexpr uint32_t kLocationAccessibility = 2, kLocationHarmony = 9;
 extern "C" void native_legacy_frame_end_hold(void);
 extern "C" void native_legacy_frame_end_release(void);
 
+#if DEVELOPMENT || DEBUG
+// The first matrices IOMobileFramebuffer hands over, in thousandths, rows as received: what Core Animation's colour
+// requests become before the CSC (one line each, the first kLoggedMatrices of a boot).
+static void logMatrix(const char *call, uint32_t location, const Matrix &m)
+{
+    static constexpr uint32_t kLoggedMatrices = 24;
+    static uint32_t logged = 0;
+    if (__atomic_fetch_add(&logged, 1, __ATOMIC_RELAXED) >= kLoggedMatrices)
+        return;
+    long long v[9];
+    for (int i = 0; i < 9; ++i)
+        v[i] = static_cast<long long>(static_cast<__int128>(m.m[i / 3][i % 3]) * 1000 / kOne);
+    IOLog("SwitchDisplay: colour %s %u: %lld %lld %lld / %lld %lld %lld / %lld %lld %lld\n", call, location, v[0], v[1],
+          v[2], v[3], v[4], v[5], v[6], v[7], v[8]);
+}
+#endif
+
 // The object comes zeroed from IOMallocType, its member initializers not run.
 bool TegraDisplayColor::init()
 {
@@ -155,6 +172,9 @@ IOReturn TegraDisplayColor::setMatrix(uint32_t location, const void *matrix)
         return kIOReturnBadArgument;
     Matrix value;
     memcpy(&value, matrix, sizeof(value));
+#if DEVELOPMENT || DEBUG
+    logMatrix("setMatrix", location, value);
+#endif
     const IOReturn status = change(lock, generation, [&] {
         (location == kLocationHarmony ? inputs.harmony : inputs.accessibility) = value;
         return kIOReturnSuccess;
@@ -230,6 +250,9 @@ IOReturn TegraDisplayColor::swapSetColorMatrix(const void *matrix, uint32_t loca
             return kIOReturnUnsupported;
         memcpy(&value, &words[3], sizeof(value));
     }
+#if DEVELOPMENT || DEBUG
+    logMatrix("swapSetColorMatrix", location, value);
+#endif
     const IOReturn status = change(lock, generation, [&] {
         inputs.accessibility = value;
         return kIOReturnSuccess;
