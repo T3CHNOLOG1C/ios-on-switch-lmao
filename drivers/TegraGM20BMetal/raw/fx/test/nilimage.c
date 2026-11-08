@@ -6,6 +6,8 @@
 // usage: nilimage <libvulkan_nouveau.dylib> <dim 1|2|3> WxHxDxL <bytes a texel 1|2|4|8|16> <2d-view 0|1> <view: plain|cube>...
 // prints per image: "dim W H D L bpp view2d view | size align array_stride | level offset row_stride y_log2 z_log2 ... |
 // header words | hash"
+//    or: nilimage <dylib> view WxHxL <levels> <bpp> <2d|2da|cube|cubea> <base level> <levels> <base layer> <layers>...
+// prints per view of a 2D image (array) of that many levels: its header at 0x100000, the image's base
 // build: nil.h from cbindgen (bazel build //third_party/mesa/src/nouveau/nil:nil_h), util/format/u_format_gen.h generated beside
 // it (uv run --with pyyaml python3 third_party/mesa/src/util/format/u_format_table.py <its u_format.yaml> --enums), then
 //   xcrun clang -O1 -DHAVE_FUNC_ATTRIBUTE_PACKED -I <that directory> -I third_party/mesa/include -I third_party/mesa/src
@@ -38,9 +40,65 @@ static enum pipe_format formatOf(uint32_t bpp)
     }
 }
 
+// Views of part of a 2D image of `levels` levels and L layers: 8 arguments a view
+static int views(const struct nv_device_info *dev, int n, char **v, typeof(&nil_image_init) init,
+                 typeof(&nil_image_view_descriptor) describe, typeof(&nil_format) format)
+{
+    for (int a = 0; a + 7 < n; a += 8) {
+        uint32_t w = 0, h = 0, layers = 1;
+        if (sscanf(v[a], "%ux%ux%u", &w, &h, &layers) < 2)
+            return 2;
+        const uint32_t levels = (uint32_t)atoi(v[a + 1]), bpp = (uint32_t)atoi(v[a + 2]),
+                       baseLevel = (uint32_t)atoi(v[a + 4]), viewLevels = (uint32_t)atoi(v[a + 5]),
+                       baseLayer = (uint32_t)atoi(v[a + 6]), viewLayers = (uint32_t)atoi(v[a + 7]);
+        const char *type = v[a + 3];
+        const struct nil_format f = format(formatOf(bpp));
+        struct nil_image_init_info info;
+        memset(&info, 0, sizeof info);
+        info.dim = NIL_IMAGE_DIM_2D;
+        info.format = f;
+        info.extent_px.width = w;
+        info.extent_px.height = h;
+        info.extent_px.depth = 1;
+        info.extent_px.array_len = layers;
+        info.levels = levels;
+        info.samples = 1;
+        info.modifier = DRM_FORMAT_MOD_INVALID;
+        struct nil_image img;
+        if (!init(dev, &img, &info)) {
+            printf("%ux%ux%u %u refused\n", w, h, layers, levels);
+            continue;
+        }
+        struct nil_view view;
+        memset(&view, 0, sizeof view);
+        view.view_type = !strcmp(type, "2da")     ? NIL_VIEW_TYPE_2D_ARRAY
+                         : !strcmp(type, "cube")  ? NIL_VIEW_TYPE_CUBE
+                         : !strcmp(type, "cubea") ? NIL_VIEW_TYPE_CUBE_ARRAY
+                                                  : NIL_VIEW_TYPE_2D;
+        view.access = NIL_VIEW_ACCESS_TEXTURE;
+        view.format = f;
+        view.base_level = baseLevel;
+        view.num_levels = viewLevels;
+        view.base_array_layer = baseLayer;
+        view.array_len = viewLayers;
+        view.swizzle[0] = PIPE_SWIZZLE_X;
+        view.swizzle[1] = PIPE_SWIZZLE_Y;
+        view.swizzle[2] = PIPE_SWIZZLE_Z;
+        view.swizzle[3] = PIPE_SWIZZLE_W;
+        const struct nil_descriptor desc = describe(dev, &img, &view, 0x100000);
+        printf("%ux%ux%u %u %u %s %u %u %u %u |", w, h, layers, levels, bpp, type, baseLevel, viewLevels, baseLayer,
+               viewLayers);
+        for (int k = 0; k < 8; k++)
+            printf(" %08x", desc.bits[k]);
+        printf("\n");
+    }
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
-    if (argc < 2 || (argc - 2) % 5) {
+    const bool viewMode = argc > 2 && !strcmp(argv[2], "view");
+    if (argc < 2 || (!viewMode && (argc - 2) % 5) || (viewMode && (argc - 3) % 8)) {
         fprintf(stderr, "usage: %s <libvulkan_nouveau.dylib> (<dim> WxHxDxL <bpp> <view2d> <plain|cube>)...\n",
                 argv[0]);
         return 2;
@@ -67,6 +125,8 @@ int main(int argc, char **argv)
     dev.cls_eng2d = 0x902d;
     dev.cls_eng3d = 0xb197;
     dev.cls_compute = 0xb1c0;
+    if (viewMode)
+        return views(&dev, argc - 3, argv + 3, p_nil_image_init, p_nil_image_view_descriptor, p_nil_format);
     for (int a = 2; a + 4 < argc; a += 5) {
         const uint32_t dim = (uint32_t)atoi(argv[a]), bpp = (uint32_t)atoi(argv[a + 2]),
                        view2d = (uint32_t)atoi(argv[a + 3]), cube = !strcmp(argv[a + 4], "cube");

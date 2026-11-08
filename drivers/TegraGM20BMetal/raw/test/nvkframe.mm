@@ -463,6 +463,43 @@ int main(int argc, char **argv)
                 tex[t] = [dev newTextureWithDescriptor:d];
             }
         }
+        // FRAME_VIEW: IMAGE3 a view of part of a texture. level (with FRAME_MIP): levels 1.. of IMAGE1's chain; slice (with
+        // FRAME_ARRAY): a 2D view of layer 1; face (with FRAME_CUBE): a 2D view of face 2; array (with FRAME_CUBE): a 2D-array
+        // view of the faces. With FRAME_3D_CHECK, a layer view reads back its layer's texels.
+        if (const char *part = getenv("FRAME_VIEW")) {
+            id<MTLTexture> of = !strcmp(part, "level") ? tex[frame::IMAGE1] : tex[frame::IMAGE3];
+            const NSUInteger faces = of.textureType == MTLTextureTypeCube || of.textureType == MTLTextureTypeCubeArray
+                                         ? 6
+                                         : 1,
+                             slices = std::max<NSUInteger>(of.arrayLength, 1) * faces;
+            const bool level = !strcmp(part, "level"), array = !strcmp(part, "array");
+            const NSUInteger layer = !strcmp(part, "slice") ? 1 : !strcmp(part, "face") ? 2 : 0;
+            id<MTLTexture> view =
+                [of newTextureViewWithPixelFormat:of.pixelFormat
+                                      textureType:array ? MTLTextureType2DArray : MTLTextureType2D
+                                           levels:level ? NSMakeRange(1, of.mipmapLevelCount - 1) : NSMakeRange(0, 1)
+                                           slices:array ? NSMakeRange(0, slices) : NSMakeRange(layer, 1)];
+            if (!view) {
+                fprintf(stderr, "FRAME_VIEW %s: no view\n", part);
+                return 1;
+            }
+            printf("VIEW %s %lux%lu levels %lu\n", part, (unsigned long)view.width, (unsigned long)view.height,
+                   (unsigned long)view.mipmapLevelCount);
+            if (getenv("FRAME_3D_CHECK") && !level && !array) {
+                const NSUInteger row = of.width * 4, image = row * of.height;
+                std::vector<uint8_t> back(image), want(image);
+                for (size_t i = 0; i < image; i++)
+                    want[i] = uint8_t((layer * image + i) * 13 + 5);
+                [view getBytes:back.data()
+                      bytesPerRow:row
+                    bytesPerImage:image
+                       fromRegion:MTLRegionMake2D(0, 0, of.width, of.height)
+                      mipmapLevel:0
+                            slice:0];
+                printf("VIEW layer %lu %s\n", (unsigned long)layer, back == want ? "match" : "differs");
+            }
+            tex[frame::IMAGE3] = view;
+        }
         id<MTLDepthStencilState> dss[frame::kDsSpecs];
         for (unsigned i = 0; i < frame::kDsSpecs; i++) {
             const frame::DsSpec spec = frame::dsSpec(i);
@@ -533,8 +570,9 @@ int main(int argc, char **argv)
             }
             // (FRAME_1D, FRAME_3D: slot 9 that texture, so m2v's segment samples the raw path's memory through its twin)
             for (int t = 0; t < 16; t++)
-                [e setFragmentTexture:tex[t == 9 && (getenv("FRAME_1D") || getenv("FRAME_3D") ||
-                                                     getenv("FRAME_ARRAY") || getenv("FRAME_CUBE"))
+                [e setFragmentTexture:tex[t == 9 &&
+                                                  (getenv("FRAME_1D") || getenv("FRAME_3D") || getenv("FRAME_ARRAY") ||
+                                                   getenv("FRAME_CUBE") || getenv("FRAME_VIEW"))
                                               ? frame::IMAGE3
                                               : frame::IMAGE1]
                               atIndex:t];

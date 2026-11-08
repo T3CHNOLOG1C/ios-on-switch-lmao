@@ -387,6 +387,53 @@ TEST(Layout, OneThreeDimensionalArrayAndCubeImagesAreNils)
     }
 }
 
+// NIL's headers of views of part of a 2D image (nilimage view: an image of `levels` levels and `layers` layers at 0x100000, the
+// view's type, its first level and level count, its first layer and layer count)
+struct NilPartView {
+    uint32_t width, height, layers, levels, bpp, type, baseLevel, viewLevels, baseLayer, viewLayers;
+    uint32_t header[8];
+};
+
+// clang-format off
+const NilPartView kNilPartViews[] = {
+    {17, 17, 3, 1, 4, raw::fx::kTexTwoD, 0, 1, 1, 1,
+     {0x58d24908, 0x00101000, 0x00600000, 0x00070008, 0xe0800010, 0x80000010, 0x03000000, 0x00000000}},
+    {17, 17, 3, 1, 4, raw::fx::kTexTwoDArray, 0, 1, 1, 2,
+     {0x58d24908, 0x00101000, 0x00600000, 0x00070008, 0xe2800010, 0x80010010, 0x03000000, 0x00000000}},
+    {64, 64, 6, 1, 4, raw::fx::kTexTwoD, 0, 1, 2, 1,
+     {0x58d24908, 0x00108000, 0x00600000, 0x00070018, 0xe080003f, 0x8000003f, 0x03000000, 0x00000000}},
+    {64, 64, 6, 1, 4, raw::fx::kTexTwoDArray, 0, 1, 0, 6,
+     {0x58d24908, 0x00100000, 0x00600000, 0x00070018, 0xe280003f, 0x8005003f, 0x03000000, 0x00000000}},
+    {64, 64, 12, 1, 8, raw::fx::kTexCube, 0, 1, 6, 6,
+     {0x58d7ff83, 0x00130000, 0x00600000, 0x00070018, 0xe180003f, 0x8000003f, 0x03000000, 0x00000000}},
+    {64, 64, 12, 1, 8, raw::fx::kTexCubeArray, 0, 1, 0, 12,
+     {0x58d7ff83, 0x00100000, 0x00600000, 0x00070018, 0xe400003f, 0x8001003f, 0x03000000, 0x00000000}},
+    {128, 128, 1, 8, 4, raw::fx::kTexTwoD, 1, 7, 0, 1,
+     {0x58d24908, 0x00100000, 0x00600000, 0x70070020, 0xe080007f, 0x8000007f, 0x03000000, 0x00000071}},
+    {128, 128, 1, 8, 4, raw::fx::kTexTwoD, 3, 1, 0, 1,
+     {0x58d24908, 0x00100000, 0x00600000, 0x70070020, 0xe080007f, 0x8000007f, 0x03000000, 0x00000033}},
+    {300, 200, 1, 9, 4, raw::fx::kTexTwoDArray, 2, 3, 0, 1,
+     {0x58d24908, 0x00100000, 0x00600000, 0x80070020, 0xe280012b, 0x800000c7, 0x03000000, 0x00000042}},
+};
+// clang-format on
+
+// raw::Device::createPartView's header: the part's layout (a chain's levels, an array's layers from its first one's address)
+TEST(Layout, PartViewHeadersAreNils)
+{
+    for (const NilPartView &n : kNilPartViews) {
+        raw::fx::MipChain c;
+        ASSERT_TRUE(n.levels > 1 ? raw::fx::mipChainLayout(n.width, n.height, n.levels, n.bpp, c)
+                                 : raw::fx::arrayLayout(n.width, n.height, n.layers, 1, n.bpp, c));
+        c.layers = n.viewLayers;
+        uint32_t header[8];
+        raw::fx::mipChainTic(c, 0x100000 + n.baseLayer * c.arrayStride, n.header[0], false, n.baseLevel, n.viewLevels,
+                             header, n.type);
+        for (int w = 0; w < 8; w++)
+            EXPECT_EQ(header[w], n.header[w]) << n.width << "x" << n.height << "x" << n.layers << " levels " << n.levels
+                                              << " view type " << n.type << " word " << w;
+    }
+}
+
 // A 1D image is NIL's 2D layout of one row (Tiling::choose leaves a 1D image one GOB tall, where a 2D image of height 1 clamps
 // to), under a header of TEXTURE_TYPE ONE_D (nvb097_fill_image_view_desc for ViewType::_1D); nothing else in the header moves
 TEST(Layout, OneDHeaderDiffersFromTwoDInItsTypeAlone)

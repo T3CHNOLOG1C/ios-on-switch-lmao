@@ -109,7 +109,11 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
     uint64_t _imageWrites;  // and its surface's writes the seed does not show (surfaceWrites)
     bool _imageCurrent;
     RMTexture *_parent;  // a view's
-    RMBuffer *_buffer;   // a texture over a buffer's
+    // a view of part of its parent (newTextureViewWithPixelFormat:textureType:levels:slices:): those of the parent, which its
+    // twin views too; the view's type is its descriptor's
+    NSRange _viewLevels, _viewSlices;
+    bool _viewPart;
+    RMBuffer *_buffer;  // a texture over a buffer's
     NSUInteger _offset, _rowBytes;
     std::atomic<bool> _gpuDirty;
     MTLPurgeableState _purgeable;

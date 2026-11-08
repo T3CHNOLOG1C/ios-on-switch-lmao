@@ -1413,6 +1413,59 @@ bool Device::createView(const Texture &of, uint32_t format, Texture &t)
     return true;
 }
 
+bool Device::createPartView(const Texture &of, uint32_t format, uint32_t type, uint32_t baseLevel, uint32_t levels,
+                            uint32_t baseLayer, uint32_t layers, Texture &t)
+{
+    const FormatInfo *f = formatInfo(format);
+    const bool cube = type == fx::kTexCube || type == fx::kTexCubeArray;
+    if (of.converted() || !of.blockLinear || of.zeta || of.type == fx::kTexOneD || of.type == fx::kTexThreeD || !f ||
+        f->bpp != of.bpp || of.memoryless || of.sampled || xrForm(format) != XrForm::None ||
+        xrForm(of.format) != XrForm::None || !levels || !layers || (type == fx::kTexTwoD && layers != 1) ||
+        (cube && (layers % 6 || of.width != of.height)))
+        return false;
+    fx::MipChain c;
+    uint64_t va = of.va;
+    Texture image;
+    if (of.chain) {
+        if (baseLayer || layers != 1 || baseLevel + levels > of.chain->layout.levels ||
+            !chainLevelImage(of, baseLevel, image))
+            return false;
+        c = of.chain->layout;
+        va = of.chain->va;
+        image.cpu =
+            nullptr;  // (a later level's block height is the chain's clamp, not its own image's: the CPU goes by m2v)
+    } else {
+        if (baseLevel || levels != 1 || baseLayer + layers > of.layers ||
+            !fx::arrayLayout(of.width, of.height, of.layers, 1, of.bpp, c))
+            return false;
+        va += baseLayer * c.arrayStride;
+        image = of;
+        image.va = va;
+        image.cpu = of.cpu ? of.cpu + baseLayer * c.arrayStride : nullptr;
+        image.layers = layers;
+        image.layerBytes = c.arrayStride;
+    }
+    c.layers = layers;
+    std::lock_guard<std::mutex> l(lock_);
+    t = image;
+    t.view = true;
+    t.format = format;
+    t.type = uint8_t(type);
+    t.renderable = false;
+    t.shadowTarget = false;
+    t.import = nullptr;
+    t.span = {};
+    t.lease = nullptr;
+    t.chain = nullptr;
+    t.wc = false;
+    if (!(t.tic = allocTic()))
+        return false;
+    uint32_t w[8];
+    fx::mipChainTic(c, va, f->tic0, f->srgb, baseLevel, levels, w, type);
+    memcpy(tic_.cpu + 32 * t.tic, w, 32);
+    return true;
+}
+
 bool Device::createMemoryless(uint32_t width, uint32_t height, uint32_t format, Texture &t)
 {
     uint64_t bytes, align;
