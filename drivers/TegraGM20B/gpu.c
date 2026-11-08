@@ -4623,9 +4623,10 @@ int tgm_chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t
  *    column-scans (NativeScanout.h native_legacy_block_copy);
  *  - the kernel fence (chan_fence: WFI, the L2 flush, semaphore release, NON_STALL_INTERRUPT).
  * The fence's nonstall interrupt completes it: the caller's callback (native_legacy_gpu_complete, which any context may
- * call) runs from the interrupt pass. A present that has not completed 1 s after it was queued panics, naming what it
- * waits for. Every mapping is volatile: the source was written by work whose fence flushed the L2 (or bypassed it), the
- * destination is read by the display controller only. Methods from open-gpu-doc classes/dma-copy/clb0b5.h.
+ * call) runs from the interrupt pass, with TEGRA_SCANOUT_SOURCE_LOST when a writer it waited for was killed before that
+ * submission ended (the acquire passed on the kill's release, over a partial frame). A present that has not completed 1 s
+ * after it was queued panics, naming what it waits for. Every mapping is volatile: the source was written by work whose
+ * fence flushed the L2 (or bypassed it), the destination is read by the display controller only. Methods from open-gpu-doc classes/dma-copy/clb0b5.h.
  * No user submission waits for a present: the compositor never writes a surface a copy still reads. Core Animation
  * recycles a framebuffer only when a later swap completes, and the display offers the next swap only once the copy
  * before it completed (NativeLegacyDisplay offerGpuCopy). */
@@ -4671,13 +4672,16 @@ static struct {
 	void *deadline_work;
 	u32 pending; /* seqno of the present in flight, 0: none (atomic: the interrupt pass completes it) */
 	u64 queued;
-	void (*done)(void *);
+	void (*done)(void *, int);
 	void *arg;
-	u32 waits; /* the acquires of the present in flight, for the deadline's line */
+	u32 completing; /* completions claimed whose callback has not returned yet */
+	u32 waits;      /* the acquires of the present in flight, for the deadline's line */
+	int writers;    /* they are the surface's writers', not every user channel's */
 
 	struct {
 		u64 id;
 		u32 seqno;
+		const volatile struct TegraGM20BAbiFence *fence;
 	} wait[TGM_SYNC_MAX];
 	volatile struct tgm_stamp
 		*wait_end[TGM_SYNC_MAX]; /* stats: their end stamps (pool memory, kept mapped) */
@@ -4687,30 +4691,61 @@ static struct {
 	u64 recovered; /* when the present in flight last found a recovery under way, or work still progressing */
 } present = {.lock = {NULL}};
 
+/* Whether a writer the present in flight waited for was killed before the submission it waited for ended. A wait on every
+ * user channel (no address space imports the surface) names no writer, so no kill there is the frame's. Read before the
+ * present is released: the next one rewrites the list. */
+static int present_source_lost(void)
+{
+	u32 i = 0;
+
+	if (!present.writers)
+		return 0;
+	for (i = 0; i < present.waits; i++) {
+		if (present.wait[i].fence &&
+		    tgm_fence_lost(present.wait[i].fence, present.wait[i].seqno))
+			return 1;
+	}
+	return 0;
+}
+
 /* From the present channel's nonstall interrupt (the interrupt pass, nvkm's event lock held): a present whose fence passed
- * is done, and its callback runs here (the display's only signals its work loop). */
+ * is done, and its callback runs here (the display's only signals its work loop). completing covers the claim to the
+ * callback's return, so tgm_present_outstanding never answers 0 for a present whose completion is not delivered yet. */
 static void present_fenced(struct tgm_chan *chan)
 {
 	u32 pending = __atomic_load_n(&present.pending, __ATOMIC_ACQUIRE);
-	void (*done)(void *) = NULL;
+	void (*done)(void *, int) = NULL;
 	void *arg = NULL;
 	u64 queued = 0;
+	int status = 0;
 
 	if (!pending || (s32)(tgm_chan_completed(chan) - pending) < 0)
 		return;
 	done = present.done;
 	arg = present.arg;
 	queued = present.queued;
-	if (!__atomic_compare_exchange_n(&present.pending, &pending, 0, false, __ATOMIC_ACQ_REL,
-					 __ATOMIC_RELAXED))
+	status = present_source_lost() ? TEGRA_SCANOUT_SOURCE_LOST : 0;
+	__atomic_fetch_add(&present.completing, 1, __ATOMIC_SEQ_CST);
+	if (!__atomic_compare_exchange_n(&present.pending, &pending, 0, false, __ATOMIC_SEQ_CST,
+					 __ATOMIC_RELAXED)) {
+		__atomic_fetch_sub(&present.completing, 1, __ATOMIC_SEQ_CST);
 		return;
+	}
 	nvxnu_work_cancel(present.deadline_work);
 	if (stats_on()) {
 		__atomic_fetch_add(&present.presents, 1, __ATOMIC_RELAXED);
 		stats_add(&present.lat_sum, &present.lat_max, nvxnu_nanotime() - present.queued);
 	}
 	tgm_deadline_presented(queued);
-	done(arg);
+	done(arg, status);
+	__atomic_fetch_sub(&present.completing, 1, __ATOMIC_SEQ_CST);
+}
+
+int tgm_present_outstanding(const void *arg)
+{
+	if (__atomic_load_n(&present.pending, __ATOMIC_SEQ_CST) && present.arg == arg)
+		return 1;
+	return __atomic_load_n(&present.completing, __ATOMIC_SEQ_CST) != 0;
 }
 
 /* TGM_PRESENT_NS after a present was queued, if it has not completed: name the first user channel it still waits for. */
@@ -4881,7 +4916,7 @@ static int present_writer_on(void)
 
 static int present_copy(uint64_t src_va, uint64_t src_pa, uint64_t stride, int src_block,
 			uint32_t width, uint32_t height, uint64_t dst_va, uint32_t dst_pitch,
-			uint32_t block_height_log2, void (*done)(void *), void *arg)
+			uint32_t block_height_log2, void (*done)(void *, int), void *arg)
 {
 	struct tgm_chan *chan = present.chan;
 	struct tgm_chan *user = NULL;
@@ -4936,6 +4971,7 @@ static int present_copy(uint64_t src_va, uint64_t src_pa, uint64_t stride, int s
 			continue;
 		present.wait[n].id = user->id;
 		present.wait[n].seqno = READ_ONCE(user->submitted);
+		present.wait[n].fence = (const volatile struct TegraGM20BAbiFence *)user->fence_cpu;
 		tgm_hold_need(gpu.device, user->chid);
 		present.wait_end[n] =
 			stats_on() ? &chan_stamps(user, present.wait[n].seqno)->end : NULL;
@@ -4952,6 +4988,7 @@ static int present_copy(uint64_t src_va, uint64_t src_pa, uint64_t stride, int s
 	}
 	mutex_unlock(&live_lock);
 	present.waits = n;
+	present.writers = matched;
 	if (stats_on()) { /* the copy's start, after the acquires: stats_fences times the copy and the gap before it */
 		present.stamped = chan->submitted + 1;
 		push_stamp(push,
@@ -5004,7 +5041,7 @@ static int present_copy(uint64_t src_va, uint64_t src_pa, uint64_t stride, int s
 /* Refused while the gate is shut: the display copies that frame on the CPU. */
 int tgm_present_copy(uint64_t src_va, uint64_t src_pa, uint64_t stride, int src_block,
 		     uint32_t width, uint32_t height, uint64_t dst_va, uint32_t dst_pitch,
-		     uint32_t block_height_log2, void (*done)(void *), void *arg)
+		     uint32_t block_height_log2, void (*done)(void *, int), void *arg)
 {
 	int ret = 0;
 

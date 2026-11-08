@@ -95,6 +95,21 @@ TEST(DirectScanoutSource, NoEarlyRetireOrCollapseOnceRetiringAtTheLatch)
     expectBefore(method(display(), "    void finishTransfer("), "if (latchRetire)", "retireSwap");
 }
 
+// The GPU driver owns an accepted offer's deadline (TegraScanoutCopy.h): the display waits while the driver holds it, and a
+// frame whose rendering was lost is neither flipped to nor copied on the CPU.
+TEST(DirectScanoutSource, LateOffersAreTheDriversAndLostFramesAreNotShown)
+{
+    const std::string deadline = method(display(), "    static void gpuDeadlineFired(");
+    expectBefore(deadline, "tegra_gm20b_scanout_outstanding(self)", "panic(");
+    EXPECT_THAT(deadline, HasSubstr("fence only, direct slot"));
+    const std::string finish = method(display(), "    void finishGpuCopy(int status)\n");
+    expectBefore(finish, "if (status == TEGRA_SCANOUT_SOURCE_LOST) {", "gpuBypass = true;");
+    const std::string drop = method(display(), "    void dropLostFrame(");
+    EXPECT_THAT(drop, HasSubstr("retireUnshown(seqOf(request));"));
+    EXPECT_THAT(drop, Not(HasSubstr("gpuBypass")));
+    EXPECT_THAT(drop, Not(HasSubstr("presentEntry")));
+}
+
 TEST(DirectScanoutSource, NeverReplacedAcrossLayouts)
 {
     EXPECT_THAT(method(display(), "    void presentEntry(int i)\n"), HasSubstr("sameLayout(i, ring.pending)"));

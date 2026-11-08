@@ -56,13 +56,23 @@ extern "C" {
 // work-loop gate in thread context (usually the compositor's thread inside its swap submission): queue the copy and return, never
 // wait for the GPU here. 0: accepted, and native_legacy_gpu_complete follows exactly once for it. Anything else: declined (GPU
 // not up, channel busy or dead, source not importable), no completion; the display copies that frame on the CPU. One offer is
-// outstanding at a time: the next comes only after the previous one's completion.
+// outstanding at a time: the next comes only after the previous one's completion. The copy waits only for work its producers
+// had already submitted at the offer.
 int tegra_gm20b_scanout_copy(const struct TegraScanoutCopy *copy);
 // Provided by NativeLegacyDisplay: the offer's copy is done (status 0: every byte of the target is in DRAM, the copy engine's writes
 // flushed past the GPU L2 before the semaphore release that raised the completion) or failed (status != 0: the target may hold a
 // partial frame; the display does not flip to it). Any context, the GPU's interrupt filter included; it only records the status
-// and signals the display's work loop. The display panics if an accepted copy is not completed within 1 s.
+// and signals the display's work loop.
 void native_legacy_gpu_complete(void *display, int status);
+// status: the compositor's rendering of the source never finished (its channel faulted or hung and was killed): the source
+// holds a partial frame, and the display shows nothing of it, neither through the copy nor the CPU.
+#define TEGRA_SCANOUT_SOURCE_LOST (-5)
+// Provided by the GPU driver (weak in NativeLegacyDisplay): whether the display's accepted offer is still the GPU driver's, its
+// completion not yet delivered. The driver owns an accepted offer's deadline: 1 s after the offer it names the channel and
+// seqno the copy waits for, kills a client's hung channel (the offer then completes, TEGRA_SCANOUT_SOURCE_LOST when the
+// killed work was the frame's) or panics. The display's own deadline only catches a completion lost between the two: it
+// waits while this says 1, up to ten of its 1 s deadlines. Any context; never waits.
+int tegra_gm20b_scanout_outstanding(const void *display);
 // Provided by the GPU driver (weak in NativeLegacyDisplay): whether the IOSurface whose first page is `pa` holds
 // block-linear pixels. A surface's layout is decided once, at its first GPU import, and holds while any GPU client
 // imports it; a CPU lock never changes what its pages hold. Thread context; never waits for the GPU.
