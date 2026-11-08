@@ -34,6 +34,7 @@ METAL = '/System/Library/Frameworks/Metal.framework/Metal'
 CACHE_DIR = 'System/Library/Caches/com.apple.dyld'
 HDIUTIL = '/usr/bin/hdiutil'
 SCALARS = {'c': 1, 'C': 1, 'B': 1, 's': 2, 'S': 2, 'i': 4, 'I': 4, 'f': 4, 'q': 8, 'Q': 8, 'd': 8}
+COMPILER = re.compile(r'/System/Library/PrivateFrameworks/MTLCompiler\.framework/(?:Versions/(\d+)/)?MTLCompiler')
 INTEGER_FIELDS = ('I', 'Q')
 INTEGER_RETURNS = ('Q', 'I', 'L')
 JsonObject = dict[str, object]
@@ -162,6 +163,18 @@ def system_sends(cache_path: Path, cache: DyldCache, not_senders: list[str]) -> 
         return {s for sent in pool.map(_sent, images, chunksize=16) for s in sent}
 
 
+def compiler_image(cache: DyldCache) -> str:
+    """Return the path of the MTLCompiler image Metal itself loads, which the frontend's in-process compiler opens."""
+    found = {}
+    for image in cache.images:
+        match = COMPILER.fullmatch(image)
+        if match:
+            found[int(match.group(1) or 0)] = image
+    if not found:
+        raise SystemExit('the cache has no MTLCompiler image')
+    return found[max(found)]
+
+
 def extract(cache_path: Path, kind: str) -> str:
     interface = json.loads((HERE / 'interface.json').read_text())
     cache = DyldCache(cache_path)
@@ -173,11 +186,14 @@ def extract(cache_path: Path, kind: str) -> str:
         'kind': kind,
         'MTLDevice': device_table(reader, classes, interface['device']),
         'classes': class_tables(reader, classes, interface['classes']),
+        'compiler': compiler_image(cache),
         'sent': {
             name: {s: t for s, t in sorted(closure(found, names).items()) if s in sent}
             for name, names in sorted(interface['objects'].items())
         },
         'found': {
+            'compiler': 'the MTLCompiler image Metal loads: the highest Versions/<n> the cache holds '
+            '(getMaxSupportedLLVMVersion), else the unversioned one',
             'instance_size': "_MTLDevice's class_ro_t instanceSize",
             'limits': "the _limits ivar's offset, size and type encoding; the integer fields with an accessor in "
             "_MTLDevice or a Metal class below it (maxBufferLength: MTLIOAccelDevice's only)",
