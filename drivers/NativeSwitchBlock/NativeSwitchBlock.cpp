@@ -47,6 +47,7 @@
 #include "../TegraI2C/TegraI2C.h"
 #include "../TegraGPIO/TegraGPIO.h"
 #include "../../kits/SwitchDMA/SwitchDcache.h"
+#include "../../kits/SwitchDMA/SwitchDMABuffer.h"
 #include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
 #include "../../kits/SwitchRefusal/SwitchRefusal.h"
 #include "../../kits/SwitchTime/SwitchTime.h"
@@ -560,7 +561,7 @@ class NativeSwitchBlock : public IOService {
     OSDeclareDefaultStructors(NativeSwitchBlock) volatile uint8_t *regs = nullptr;
     volatile uint8_t *car = nullptr, *apb = nullptr, *pmc = nullptr;  // SDR104 bring-up only
     volatile uint8_t *mc = nullptr;                                   // memory controller (SMMU state for SDMMC1)
-    IOBufferMemoryDescriptor *bounceMemory = nullptr;
+    switch_dma_buffer bounceMemory = {};
     uint8_t *bounce = nullptr;
     uint64_t bouncePA = 0;
     IOLock *queueLock = nullptr;
@@ -593,7 +594,7 @@ class NativeSwitchBlock : public IOService {
     // ADMA2 carries data (setup()'s check passed and no ADMA error since) and writes (no write read back different), the
     // state of the last ADMA error (command()), SDMA's own read limit for the bounce path (kBounceSectors once setup()
     // has checked the boundary resume), and the read-back of the first ADMA2 writes (writeChecks left; into checkBuffer).
-    IOBufferMemoryDescriptor *tableMemory = nullptr;
+    switch_dma_buffer tableMemory = {};
     SwitchAdmaTable table = {};
     uint64_t tablePA = 0;
     bool adma = false, admaWrites = false;
@@ -619,7 +620,7 @@ class NativeSwitchBlock : public IOService {
     uint32_t cmd23WriteChecks = 0;
     // r14-sdcq: read chains with gaps (SwitchQueue.h) while gapsOn: the sink their gaps are read into (kGapSectors,
     // contiguous below 4 GiB, never read or written by the CPU after setup) and the proofs still to do this boot.
-    IOBufferMemoryDescriptor *sinkMemory = nullptr;
+    switch_dma_buffer sinkMemory = {};
     uint64_t sinkPA = 0;
     bool gapsOn = false;
     uint32_t gapProofs = 0;
@@ -661,7 +662,7 @@ class NativeSwitchBlock : public IOService {
     CqBus cqBus{this};
     CqEngine cq;
     uint32_t cqControlAddress = 0;
-    IOBufferMemoryDescriptor *regMemory = nullptr;
+    switch_dma_buffer regMemory = {};
     uint8_t *regBuffer = nullptr;
     uint64_t regPA = 0;
     Batch cqGroups[2][kCqMaxTasks] = {};
@@ -3850,15 +3851,11 @@ const char *NativeSwitchBlock::checkAdma(const uint8_t *reference, uint32_t *des
         return "the controller reports no ADMA2";
     if ((r16(HOST_CONTROL2) & CONTROL2_V4_64BIT) != CONTROL2_V4_64BIT)
         return "HOST_CONTROL2 does not keep v4 64-bit addressing";
-    tableMemory = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
-        kernel_task,
-        static_cast<IOOptionBits>(kIODirectionInOut) | static_cast<IOOptionBits>(kIOMemoryPhysicallyContiguous),
-        kAdmaTableBytes, 0x00000000ffffffffULL & ~(kAdmaPage - 1));
-    if (!tableMemory)
+    if (!switch_dma_alloc(&tableMemory, kAdmaTableBytes, 0x00000000ffffffffULL & ~(kAdmaPage - 1)))
         return "no memory for the descriptor table";
-    table.entries = static_cast<SwitchAdmaDescriptor *>(tableMemory->getBytesNoCopy());
-    tablePA = tableMemory->getPhysicalSegment(0, nullptr, kIOMemoryMapperNone);
-    if (!table.entries || !tablePA || (tablePA & (kAdmaPage - 1)) || tablePA + kAdmaTableBytes > (1ULL << 32))
+    table.entries = reinterpret_cast<SwitchAdmaDescriptor *>(tableMemory.va);
+    tablePA = tableMemory.pa;
+    if (tablePA & (kAdmaPage - 1))
         return "the descriptor table is not page-aligned below 4 GiB";
     table.capacity = kAdmaDescriptors;
     table.limit = kAdmaDmaLimit;
@@ -4086,16 +4083,13 @@ const char *NativeSwitchBlock::checkCq(uint64_t *queuedNs, uint64_t *serialNs, u
     cqControlAddress = switchSdCqControlAddress(extInfo.perf);
     if (!cqControlAddress)
         return "its control byte crosses a page";
-    regMemory = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
-        kernel_task,
-        static_cast<IOOptionBits>(kIODirectionInOut) | static_cast<IOOptionBits>(kIOMemoryPhysicallyContiguous),
-        kAdmaPage, 0x00000000ffffffffULL & ~(kAdmaPage - 1));
-    regBuffer = regMemory ? static_cast<uint8_t *>(regMemory->getBytesNoCopy()) : nullptr;
-    regPA = regMemory ? regMemory->getPhysicalSegment(0, nullptr, kIOMemoryMapperNone) : 0;
-    if (!regBuffer || !regPA || (regPA & (kAdmaPage - 1)) || regPA + kAdmaPage > (1ULL << 32)) {
+    if (!switch_dma_alloc(&regMemory, kAdmaPage, 0x00000000ffffffffULL & ~(kAdmaPage - 1)) ||
+        (regMemory.pa & (kAdmaPage - 1))) {
         regBuffer = nullptr;
         return "no DMA buffer for its register";
     }
+    regBuffer = regMemory.va;
+    regPA = regMemory.pa;
     // r16-sdcq: a cache some earlier stage left on goes off before any write (one that will not has every write flushed:
     // commitWrite).
     if (perf.cacheEnable & kSdCacheEnable) {
@@ -4267,17 +4261,14 @@ bool NativeSwitchBlock::setup()
         return false;
     }
 
-    bounceMemory = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
-        kernel_task,
-        static_cast<IOOptionBits>(kIODirectionInOut) | static_cast<IOOptionBits>(kIOMemoryPhysicallyContiguous),
-        kBounceBytes, 0x00000000ffffffffULL & ~static_cast<uint64_t>(kBounceAlign - 1));
-    if (!bounceMemory) {
+    if (!switch_dma_alloc(&bounceMemory, kBounceBytes,
+                          0x00000000ffffffffULL & ~static_cast<uint64_t>(kBounceAlign - 1))) {
         IOLog("SwitchSD: bounce allocation failed\n");
         return false;
     }
-    bounce = static_cast<uint8_t *>(bounceMemory->getBytesNoCopy());
-    bouncePA = bounceMemory->getPhysicalSegment(0, nullptr, kIOMemoryMapperNone);
-    if (!bounce || !bouncePA || (bouncePA & (kBounceAlign - 1)) || bouncePA + kBounceBytes > (1ULL << 32)) {
+    bounce = bounceMemory.va;
+    bouncePA = bounceMemory.pa;
+    if (bouncePA & (kBounceAlign - 1)) {
         IOLog("SwitchSD: bad bounce PA 0x%llx\n", bouncePA);
         return false;
     }
@@ -4418,25 +4409,13 @@ bool NativeSwitchBlock::setup()
                 }
             }
             // r14-sdcq: gap reads need the sink and, for their proofs, checkBuffer; queue merging must be on.
-            sinkMemory = checkBuffer && merge ? IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
-                                                    kernel_task,
-                                                    static_cast<IOOptionBits>(kIODirectionInOut) |
-                                                        static_cast<IOOptionBits>(kIOMemoryPhysicallyContiguous),
-                                                    static_cast<mach_vm_size_t>(kGapSectors) * kSector,
-                                                    0x00000000ffffffffULL & ~(kAdmaPage - 1))
-                                              : nullptr;
-            if (sinkMemory) {
-                sinkPA = sinkMemory->getPhysicalSegment(0, nullptr, kIOMemoryMapperNone);
-                const auto *sinkBytes = static_cast<uint8_t *>(sinkMemory->getBytesNoCopy());
-                if (!sinkBytes || !sinkPA || (sinkPA & (kAdmaPage - 1)) ||
-                    sinkPA + static_cast<uint64_t>(kGapSectors) * kSector > (1ULL << 32) || !cacheableRam(sinkPA)) {
-                    sinkPA = 0;
-                } else {
-                    // No line of the sink is dirty in the cache from here on: the engine's writes there are never
-                    // overwritten by an eviction, and nobody reads them.
-                    switch_dcache_clean_invalidate_lines(sinkBytes, static_cast<uintptr_t>(kGapSectors) * kSector);
-                    switch_dcache_sync();
-                }
+            // switch_dma_alloc leaves no line of the sink dirty in the cache: the engine's writes there are never
+            // overwritten by an eviction, and nobody reads them.
+            if (checkBuffer && merge &&
+                switch_dma_alloc(&sinkMemory, static_cast<size_t>(kGapSectors) * kSector,
+                                 0x00000000ffffffffULL & ~(kAdmaPage - 1)) &&
+                !(sinkMemory.pa & (kAdmaPage - 1)) && cacheableRam(sinkMemory.pa)) {
+                sinkPA = sinkMemory.pa;
             }
             gapsOn = sinkPA != 0;
             gapProofs = gapsOn ? kGapProofs : 0;

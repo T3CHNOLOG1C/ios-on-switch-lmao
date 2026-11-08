@@ -662,7 +662,7 @@ bool planeProbeTick()
         IOLog("SwitchDisplay: plane probe not run: the first client frame came before it; planes off\n");
         return false;
     }
-    if (!doubleBuffer || !probeTables || !SWITCH_PORTRAIT_NATIVE || hwSuspended || scanoutStopped ||
+    if (!doubleBuffer || !probeTables.memory || !SWITCH_PORTRAIT_NATIVE || hwSuspended || scanoutStopped ||
         gPanicRestore.panicking || probe.active() || frameEnds < 30)
         return false;
     planeProbeRan = true;
@@ -677,10 +677,10 @@ void planeProbeStart()
     const uint32_t start = windowActive(kWinbufStartAddr);
     const uint32_t stride = windowActive(kWinLineStride) & 0xffff;
     const unsigned char *from = nullptr;
-    if (tapeAttached && tapeBuffer && tapeBuffer->getBytesNoCopy() && start >= tapeAddress &&
+    if (tapeAttached && tapeBuffer.va && start >= tapeAddress &&
         static_cast<uint64_t>(start - tapeAddress) + kTapeWindow <= kTapeBytes && stride == kTapeStride) {
         // The console wrote the tape through its write-combined view; the cacheable alias, invalidated, reads DRAM.
-        from = static_cast<const unsigned char *>(tapeBuffer->getBytesNoCopy()) + (start - tapeAddress);
+        from = static_cast<const unsigned char *>(tapeBuffer.va) + (start - tapeAddress);
         switch_dcache_clean_invalidate(from, kTapeWindow);
     } else if (start == surfaceAddress(0) && stride == 2880) {
         from = reinterpret_cast<const unsigned char *>(bootMapping->getVirtualAddress());
@@ -737,8 +737,7 @@ void planeProbeStart()
 // be set; plane slot 0 onto the probe's copy; then the swgroup with window B's client (display0b) translated.
 bool planeDomainAttach()
 {
-    if (!directAttached && !planesAttached &&
-        !probeDomain.init(probeTables->getBytesNoCopy(), probeTablesPa, kProbeTables)) {
+    if (!directAttached && !planesAttached && !probeDomain.init(probeTables.va, probeTables.pa, kProbeTables)) {
         snprintf(planeProbeLine, sizeof(planeProbeLine), "the table buffer cannot hold a directory");
         return false;
     }

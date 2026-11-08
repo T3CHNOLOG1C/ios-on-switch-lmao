@@ -22,6 +22,7 @@
 #include <pexpert/pexpert.h>
 #include "../ArmGIC/SwitchInterrupts.h"
 #include "../../kits/SwitchDMA/SwitchDcache.h"
+#include "../../kits/SwitchDMA/SwitchDMABuffer.h"
 #include "../../kits/SwitchCAR/SwitchCAR.h"
 #include "../../kits/SwitchMMIO/SwitchMMIOWords.h"
 #include "../../kits/SwitchSysctl/SwitchSysctl.h"
@@ -829,11 +830,10 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     bool doubleBuffer = false;
     static constexpr unsigned kScanBuffers = TegraScanoutRing::kMaxBuffers;
     static constexpr int kNoBuffer = TegraScanoutRing::kNone;
-    IOBufferMemoryDescriptor *scanBuffers[kScanBuffers] =
-        {};                                        // surfaces 1 and 2's pages ([0] unused: the boot framebuffer)
-    IOMemoryMap *scanMappings[kScanBuffers] = {};  // their write-combined views
-    uint64_t scanAddresses[kScanBuffers] = {};     // their physical addresses
-    TegraScanoutRing ring;                         // which surface is scanned, asked for, replaced, drawn
+    switch_dma_buffer scanBuffers[kScanBuffers] = {};  // surfaces 1 and 2's pages ([0] unused: the boot framebuffer)
+    IOMemoryMap *scanMappings[kScanBuffers] = {};      // their write-combined views
+    uint64_t scanAddresses[kScanBuffers] = {};         // their physical addresses
+    TegraScanoutRing ring;                             // which surface is scanned, asked for, replaced, drawn
     // The direct-scanout gate's probe (DisplaySmmuProbe.h): once, kProbeAfterFrames frame ends
     // after window A first scanned a client frame, with nothing in flight, DC A's CRC unit and the display's SMMU domain (ASID
     // TEGRA_SMMU_ASID_DISPLAY on the "dc" swgroup) prove window A reads the scanned buffer through an IOVA slot; then all of
@@ -843,8 +843,8 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     static constexpr uint32_t kDisplay0aTranslation = 1u << 1;  // client display0a (id 1) in TRANSLATION_ENABLE_0
     static constexpr uint64_t kProbeSlot = 0x10000000ULL;  // below DRAM (0x80000000): only a translation reaches it
     static constexpr unsigned kProbeTables = 64, kProbeAfterFrames = 600;  // r18-planes: 40 tables for the plane slots
-    IOBufferMemoryDescriptor *probeTables = nullptr;
-    uint64_t probeTablesPa = 0, probeAt = 0;
+    switch_dma_buffer probeTables = {};
+    uint64_t probeAt = 0;
     TegraSMMUDomain probeDomain;
     DisplaySmmuProbe probe;
     bool probeRan = false, probeUnderflow = false;
@@ -947,7 +947,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     static constexpr unsigned kFlipDeadlineMS = 100;
     // XNU's console tape (startConsoleTape), from start until the first client frame scans: the pages, their write-combined view
     // and physical address, and whether the console draws there (window A scans it; read by the filter and the console's wait).
-    IOBufferMemoryDescriptor *tapeBuffer = nullptr;
+    switch_dma_buffer tapeBuffer = {};
     IOMemoryMap *tapeMapping = nullptr;
     uint32_t tapeAddress = 0;
     volatile bool tapeAttached = false;
@@ -1363,7 +1363,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         return frameEnds < 2 || vsyncArmed || tapeAttached || tapeSettle || kickDeferred || presentDeferred ||
                ring.pending != kNoBuffer || ring.superseded != kNoBuffer || ring.drawing != kNoBuffer ||
                ring.held != kNoBuffer || (rotated && !rotationLatched) || probeRequest || probe.active() ||
-               (!probeRan && (probeTables != nullptr) && doubleBuffer) || (planesOn && planeLatch.requested()) ||
+               (!probeRan && (probeTables.memory != nullptr) && doubleBuffer) || (planesOn && planeLatch.requested()) ||
                planeProbe.active() || planeHeldSet;
     }
 
@@ -2176,39 +2176,30 @@ private:
     // page. Surface 1 is required (as before); without surface 2 the display double-buffers, said in one line.
     bool startScanBuffer(unsigned i, bool required)
     {
-        const IOOptionBits options = static_cast<IOOptionBits>(kIODirectionInOut) |
-                                     static_cast<IOOptionBits>(kIOMemoryPhysicallyContiguous) |
-                                     static_cast<IOOptionBits>(kIOMemoryMapperNone);
-        IOBufferMemoryDescriptor *buffer = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
-            kernel_task, options, kNativeBlockBytes, 0x00000000fffe0000ULL);
-        IOByteCount run = 0;
-        const uint64_t pa = buffer ? buffer->getPhysicalSegment(0, &run, kIOMemoryMapperNone) : 0;
+        // switch_dma_alloc zeroed the pages and cleaned them out of the kernel's cacheable alias, which nothing writes after
+        // this, so no dirty line can land on a frame the write-combined mapping wrote around the cache.
+        switch_dma_buffer buffer = {};
         IOMemoryMap *mapping = nullptr;
-        if (pa && run >= kNativeBlockBytes && !(pa & 0x1ffff) && pa + kNativeBlockBytes <= (1ULL << 32) &&
-            buffer->getBytesNoCopy()) {
-            // The allocator zeroed the pages through the kernel's cacheable alias. Write those lines back and drop them now,
-            // before the write-combined mapping writes the same memory around the cache; nothing writes through the cacheable
-            // alias after this, so no dirty line can later land on a frame.
-            switch_dcache_clean_invalidate(buffer->getBytesNoCopy(), kNativeBlockBytes);
-            mapping = mapScanout(pa);
+        if (switch_dma_alloc(&buffer, kNativeBlockBytes, 0x00000000fffe0000ULL) && !(buffer.pa & 0x1ffff)) {
+            mapping = mapScanout(buffer.pa);
             if (mapping && (!mapping->getVirtualAddress() || mapping->getLength() < kNativeBlockBytes))
                 OSSafeReleaseNULL(mapping);
         }
         if (!mapping) {
             if (required) {
-                panic("SwitchDisplay: no mapped, physically contiguous %#llx-byte buffer "
-                      "below 4 GiB for surface %u (got %#llx, %#llx contiguous)",
-                      kNativeBlockBytes, i, pa, (uint64_t)run);
+                panic("SwitchDisplay: no mapped, physically contiguous %#llx-byte buffer below 4 GiB for surface %u "
+                      "(got %#llx)",
+                      kNativeBlockBytes, i, buffer.pa);
             }
-            IOLog("SwitchDisplay: no physically contiguous %#llx-byte buffer below 4 GiB for surface %u (got %#llx, "
-                  "%#llx contiguous): double-buffered, a late frame delays the ones after it\n",
-                  kNativeBlockBytes, i, pa, static_cast<uint64_t>(run));
-            OSSafeReleaseNULL(buffer);
+            IOLog("SwitchDisplay: no physically contiguous %#llx-byte buffer below 4 GiB for surface %u (got %#llx): "
+                  "double-buffered, a late frame delays the ones after it\n",
+                  kNativeBlockBytes, i, buffer.pa);
+            switch_dma_free(&buffer);
             return false;
         }
         scanBuffers[i] = buffer;
         scanMappings[i] = mapping;
-        scanAddresses[i] = pa;
+        scanAddresses[i] = buffer.pa;
         return true;
     }
 
@@ -2222,17 +2213,8 @@ private:
         doubleBuffer = true;
         ring.reset(buffers);
         // The SMMU probe's page tables (directory + tables), physically contiguous below 4 GiB; none: no probe.
-        probeTables = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
-            kernel_task,
-            static_cast<IOOptionBits>(kIODirectionInOut) | static_cast<IOOptionBits>(kIOMemoryPhysicallyContiguous),
-            static_cast<uint64_t>(kProbeTables) * 4096, 0x00000000fffff000ULL);
-        IOByteCount run = 0;
-        probeTablesPa = probeTables ? probeTables->getPhysicalSegment(0, &run, kIOMemoryMapperNone) : 0;
-        if (!probeTablesPa || run < static_cast<uint64_t>(kProbeTables) * 4096 || probeTablesPa + run > (1ULL << 32) ||
-            !probeTables->getBytesNoCopy()) {
+        if (!switch_dma_alloc(&probeTables, static_cast<size_t>(kProbeTables) * 4096))
             IOLog("SwitchDisplay: no contiguous %u KiB for the SMMU probe's tables: probe off\n", kProbeTables * 4);
-            OSSafeReleaseNULL(probeTables);
-        }
         kickDeferred = false;
     }
 
@@ -2250,28 +2232,18 @@ private:
         if (!hwRotate)
             return;
         checkPitchWindow();
-        const IOOptionBits options = static_cast<IOOptionBits>(kIODirectionInOut) |
-                                     static_cast<IOOptionBits>(kIOMemoryPhysicallyContiguous) |
-                                     static_cast<IOOptionBits>(kIOMemoryMapperNone);
-        tapeBuffer =
-            IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task, options, kTapeBytes, 0x00000000fffff000ULL);
-        IOByteCount run = 0;
-        const uint64_t pa = tapeBuffer ? tapeBuffer->getPhysicalSegment(0, &run, kIOMemoryMapperNone) : 0;
-        if (pa && run >= kTapeBytes && pa + kTapeBytes <= (1ULL << 32) && tapeBuffer->getBytesNoCopy()) {
-            // As for surface 1: the zeroing went through the cacheable alias, which nothing writes after this.
-            switch_dcache_clean_invalidate(tapeBuffer->getBytesNoCopy(), kTapeBytes);
-            tapeMapping = mapScanout(pa, kTapeBytes);
-        }
+        // As for surface 1: switch_dma_alloc cleaned the zeroing out of the cacheable alias, which nothing writes after this.
+        if (switch_dma_alloc(&tapeBuffer, kTapeBytes))
+            tapeMapping = mapScanout(tapeBuffer.pa, kTapeBytes);
         if (!tapeMapping || !tapeMapping->getVirtualAddress() || tapeMapping->getLength() < kTapeBytes) {
-            IOLog("SwitchDisplay: no physically contiguous %#llx-byte console tape below 4 GiB (got %#llx, %#llx "
-                  "contiguous): "
-                  "the console scrolls in software\n",
-                  kTapeBytes, pa, static_cast<uint64_t>(run));
+            IOLog("SwitchDisplay: no physically contiguous %#llx-byte console tape below 4 GiB (got %#llx): the "
+                  "console scrolls in software\n",
+                  kTapeBytes, tapeBuffer.pa);
             OSSafeReleaseNULL(tapeMapping);
-            OSSafeReleaseNULL(tapeBuffer);
+            switch_dma_free(&tapeBuffer);
             return;
         }
-        tapeAddress = static_cast<uint32_t>(pa);
+        tapeAddress = static_cast<uint32_t>(tapeBuffer.pa);
         tapeStrideSet = false;
         tapeAttached = true;
         dc[kDcRegActControl] = pitchActControl & ~kWinAActHcntrSel;
@@ -2283,7 +2255,7 @@ private:
             tapeAttached = false;
             dc[kDcRegActControl] = pitchActControl;
             OSSafeReleaseNULL(tapeMapping);
-            OSSafeReleaseNULL(tapeBuffer);
+            switch_dma_free(&tapeBuffer);
             return;
         }
         chainPanicHook();
@@ -2373,7 +2345,7 @@ private:
         tapeSettle = false;
         thread_wakeup((event_t)&tapeFrames);  // a console still waiting to scroll: there is no tape now
         OSSafeReleaseNULL(tapeMapping);
-        OSSafeReleaseNULL(tapeBuffer);
+        switch_dma_free(&tapeBuffer);
     }
 
     // Under the gate, in a kick, right after native_legacy_prepare_scanout released XNU's console: its last scroll may still wait for
@@ -2746,7 +2718,7 @@ private:
     bool probeAttach()
     {
         // With planes on, the domain is the plane probe's already (window A's surfaces 1:1 in it): it is extended, not made.
-        if (!planesAttached && !probeDomain.init(probeTables->getBytesNoCopy(), probeTablesPa, kProbeTables)) {
+        if (!planesAttached && !probeDomain.init(probeTables.va, probeTables.pa, kProbeTables)) {
             snprintf(probeLine, sizeof(probeLine), "the table buffer cannot hold a directory");
             return false;
         }
@@ -2767,7 +2739,7 @@ private:
         uintptr_t low = 0;
         uintptr_t high = 0;
         probeDomain.takeDirty(&low, &high);
-        switch_dcache_clean_invalidate(probeTables->getBytesNoCopy(), static_cast<uint64_t>(kProbeTables) * 4096);
+        switch_dcache_clean_invalidate(probeTables.va, static_cast<uint64_t>(kProbeTables) * 4096);
         probeSwgroupWas = tegra_smmu_read(TEGRA_SMMU_DC_ASID);
         return tegra_smmu_attach(TEGRA_SMMU_ASID_DISPLAY, probeDomain.ptb(), TEGRA_SMMU_DC_ASID,
                                  TEGRA_SMMU_TRANSLATION_ENABLE_0, kDisplay0aTranslation, probeLine,
@@ -2787,7 +2759,7 @@ private:
             }
         }
         if (!probe.active()) {
-            if (probeRan || !probeTables || !doubleBuffer || !rotationLatched || hwSuspended || scanoutStopped ||
+            if (probeRan || !probeTables.memory || !doubleBuffer || !rotationLatched || hwSuspended || scanoutStopped ||
                 tapeAttached || gPanicRestore.panicking)
                 return;
             if (!probeAt)
@@ -3155,7 +3127,7 @@ private:
         ring.reset(0);
         for (unsigned i = 1; i < kScanBuffers; ++i) {
             OSSafeReleaseNULL(scanMappings[i]);
-            OSSafeReleaseNULL(scanBuffers[i]);
+            switch_dma_free(&scanBuffers[i]);
             scanAddresses[i] = 0;
         }
         if (flipTimer) {
