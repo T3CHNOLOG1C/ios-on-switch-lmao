@@ -20,6 +20,7 @@
 #include "../TegraVIC/TegraVICPresent.h"
 #include "TegraNVDEC.h"
 #include "nvidia/nvdec_drv.h"
+#include "../../kits/SwitchDMA/SwitchDcache.h"
 
 namespace {
 constexpr uint32_t kMaxBuffers = 64, kMaxConnections = 16;
@@ -205,7 +206,7 @@ IOReturn AppleD5500UserClient::run(uint32_t method, const void *in, uint32_t inS
                 result = kIOReturnBadArgument;
                 break;
             }
-            tegra_nvdec_cache_flush(b->block.va + r->offset, r->length);
+            switch_dcache_clean_invalidate(b->block.va + r->offset, r->length);
         }
         IOLockUnlock(lock_);
         return result;
@@ -303,7 +304,8 @@ IOReturn AppleD5500UserClient::run(uint32_t method, const void *in, uint32_t inS
             p->chroma_offset % 256 || p->chroma_offset < luma || picture > b->block.size ||
             static_cast<uint64_t>(p->crop_x) + p->width > p->pitch ||
             static_cast<uint64_t>(p->crop_y) + p->height > p->rows) {
-            tegra_nvdec_cache_flush(b->block.va, b->block.size);  // as for any refusal: the caller copies on the CPU
+            // As for any refusal: the caller copies on the CPU.
+            switch_dcache_clean_invalidate(b->block.va, b->block.size);
             ret = kIOReturnBadArgument;
             break;
         }
@@ -326,7 +328,7 @@ IOReturn AppleD5500UserClient::run(uint32_t method, const void *in, uint32_t inS
         const int err = tegra_vic_present(&vic, current_task(), &why);
         if (err) {
             // The caller copies the picture on the CPU now: it must read DRAM (what NVDEC wrote), as after Wait.
-            tegra_nvdec_cache_flush(b->block.va, picture);
+            switch_dcache_clean_invalidate(b->block.va, picture);
             ret = (err == -22 || err == -12) ? ioreturn(err) : kIOReturnUnsupported;
         }
         break;

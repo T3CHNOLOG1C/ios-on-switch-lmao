@@ -35,8 +35,6 @@ void tegra_nvdec_memory_release(void);  // a failed bring-up gives the tables ba
 int tegra_nvdec_buffer_alloc(uint64_t size, TegraNVDECBlock *block);
 void tegra_nvdec_buffer_free(TegraNVDECBlock *block);  // only once no job can touch it
 void tegra_nvdec_memory_usage(uint64_t *limit, uint64_t *free);
-void tegra_nvdec_cache_clean(const void *va, size_t size);  // dc cvac: the CPU's writes reach DRAM
-void tegra_nvdec_cache_flush(const void *va, size_t size);  // dc civac: the next CPU read comes from DRAM
 
 // Checks a submit (TegraNVDECCheck.h), cleans its CPU-written ranges, copies its picture setup into kernel memory
 // and queues it on host1x channel 0. Returns 0 and the job's fence, or a negative errno-style value.

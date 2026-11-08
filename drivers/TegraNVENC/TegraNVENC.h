@@ -36,8 +36,6 @@ void tegra_nvenc_memory_release(void);  // a failed bring-up gives the tables ba
 int tegra_nvenc_buffer_alloc(uint64_t size, TegraNVENCBlock *block);
 void tegra_nvenc_buffer_free(TegraNVENCBlock *block);  // only once no job can touch it
 void tegra_nvenc_memory_usage(uint64_t *limit, uint64_t *free);
-void tegra_nvenc_cache_clean(const void *va, size_t size);  // dc cvac: the CPU's writes reach DRAM
-void tegra_nvenc_cache_flush(const void *va, size_t size);  // dc civac: the next CPU read comes from DRAM
 
 // Checks a submit (TegraNVENCCheck.h), cleans its CPU-written ranges, copies its setup into kernel memory, writes 0
 // in the address methods of features it leaves off and queues it on host1x channel 0. Returns 0 and the job's fence,

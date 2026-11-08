@@ -412,7 +412,7 @@ extern "C" int tegra_nvdec_run(const TegraNVDECSubmit *s, TegraNVDECResolve reso
             *why = "clean range";
             return -22;
         }
-        tegra_nvdec_cache_clean(b.va + r->offset, r->length);
+        switch_dcache_clean(b.va + r->offset, r->length);
     }
 
     // SETCLASS, (INCR METHOD0 x2: method, value) per method with the setup slot before EXECUTE, OP_DONE increment.
@@ -443,7 +443,7 @@ extern "C" int tegra_nvdec_run(const TegraNVDECSubmit *s, TegraNVDECResolve reso
     }
     const uint32_t slot = job % kSetupSlots;
     memcpy(gSetup.va + static_cast<size_t>(slot) * kSetupSlotBytes, s->setup, s->setup_bytes);
-    tegra_nvdec_cache_clean(gSetup.va + static_cast<size_t>(slot) * kSetupSlotBytes, s->setup_bytes);
+    switch_dcache_clean(gSetup.va + static_cast<size_t>(slot) * kSetupSlotBytes, s->setup_bytes);
     for (uint32_t i = 0; i < s->entry_count; i++) {
         const TegraNVDECEntry *e = &s->entries[i];
         if (i == s->entry_count - 1) {  // EXECUTE, last by the check

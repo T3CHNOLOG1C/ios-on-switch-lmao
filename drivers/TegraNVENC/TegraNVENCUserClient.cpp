@@ -21,6 +21,7 @@
 #include <string.h>
 #include "TegraNVENC.h"
 #include "TegraNVENCABI.h"
+#include "../../kits/SwitchDMA/SwitchDcache.h"
 
 namespace {
 constexpr uint32_t kMaxBuffers = 64, kMaxConnections = 16;
@@ -205,7 +206,7 @@ IOReturn AppleAVE2UserClient::run(uint32_t method, const void *in, uint32_t inSi
                 result = kIOReturnBadArgument;
                 break;
             }
-            tegra_nvenc_cache_flush(b->block.va + r->offset, r->length);
+            switch_dcache_clean_invalidate(b->block.va + r->offset, r->length);
         }
         IOLockUnlock(lock_);
         return result;

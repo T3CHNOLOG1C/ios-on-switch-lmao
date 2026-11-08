@@ -414,7 +414,7 @@ int run(const TegraNVENCSubmit *s, TegraNVENCResolve resolve, void *context, uin
             *why = "clean range";
             return -22;
         }
-        tegra_nvenc_cache_clean(b.va + r->offset, r->length);
+        switch_dcache_clean(b.va + r->offset, r->length);
     }
 
     // SETCLASS; the submit's methods, SET_APPLICATION_ID first (the checker requires it: the OS selects the app before
@@ -453,7 +453,7 @@ int run(const TegraNVENCSubmit *s, TegraNVENCResolve resolve, void *context, uin
     const uint32_t slot = job % kSetupSlots;
     uint8_t *setup = gSetup.va + static_cast<size_t>(slot) * kSetupSlotBytes;
     memcpy(setup, s->setup, s->setup_bytes);
-    tegra_nvenc_cache_clean(setup, s->setup_bytes);
+    switch_dcache_clean(setup, s->setup_bytes);
     for (uint32_t i = 0; i < s->entry_count; i++) {
         const TegraNVENCEntry *e = &s->entries[i];
         if (i == s->entry_count - 1) {  // EXECUTE, last by the check
