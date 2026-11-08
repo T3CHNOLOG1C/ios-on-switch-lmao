@@ -1567,18 +1567,24 @@ static int chan_marked(u32 chid)
 	return marked;
 }
 
-/* 1 if every report of the pass is a scheduler error: recover.c takes those from nvkm's handler and decides on them
- * (tgm_ctxsw_decide), so one here came between its handler and nvkm's. */
-static int only_sched_errors(const char *errors)
+static int fifo_error(const char *report, const char *end)
+{
+	const char *sched = strstr(report, "SCHED_ERROR");
+	const char *bind = strstr(report, "BIND_ERROR");
+
+	return (sched && (!end || sched < end)) || (bind && (!end || bind < end));
+}
+
+/* 1 if every report of the pass is a scheduler or bind error: recover.c takes those from nvkm's handler and decides on
+ * them (tgm_ctxsw_decide), so one here came between its handler and nvkm's. */
+static int only_fifo_errors(const char *errors)
 {
 	const char *p = errors;
 	const char *bar = NULL;
-	const char *sched = NULL;
 
 	for (;;) {
 		bar = strstr(p, " | ");
-		sched = strstr(p, "SCHED_ERROR");
-		if (!sched || (bar && sched > bar))
+		if (!fifo_error(p, bar))
 			return 0;
 		if (!bar)
 			return 1;
@@ -1666,7 +1672,7 @@ static int errors_contained(const char *errors)
 			named[n++] = chan;
 		}
 	}
-	if (!n && (!iso.until || now >= iso.until) && !only_sched_errors(errors))
+	if (!n && (!iso.until || now >= iso.until) && !only_fifo_errors(errors))
 		contained = 0;
 	for (i = 0; contained && i < n; i++)
 		chan_isolate(named[i], errors, now);

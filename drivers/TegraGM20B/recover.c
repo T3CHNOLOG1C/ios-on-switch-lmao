@@ -4,6 +4,8 @@
 #include <engine/fifo.h>
 #include <engine/fifo/runl.h>
 #include <engine/fifo/runq.h>
+#include <engine/fifo/chan.h> /* nvkm_chan_func: the unbind */
+#include <engine/fifo/cgrp.h>
 #include <engine/fifo/priv.h> /* nvkm_fifo_func */
 #include <core/engine.h>      /* nvkm_engine_reset */
 #include "TegraGM20BGpu.h"
@@ -25,9 +27,11 @@
 /* written 1 to clear (gk104_runl_fault_clear); a runlist's bit stops its scheduling */
 #define ERROR_SCHED_DISABLE 0x00262c
 #define PFIFO_INTR_0 0x002100
+#define PFIFO_INTR_0_BIND_ERROR 0x00000001
 #define PFIFO_INTR_0_SCHED_ERROR 0x00000100
 #define PFIFO_INTR_0_MMU_FAULT 0x10000000
 #define PFIFO_INTR_EN_0 0x002140
+#define PFIFO_INTR_BIND_ERROR 0x00252c
 #define PFIFO_INTR_SCHED_ERROR 0x00254c
 
 static struct {
@@ -36,6 +40,8 @@ static struct {
 	nvkm_inth_func fifo_intr;                   /* gk104_fifo_intr */
 	const struct nvkm_runq_func *runq_nvkm;
 	struct nvkm_runq_func runq; /* nvkm's, the interrupt handler wrapped */
+	const struct nvkm_chan_func *chan_nvkm;
+	struct nvkm_chan_func chan; /* nvkm's, the unbind wrapped */
 	struct nvkm_fifo *fifo;
 	void *work;
 	u32 engm;   /* engines whose switch timed out since the work last ran (atomic) */
@@ -88,11 +94,26 @@ static void sched_error(struct nvkm_device *device)
 	u32 code = nvkm_rd32(device, PFIFO_INTR_SCHED_ERROR) & 0xff;
 	u32 engm = engines_switching(ctxsw.fifo);
 
-	if (code != TGM_SCHED_CTXSW_TIMEOUT) {
-		nvxnu_log("tegra-gm20b: GPU scheduler error %#04x (%s), engines mid-switch %#x\n",
-			  code, tgm_sched_error_name(code), engm);
+	static u32 unexplained;
+
+	if (code != TGM_SCHED_CTXSW_TIMEOUT || (!engm && unexplained++ < 4)) {
+		nvxnu_log("tegra-gm20b: GPU scheduler error %#04x (%s), engines mid-switch %#x; "
+			  "ENG0 %08x ENG1 %08x, PBDMA0 %08x ch %u\n",
+			  code, tgm_sched_error_name(code), engm,
+			  nvkm_rd32(device, PFIFO_ENG_STATUS(0)),
+			  nvkm_rd32(device, PFIFO_ENG_STATUS(1)),
+			  nvkm_rd32(device, PBDMA_STATUS(0)),
+			  PBDMA_CHID(nvkm_rd32(device, PBDMA_CHANNEL(0))));
 	}
 	ctxsw_tick(ctxsw.fifo, engm);
+}
+
+/* nvgpu's gk20a_fifo_intr counts a bind error as no channel's: it is logged. nvkm reports it, naming no channel. */
+static void bind_error(struct nvkm_device *device)
+{
+	u32 code = nvkm_rd32(device, PFIFO_INTR_BIND_ERROR) & 0xff;
+
+	nvxnu_log("tegra-gm20b: GPU bind error %#04x (%s)\n", code, tgm_bind_error_name(code));
 }
 
 static irqreturn_t fifo_intr(struct nvkm_inth *inth)
@@ -100,6 +121,10 @@ static irqreturn_t fifo_intr(struct nvkm_inth *inth)
 	struct nvkm_device *device = ctxsw.fifo->engine.subdev.device;
 	u32 stat = nvkm_rd32(device, PFIFO_INTR_0) & nvkm_rd32(device, PFIFO_INTR_EN_0);
 
+	if (stat & PFIFO_INTR_0_BIND_ERROR) {
+		bind_error(device);
+		nvkm_wr32(device, PFIFO_INTR_0, PFIFO_INTR_0_BIND_ERROR);
+	}
 	if (stat & PFIFO_INTR_0_SCHED_ERROR) {
 		sched_error(device);
 		nvkm_wr32(device, PFIFO_INTR_0, PFIFO_INTR_0_SCHED_ERROR);
@@ -152,27 +177,40 @@ static void sched_disable_clear(struct nvkm_device *device, u32 runlm)
 	}
 }
 
-/* As nvkm_runl_rc resets an engine: runlist blocked, the engine reset, exception state cleared, runlist let go. The
- * engine's status is read again under the runlist's mutex: nvkm's own recovery may have reset it meanwhile. */
-static void engine_reset(struct nvkm_runl *runl, struct nvkm_engn *engn, int id)
+/* As nvkm_runl_rc resets an engine: runlist blocked, the engine reset, exception state cleared, runlist let go. runl->mutex
+ * held, and the engine found holding hardware channel id under it (nvkm's own recovery may have reset it meanwhile). */
+static void engine_reset_locked(struct nvkm_runl *runl, struct nvkm_engn *engn, int id,
+				const char *why)
 {
-	bool cgid = false;
+	nvxnu_log("tegra-gm20b: engine %d %s channel %d: reset\n", engn->id, why, id);
+	nvkm_runl_block(runl);
+	WARN_ON(nvkm_engine_reset(engn->engine));
+	if (runl->func->fault_clear)
+		runl->func->fault_clear(runl);
+	nvkm_runl_allow(runl);
+	if (TGM_STATS)
+		__atomic_fetch_add(&ctxsw.reset, 1, __ATOMIC_RELAXED);
+}
+
+/* nvkm unbinds a channel after its preempt even when the preempt timed out (nvkm_chan_remove does not look at
+ * nvkm_runl_preempt_wait's answer), and an engine still on the channel then raises BIND_ERROR UNBIND_WHILE_RUNNING. As
+ * nvgpu's teardown recovers a channel its preempt could not take off an engine, that engine is reset before the unbind. */
+static void chan_unbind(struct nvkm_chan *chan)
+{
+	struct nvkm_runl *runl = chan->cgrp->runl;
+	struct nvkm_device *device = runl->fifo->engine.subdev.device;
+	struct nvkm_engn *engn = NULL;
 
 	mutex_lock(&runl->mutex);
-	if (engn->func->chsw(engn) && engn->func->cxid(engn, &cgid) == id && !cgid) {
-		nvxnu_log(
-			"tegra-gm20b: engine %d stuck switching channel %d, which nothing runs any "
-			"more: reset\n",
-			engn->id, id);
-		nvkm_runl_block(runl);
-		WARN_ON(nvkm_engine_reset(engn->engine));
-		if (runl->func->fault_clear)
-			runl->func->fault_clear(runl);
-		nvkm_runl_allow(runl);
-		if (TGM_STATS)
-			__atomic_fetch_add(&ctxsw.reset, 1, __ATOMIC_RELAXED);
+	/* nouveau's runlist walk takes each engine by container_of. */
+	/* NOLINTNEXTLINE(clang-analyzer-security.ArrayBound) */
+	nvkm_runl_foreach_engn_cond(engn, runl, engn->func->cxid)
+	{
+		if (tgm_engine_holds(nvkm_rd32(device, PFIFO_ENG_STATUS(engn->id)), chan->id))
+			engine_reset_locked(runl, engn, chan->id, "still on unbound");
 	}
 	mutex_unlock(&runl->mutex);
+	ctxsw.chan_nvkm->unbind(chan);
 }
 
 static void ctxsw_work(void *arg)
@@ -207,7 +245,15 @@ static void ctxsw_work(void *arg)
 				resume &= ~BIT((u32)runl->id);
 				break;
 			case TGM_CTXSW_RESET:
-				engine_reset(runl, engn, id);
+				mutex_lock(&runl->mutex);
+				if (tgm_engine_holds(nvkm_rd32(device, PFIFO_ENG_STATUS(engn->id)),
+						     id)) {
+					engine_reset_locked(
+						runl, engn, id,
+						"stuck switching the context of killed or "
+						"unknown");
+				}
+				mutex_unlock(&runl->mutex);
 				break;
 			case TGM_CTXSW_WAIT:
 			case TGM_CTXSW_FATAL:
@@ -227,33 +273,44 @@ static void ctxsw_work(void *arg)
 		sched_disable_clear(device, resume);
 }
 
+/* At M2 the FIFO has no user yet, so nvkm makes its runqueues and registers its interrupt handler later, at the first
+ * channel (nvkm_fifo_oneinit), from its function table: recover.c's entries go in that table, and onto what exists already. */
 void tgm_recover_init(struct nvkm_device *device)
 {
 	struct nvkm_fifo_func *func = tgm_fifo_func(device->fifo);
 	struct nvkm_inth *inth = &device->fifo->engine.subdev.inth;
 	struct nvkm_runq *runq = NULL;
 
-	if (ctxsw.work || !func->intr_ctxsw_timeout || !inth->func)
+	if (ctxsw.work || !func->intr_ctxsw_timeout || !func->intr || !func->runq ||
+	    !func->chan.func || !func->chan.func->unbind) {
+		nvxnu_log("tegra-gm20b: nvkm's FIFO lacks what recover.c takes over: scheduler "
+			  "errors, "
+			  "context-switch timeouts and PBDMA ENG_RESET stay nvkm's\n");
 		return;
+	}
 	ctxsw.fifo = device->fifo;
 	ctxsw.work = nvxnu_work_alloc(ctxsw_work, NULL);
 	if (!ctxsw.work)
 		return;
 	ctxsw.nvkm = func->intr_ctxsw_timeout;
 	func->intr_ctxsw_timeout = ctxsw_tick;
-	/* nvkm_fifo_oneinit registered the handler itself, so its function table is no longer read for it */
-	ctxsw.fifo_intr = inth->func;
-	inth->func = fifo_intr;
+	ctxsw.fifo_intr = func->intr;
+	func->intr = fifo_intr;
+	if (inth->func == ctxsw.fifo_intr)
+		inth->func = fifo_intr;
+	ctxsw.runq_nvkm = func->runq;
+	ctxsw.runq = *func->runq;
+	ctxsw.runq.intr = runq_intr;
+	func->runq = &ctxsw.runq;
 	nvkm_runq_foreach(runq, device->fifo)
 	{
-		if (!ctxsw.runq_nvkm) {
-			ctxsw.runq_nvkm = runq->func;
-			ctxsw.runq = *runq->func;
-			ctxsw.runq.intr = runq_intr;
-		}
 		if (runq->func == ctxsw.runq_nvkm)
 			runq->func = &ctxsw.runq;
 	}
+	ctxsw.chan_nvkm = func->chan.func;
+	ctxsw.chan = *func->chan.func;
+	ctxsw.chan.unbind = chan_unbind;
+	func->chan.func = &ctxsw.chan;
 }
 
 void tgm_recover_suspend(void)

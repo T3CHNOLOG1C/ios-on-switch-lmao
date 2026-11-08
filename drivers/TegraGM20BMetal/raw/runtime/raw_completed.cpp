@@ -3,6 +3,7 @@
 #include <cstring>
 #include "raw_gpu.h"
 #include "raw_record.h"
+#include "raw_slm.h"
 
 namespace raw {
 
@@ -14,7 +15,7 @@ bool Device::placeCompleted(const CapturedProgram &p, PlacedProgram &out)
         out = it->second.placed;
         return true;
     }
-    if (p.image.size() < sizeof CompletedProgram::header)
+    if (p.image.size() < sizeof CompletedProgram::header || !slmNeed(slmPerWarpOfHeader(p.image.data())))
         return false;
     PackProgram info;
     const std::vector<uint8_t> slot = programSlot(p, info);

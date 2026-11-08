@@ -7,6 +7,7 @@
 #include "raw_clear.h"
 #include "raw_follow.h"
 #include "raw_gpu.h"
+#include "raw_slm.h"
 #include "raw_target.h"
 #include "raw_tiled_cache.h"
 #include "TegraGM20BLayout.h"
@@ -536,6 +537,26 @@ bool Device::place(uint32_t prog, uint32_t &program, uint64_t &data)
     return true;
 }
 
+// lock_ held: an area whose warps get `perWarp` bytes of local memory or more; the next submission gives it to the channel
+// (CommandBuffer::commit). False: no memory for it.
+bool Device::slmNeed(uint64_t perWarp)
+{
+    if (perWarp <= slmPerWarp_)
+        return true;
+    const SlmArea a = slmArea(perWarp, k_.info().tpc_count);
+    Bo area;
+    if (!k_.alloc(a.bytes, false, area))
+        return false;
+    if (slm_.bytes)
+        slmOutgrown_.push_back(slm_);
+    slm_ = area;
+    slmPerWarp_ = perWarp;
+    os_log(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "raw"),
+           "raw: shader local memory: %llu bytes a warp, %llu KiB", (unsigned long long)perWarp,
+           (unsigned long long)(a.bytes >> 10));
+    return true;
+}
+
 // lock_ held: the heap bound from its start through `end`, the range past what is bound as one more part of host memory imported
 // and bound at the window's VAs. False: past the window, or no memory or the kernel refused the part.
 bool Device::heapGrow(uint64_t end)
@@ -632,6 +653,10 @@ Pipeline *Device::pipeline(uint64_t keyHash, PackForm form, bool caTransform)
     fs.record = &progs[pp.fs];
     vs.header = pack_.section<uint8_t>(PackHeap) + progs[pp.vs].program;
     fs.header = pack_.section<uint8_t>(PackHeap) + progs[pp.fs].program;
+    if (!slmNeed(std::max(slmPerWarpOfHeader(vs.header), slmPerWarpOfHeader(fs.header)))) {
+        stats.heapFull++;
+        return nullptr;
+    }
     build(pl, pp, vs, fs, pack_.section<uint32_t>(PackBlob) + pp.blob, pack_.string(pp.keyString), caTransform);
     return &pl;
 }
@@ -2146,6 +2171,7 @@ bool Device::reopen()
             b->lastUse = 0;
         heapInvalidated_ = ~0ull;
     }
+    slmChannel_ = 0;
     memset(rootPush_, 0, sizeof rootPush_);
     restart_ = 0;
     const uint32_t words = contextWords() + uint32_t(fx::twodInitWords());
@@ -2389,6 +2415,7 @@ bool CommandBuffer::commit(uint32_t &seqno)
     }
     bool invalidates = false;
     uint64_t invalidatedBefore = 0;
+    uint64_t slmGiven = 0, slmVa = 0;
     {
         std::lock_guard<std::mutex> l(d.lock_);
         if (shaderInvalidate_ && d.heapPlaced_ != d.heapInvalidated_) {
@@ -2397,6 +2424,18 @@ bool CommandBuffer::commit(uint32_t &seqno)
             invalidatedBefore = d.heapInvalidated_;
             d.heapInvalidated_ = d.heapPlaced_;
         }
+        if (d.slmPerWarp_ != d.slmChannel_) {
+            slmGiven = d.slmPerWarp_;
+            slmVa = d.slm_.va;
+        }
+    }
+    // ahead of everything in it: a program placed after begin() may ask for more than the channel has
+    if (slmGiven && !segments_.empty()) {
+        uint64_t va;
+        auto *head = reinterpret_cast<uint32_t *>(d.alloc(d.push_, kSlmWords * 4, 4, va));
+        Push p{head, head + kSlmWords};
+        emitSlm(p, slmVa, slmArea(slmGiven, d.k_.info().tpc_count));
+        segments_.insert(segments_.begin(), {va, uint32_t(p.at - head), 0});
     }
     if (tiledCache(d.k_.info()) && !segments_.empty()) {
         uint64_t va;
@@ -2441,6 +2480,8 @@ bool CommandBuffer::commit(uint32_t &seqno)
         d.lastSeqno_ = seq;
     }
     seqno = seq;
+    if (slmGiven)
+        d.slmChannel_ = slmGiven;
     d.retire(d.push_, seq);
     d.retire(d.upload_, seq);
     memcpy(d.rootPush_, rootPush_, sizeof rootPush_);

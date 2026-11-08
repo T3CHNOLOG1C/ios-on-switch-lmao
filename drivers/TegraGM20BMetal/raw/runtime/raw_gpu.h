@@ -949,7 +949,15 @@ private:
     // heapPlaced_ as of the last submission whose prologue invalidated the SMs' instruction caches, ~0: none on this channel.
     // The instruction cache prefetches past a program's end, where heapPlace puts the next program.
     uint64_t heapInvalidated_ = ~0ull;
+    // Shader local memory (raw_slm.h), under lock_: the area and the most a placed program or kernel asks of a warp. An area
+    // it outgrew is kept: a submission already made may still use it.
+    Bo slm_;
+    uint64_t slmPerWarp_ = 0;
+    std::vector<Bo> slmOutgrown_;
+    // the per-warp size the channel was last given (commit; 0 on a new channel): the submitting thread's
+    uint64_t slmChannel_ = 0;
     uint32_t ctWrite_[8] = {};  // SET_CT_WRITE(i) as the baseline leaves it
+    bool slmNeed(uint64_t perWarp);
     bool place(uint32_t prog, uint32_t &program, uint64_t &data);
     bool heapGrow(uint64_t end);
     const HeapPart *heapPartAt(uint64_t at) const;

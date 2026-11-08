@@ -4,6 +4,7 @@
 
 #include "../pack/nvdec.h"
 #include "raw_pack.h"
+#include "raw_slm.h"
 
 #include "NativeBridgeMetalFrontend.h"
 
@@ -276,8 +277,12 @@ Compiler::Outcome Probe::make(id<MTLRenderPipelineState> twin, MTLRenderPipeline
             [this](const std::string &id) {
                 return capture_->program(id);
             },
-            out, why))
-        return Compiler::Outcome::Made;
+            out, why)) {
+        if (headerIsStage(out.programs[0].image, false) && headerIsStage(out.programs[1].image, true))
+            return Compiler::Outcome::Made;
+        why = "a program whose header is not its stage's";
+        return Compiler::Outcome::Failed;
+    }
     // NVK's export names every program a draw of the command buffer binds: one it does not is the export's failure. A set-0
     // word the probe's tags don't name is this process's (m2v's descriptor tables moved under the capture), not the state's:
     // tried again, never kept on disk as the state's refusal

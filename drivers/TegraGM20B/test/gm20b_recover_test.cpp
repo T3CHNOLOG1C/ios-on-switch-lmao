@@ -40,6 +40,43 @@ TEST(SchedError, AnUnlistedCodeIsUnknownNotAnError)
 	EXPECT_EQ(std::string(tgm_sched_error_name(0xff)), "unknown");
 }
 
+TEST(BindError, Boot9sPanicCodeIsAnUnbindWhileRunning)
+{
+	EXPECT_EQ(std::string(tgm_bind_error_name(0x03)), "UNBIND_WHILE_RUNNING");
+	EXPECT_EQ(std::string(tgm_bind_error_name(0x0b)), "UNBIND_WHILE_PARKED");
+	EXPECT_EQ(std::string(tgm_bind_error_name(0x04)), "unknown");
+}
+
+constexpr uint32_t kBusy = 0x80000000u;
+
+uint32_t engine(uint32_t ctx, uint32_t id, uint32_t next)
+{
+	return kBusy | next << 16 | ctx << 13 | id;
+}
+
+TEST(Unbind, AnEngineRunningOrSavingTheChannelHoldsIt)
+{
+	EXPECT_TRUE(tgm_engine_holds(engine(1, 17, 0), 17));   // resident
+	EXPECT_TRUE(tgm_engine_holds(engine(6, 17, 4), 17));   // saving it out
+	EXPECT_TRUE(tgm_engine_holds(engine(7, 17, 4), 17));   // switching away from it
+	EXPECT_FALSE(tgm_engine_holds(engine(1, 17, 0), 11));  // another channel's
+}
+
+TEST(Unbind, AnEngineLoadingTheChannelHoldsIt)
+{
+	EXPECT_TRUE(tgm_engine_holds(engine(5, 4, 17), 17));
+	EXPECT_TRUE(tgm_engine_holds(engine(7, 4, 17), 17));
+	EXPECT_FALSE(tgm_engine_holds(engine(6, 4, 17), 17));  // NEXT_ID means nothing while saving
+}
+
+TEST(Unbind, AnIdleEngineOrATsgIdHoldsNoChannel)
+{
+	EXPECT_FALSE(tgm_engine_holds(engine(1, 17, 0) & ~kBusy, 17));
+	EXPECT_FALSE(tgm_engine_holds(engine(0, 17, 0), 17));                // no context
+	EXPECT_FALSE(tgm_engine_holds(engine(1, 17, 0) | 0x00001000u, 17));  // TSG 17
+	EXPECT_FALSE(tgm_engine_holds(engine(5, 4, 17) | 0x10000000u, 17));  // loading TSG 17
+}
+
 TEST(Ctxsw, Boot7sKilledChannelOnGrIsReset)
 {
 	// iconservicesagent's channel 9, killed after the ENG_RESET; GR still switching its context at every tick
