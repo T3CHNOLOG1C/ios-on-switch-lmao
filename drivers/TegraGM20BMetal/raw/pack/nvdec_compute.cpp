@@ -83,6 +83,10 @@ void Decoder::computeMethod(uint32_t mthd, uint32_t data)
         barrier("SHINV");
         if (data & 1)
             barrier("ICINV");
+        if (data & 0x1000) {
+            barrier("CBINV");
+            constantStale_.clear();
+        }
         break;
     case kInvalidateTextureHeaderCacheNoWfi:
         barrier("TICINV");
@@ -104,6 +108,22 @@ void Decoder::computeMethod(uint32_t mthd, uint32_t data)
     }
 }
 
+// Whether a constant buffer the QMD `q` binds (the root table too: no LOAD_CONSTANT_BUFFER writes it) lies over bytes in
+// constantStale_
+bool Decoder::dispatchReadsStaleConstants(const uint32_t q[64])
+{
+    for (int i = 0; i < 8 && !constantStale_.empty(); i++) {
+        if (!field(q, 640 + i, 640 + i))
+            continue;
+        const uint64_t addr = (uint64_t(field(q, 960 + 64 * i, 967 + 64 * i)) << 32) | q[29 + 2 * i];
+        const uint32_t size = field(q, 975 + 64 * i, 991 + 64 * i);
+        for (const auto &r : constantStale_)
+            if (addr < r.second && r.first < addr + size)
+                return true;
+    }
+    return false;
+}
+
 // SEND_PCAS_A: the QMD at `qmd`. The record names the work, not where it lies: the QMD's every field but the program offset
 // and the constant buffer addresses (QMDV01_07_PROGRAM_OFFSET, CONSTANT_BUFFER_ADDR_*), then the program and what each valid
 // constant buffer holds (cb0, NVK's root table: its cs words, set addresses and push words, as nvdec prints a draw's)
@@ -114,6 +134,10 @@ void Decoder::dispatch(uint64_t qmd)
     read(qmd, q, sizeof q);
     if (onDispatch)
         onDispatch(*this, qmd);
+    if (dispatchReadsStaleConstants(q)) {
+        staleConstantReads++;
+        barrier("CBSTALE");
+    }
     std::string bar;
     for (auto &b : pendingBarriers_)
         bar += (bar.empty() ? "" : ",") + b;

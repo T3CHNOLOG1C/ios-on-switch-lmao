@@ -160,6 +160,7 @@ private:
     void countComp(uint32_t clearData);
     void barrier(const std::string &what);
     bool readsStaleConstants();
+    bool dispatchReadsStaleConstants(const uint32_t q[64]);
 
     uint32_t r3(uint32_t mthd) const
     {
