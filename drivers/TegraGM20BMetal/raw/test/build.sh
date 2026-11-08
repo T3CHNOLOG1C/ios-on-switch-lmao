@@ -27,11 +27,13 @@ OBJC=(-O2 -g -std=c++17 -fobjc-arc -Wno-deprecated-declarations -DSWITCH_RAW_HAR
 # the runtime's completion of states the pack lacks (RawComplete.mm, RawProbe.mm; raw_completed.cpp beside raw_gpu.cpp); nvdec is
 # the mock's
 COMPLETION=("$RAW/runtime/raw_capture.cpp" "$RAW/runtime/raw_record.cpp" "$RAW/runtime/raw_cache.cpp" "$RAW/runtime/raw_metallib.cpp")
+# the raw facade (RawMetal.mm and the RawMetal*.mm beside it, RawAlias.mm, RawComplete.mm, RawProbe.mm)
+FACADE=("$RAW"/runtime/Raw*.mm)
 LIBS=(-L "$OUT" -lmock_iokit "-Wl,-rpath,$OUT" -lobjc -framework Foundation -framework Metal -framework IOSurface -framework IOKit -framework CoreFoundation)
 xcrun clang++ "${OBJC[@]}" -x objective-c++ "$HERE/nvkframe.mm" "$FRONT/NativeBridgeMetalFrontend.mm" -x none "$BRIDGE" "${LIBS[@]}" -o "$OUT/nvkframe" 2>&1 | grep -v "duplicate libraries" || true
 xcrun clang++ "${FLAGS[@]}" -I "$TREE/drivers/TegraGM20B" "$HERE/rawframe.cpp" "$RAW/runtime/raw_gpu.cpp" "$RAW/fx/fx_mip.cpp" "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_alias.cpp" \
     "$RAW/runtime/raw_pack.cpp" "$RAW/runtime/raw_ycbcr.cpp" "$RAW/runtime/raw_zeta.cpp" "${LIBS[@]}" -o "$OUT/rawframe"
-xcrun clang++ "${OBJC[@]}" -Wall -Wextra -DRAW_FACADE -x objective-c++ "$HERE/nvkframe.mm" "$RAW/runtime/RawMetal.mm" "$RAW/runtime/RawAlias.mm" "$RAW/runtime/RawComplete.mm" "$RAW/runtime/RawProbe.mm" "$FRONT/NativeBridgeMetalFrontend.mm" \
+xcrun clang++ "${OBJC[@]}" -Wall -Wextra -DRAW_FACADE -x objective-c++ "$HERE/nvkframe.mm" "${FACADE[@]}" "$FRONT/NativeBridgeMetalFrontend.mm" \
     -x c++ "$RAW/runtime/raw_gpu.cpp" "$RAW/fx/fx_mip.cpp" "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_alias.cpp" "$RAW/runtime/raw_pack.cpp" "$RAW/runtime/raw_ycbcr.cpp" "$RAW/runtime/raw_zeta.cpp" "$RAW/runtime/raw_completed.cpp" "${COMPLETION[@]}" "$TREE/kits/SwitchRefusal/SwitchRefusal.c" -x none "$BRIDGE" "${LIBS[@]}" \
     -o "$OUT/facadeframe" 2>&1 | grep -v "duplicate libraries" || true
 # poolcheck: the raw device's chunks after a burst (raw::Device::poolFree, wcFree)
@@ -65,40 +67,40 @@ xcrun clang++ "${FLAGS[@]}" "$HERE/cachecheck.cpp" "$RAW/runtime/raw_cache.cpp" 
 xcrun clang++ "${OBJC[@]}" -Wall -Wextra -x objective-c++ "$HERE/completecheck.mm" "$RAW/runtime/RawProbe.mm" "$FRONT/NativeBridgeMetalFrontend.mm" \
     -x c++ "$RAW/runtime/raw_pack.cpp" "${COMPLETION[@]}" -x none "$BRIDGE" "${LIBS[@]}" -o "$OUT/completecheck" 2>&1 | grep -v "duplicate libraries" || true
 echo "built $OUT/nvkframe $OUT/rawframe $OUT/facadeframe $OUT/poolcheck $OUT/killcheck $OUT/faultcheck $OUT/footprint $OUT/datacheck $OUT/recordcheck $OUT/cachecheck $OUT/completecheck"
-xcrun clang++ "${OBJC[@]}" -Wall -Wextra -x objective-c++ "$HERE/blitframe.mm" "$RAW/runtime/RawMetal.mm" "$RAW/runtime/RawAlias.mm" "$RAW/runtime/RawComplete.mm" "$RAW/runtime/RawProbe.mm" "$FRONT/NativeBridgeMetalFrontend.mm" \
+xcrun clang++ "${OBJC[@]}" -Wall -Wextra -x objective-c++ "$HERE/blitframe.mm" "${FACADE[@]}" "$FRONT/NativeBridgeMetalFrontend.mm" \
     -x c++ "$RAW/runtime/raw_gpu.cpp" "$RAW/fx/fx_mip.cpp" "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_alias.cpp" "$RAW/runtime/raw_pack.cpp" "$RAW/runtime/raw_ycbcr.cpp" "$RAW/runtime/raw_zeta.cpp" "$RAW/runtime/raw_completed.cpp" "${COMPLETION[@]}" "$TREE/kits/SwitchRefusal/SwitchRefusal.c" -x none "$BRIDGE" "${LIBS[@]}" \
     -o "$OUT/blitframe" 2>&1 | grep -v "duplicate libraries" || true
 echo "built $OUT/blitframe"
-xcrun clang++ "${OBJC[@]}" -Wall -Wextra -x objective-c++ "$HERE/orderframe.mm" "$RAW/runtime/RawMetal.mm" "$RAW/runtime/RawAlias.mm" "$RAW/runtime/RawComplete.mm" "$RAW/runtime/RawProbe.mm" "$FRONT/NativeBridgeMetalFrontend.mm" \
+xcrun clang++ "${OBJC[@]}" -Wall -Wextra -x objective-c++ "$HERE/orderframe.mm" "${FACADE[@]}" "$FRONT/NativeBridgeMetalFrontend.mm" \
     -x c++ "$RAW/runtime/raw_gpu.cpp" "$RAW/fx/fx_mip.cpp" "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_alias.cpp" "$RAW/runtime/raw_pack.cpp" "$RAW/runtime/raw_ycbcr.cpp" "$RAW/runtime/raw_zeta.cpp" "$RAW/runtime/raw_completed.cpp" "${COMPLETION[@]}" "$TREE/kits/SwitchRefusal/SwitchRefusal.c" -x none "$BRIDGE" "${LIBS[@]}" \
     -o "$OUT/orderframe" 2>&1 | grep -v "duplicate libraries" || true
 echo "built $OUT/orderframe"
 # surfaceorder: an IOSurface one process's raw path writes, read by another process's raw path or m2v after the write on the GPU
-xcrun clang++ "${OBJC[@]}" -Wall -Wextra -x objective-c++ "$HERE/surfaceorder.mm" "$RAW/runtime/RawMetal.mm" "$RAW/runtime/RawAlias.mm" "$RAW/runtime/RawComplete.mm" "$RAW/runtime/RawProbe.mm" "$FRONT/NativeBridgeMetalFrontend.mm" \
+xcrun clang++ "${OBJC[@]}" -Wall -Wextra -x objective-c++ "$HERE/surfaceorder.mm" "${FACADE[@]}" "$FRONT/NativeBridgeMetalFrontend.mm" \
     -x c++ "$RAW/runtime/raw_gpu.cpp" "$RAW/fx/fx_mip.cpp" "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_alias.cpp" "$RAW/runtime/raw_pack.cpp" "$RAW/runtime/raw_ycbcr.cpp" "$RAW/runtime/raw_zeta.cpp" "$RAW/runtime/raw_completed.cpp" "${COMPLETION[@]}" "$TREE/kits/SwitchRefusal/SwitchRefusal.c" -x none "$BRIDGE" "${LIBS[@]}" \
     -o "$OUT/surfaceorder" 2>&1 | grep -v "duplicate libraries" || true
 echo "built $OUT/surfaceorder"
-xcrun clang++ "${OBJC[@]}" -Wall -Wextra -x objective-c++ "$HERE/selcheck.mm" "$RAW/runtime/RawMetal.mm" "$RAW/runtime/RawAlias.mm" "$RAW/runtime/RawComplete.mm" "$RAW/runtime/RawProbe.mm" "$FRONT/NativeBridgeMetalFrontend.mm" \
+xcrun clang++ "${OBJC[@]}" -Wall -Wextra -x objective-c++ "$HERE/selcheck.mm" "${FACADE[@]}" "$FRONT/NativeBridgeMetalFrontend.mm" \
     -x c++ "$RAW/runtime/raw_gpu.cpp" "$RAW/fx/fx_mip.cpp" "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_alias.cpp" "$RAW/runtime/raw_pack.cpp" "$RAW/runtime/raw_ycbcr.cpp" "$RAW/runtime/raw_zeta.cpp" "$RAW/runtime/raw_completed.cpp" "${COMPLETION[@]}" "$TREE/kits/SwitchRefusal/SwitchRefusal.c" -x none "$BRIDGE" "${LIBS[@]}" \
     -o "$OUT/selcheck" 2>&1 | grep -v "duplicate libraries" || true
 echo "built $OUT/selcheck"
-xcrun clang++ "${OBJC[@]}" -Wall -Wextra -x objective-c++ "$HERE/planarframe.mm" "$RAW/runtime/RawMetal.mm" "$RAW/runtime/RawAlias.mm" "$RAW/runtime/RawComplete.mm" "$RAW/runtime/RawProbe.mm" "$FRONT/NativeBridgeMetalFrontend.mm" \
+xcrun clang++ "${OBJC[@]}" -Wall -Wextra -x objective-c++ "$HERE/planarframe.mm" "${FACADE[@]}" "$FRONT/NativeBridgeMetalFrontend.mm" \
     -x c++ "$RAW/runtime/raw_gpu.cpp" "$RAW/fx/fx_mip.cpp" "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_alias.cpp" "$RAW/runtime/raw_pack.cpp" "$RAW/runtime/raw_ycbcr.cpp" "$RAW/runtime/raw_zeta.cpp" "$RAW/runtime/raw_completed.cpp" "${COMPLETION[@]}" "$TREE/kits/SwitchRefusal/SwitchRefusal.c" -x none "$BRIDGE" "${LIBS[@]}" \
     -o "$OUT/planarframe" 2>&1 | grep -v "duplicate libraries" || true
 echo "built $OUT/planarframe"
-xcrun clang++ "${OBJC[@]}" -x objective-c++ "$HERE/cabench.mm" "$RAW/runtime/RawMetal.mm" "$RAW/runtime/RawAlias.mm" "$RAW/runtime/RawComplete.mm" "$RAW/runtime/RawProbe.mm" "$FRONT/NativeBridgeMetalFrontend.mm" \
+xcrun clang++ "${OBJC[@]}" -x objective-c++ "$HERE/cabench.mm" "${FACADE[@]}" "$FRONT/NativeBridgeMetalFrontend.mm" \
     -x c++ "$RAW/runtime/raw_gpu.cpp" "$RAW/fx/fx_mip.cpp" "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_alias.cpp" "$RAW/runtime/raw_pack.cpp" "$RAW/runtime/raw_ycbcr.cpp" "$RAW/runtime/raw_zeta.cpp" "$RAW/runtime/raw_completed.cpp" "${COMPLETION[@]}" "$TREE/kits/SwitchRefusal/SwitchRefusal.c" -x none "$BRIDGE" "${LIBS[@]}" \
     -o "$OUT/cabench" 2>&1 | grep -v "duplicate libraries" || true
 echo "built $OUT/cabench"
-xcrun clang++ "${OBJC[@]}" -Wall -Wextra -x objective-c++ "$HERE/mipframe.mm" "$RAW/runtime/RawMetal.mm" "$RAW/runtime/RawAlias.mm" "$RAW/runtime/RawComplete.mm" "$RAW/runtime/RawProbe.mm" "$FRONT/NativeBridgeMetalFrontend.mm" \
+xcrun clang++ "${OBJC[@]}" -Wall -Wextra -x objective-c++ "$HERE/mipframe.mm" "${FACADE[@]}" "$FRONT/NativeBridgeMetalFrontend.mm" \
     -x c++ "$RAW/runtime/raw_gpu.cpp" "$RAW/fx/fx_mip.cpp" "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_alias.cpp" "$RAW/runtime/raw_pack.cpp" "$RAW/runtime/raw_ycbcr.cpp" "$RAW/runtime/raw_zeta.cpp" "$RAW/runtime/raw_completed.cpp" "${COMPLETION[@]}" "$TREE/kits/SwitchRefusal/SwitchRefusal.c" -x none "$BRIDGE" "${LIBS[@]}" \
     -o "$OUT/mipframe" 2>&1 | grep -v "duplicate libraries" || true
 echo "built $OUT/mipframe"
-xcrun clang++ "${OBJC[@]}" -Wall -Wextra -x objective-c++ "$HERE/levelframe.mm" "$RAW/runtime/RawMetal.mm" "$RAW/runtime/RawAlias.mm" "$RAW/runtime/RawComplete.mm" "$RAW/runtime/RawProbe.mm" "$FRONT/NativeBridgeMetalFrontend.mm" \
+xcrun clang++ "${OBJC[@]}" -Wall -Wextra -x objective-c++ "$HERE/levelframe.mm" "${FACADE[@]}" "$FRONT/NativeBridgeMetalFrontend.mm" \
     -x c++ "$RAW/runtime/raw_gpu.cpp" "$RAW/fx/fx_mip.cpp" "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_alias.cpp" "$RAW/runtime/raw_pack.cpp" "$RAW/runtime/raw_ycbcr.cpp" "$RAW/runtime/raw_zeta.cpp" "$RAW/runtime/raw_completed.cpp" "${COMPLETION[@]}" "$TREE/kits/SwitchRefusal/SwitchRefusal.c" -x none "$BRIDGE" "${LIBS[@]}" \
     -o "$OUT/levelframe" 2>&1 | grep -v "duplicate libraries" || true
 echo "built $OUT/levelframe"
-xcrun clang++ "${OBJC[@]}" -Wall -Wextra -x objective-c++ "$HERE/shapecheck.mm" "$RAW/runtime/RawMetal.mm" "$RAW/runtime/RawAlias.mm" "$RAW/runtime/RawComplete.mm" "$RAW/runtime/RawProbe.mm" "$FRONT/NativeBridgeMetalFrontend.mm" \
+xcrun clang++ "${OBJC[@]}" -Wall -Wextra -x objective-c++ "$HERE/shapecheck.mm" "${FACADE[@]}" "$FRONT/NativeBridgeMetalFrontend.mm" \
     -x c++ "$RAW/runtime/raw_gpu.cpp" "$RAW/fx/fx_mip.cpp" "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_alias.cpp" "$RAW/runtime/raw_pack.cpp" "$RAW/runtime/raw_ycbcr.cpp" "$RAW/runtime/raw_zeta.cpp" "$RAW/runtime/raw_completed.cpp" "${COMPLETION[@]}" "$TREE/kits/SwitchRefusal/SwitchRefusal.c" -x none "$BRIDGE" "${LIBS[@]}" \
     -o "$OUT/shapecheck" 2>&1 | grep -v "duplicate libraries" || true
 echo "built $OUT/shapecheck"
