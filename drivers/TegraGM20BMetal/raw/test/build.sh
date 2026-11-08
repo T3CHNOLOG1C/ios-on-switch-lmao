@@ -46,6 +46,9 @@ xcrun clang++ "${FLAGS[@]}" -I "$TREE/drivers/TegraGM20B" "$HERE/datacheck.cpp" 
     "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_alias.cpp" "$RAW/runtime/raw_pack.cpp" "$RAW/runtime/raw_ycbcr.cpp" "$RAW/runtime/raw_zeta.cpp" "${LIBS[@]}" -o "$OUT/datacheck"
 # recordcheck: the runtime's records of states (raw_record.cpp) against the pack mkpack.py made from the same probe runs
 xcrun clang++ "${FLAGS[@]}" "$HERE/recordcheck.cpp" "$RAW/runtime/raw_record.cpp" "$RAW/runtime/raw_pack.cpp" -o "$OUT/recordcheck"
+# invocationcheck: a call recorded as an invocation keeps what its pointer arguments pointed to (raw_invocation.h)
+xcrun clang++ -O1 -g -std=c++17 -fobjc-arc -Wall -Wextra "$HERE/invocationcheck.mm" -framework Foundation -framework Metal \
+    -o "$OUT/invocationcheck"
 # cachecheck: the runtime's record cache and compile table on a bucket's records, and the AIR hashes on a real library
 xcrun clang++ "${FLAGS[@]}" "$HERE/cachecheck.cpp" "$RAW/runtime/raw_cache.cpp" "$RAW/runtime/raw_metallib.cpp" "$RAW/runtime/raw_record.cpp" \
     "$RAW/runtime/raw_pack.cpp" -o "$OUT/cachecheck"
