@@ -92,6 +92,7 @@ kernel_driver(
         "drivers/SwitchSuspend",
         "drivers/TegraDisplayFlip",
         "drivers/TegraI2C",
+        "kits/SwitchDMA",
         "kits/SwitchIdle",
         "kits/SwitchLinux",
         "kits/SwitchMMIO",

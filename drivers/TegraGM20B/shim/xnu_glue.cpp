@@ -17,6 +17,9 @@
 #include <string.h>
 #include <sys/kdebug.h>
 #include "include/nvxnu.h"
+#include "../../../kits/SwitchDMA/SwitchDcache.h"
+#include "../../../kits/SwitchDMA/SwitchDMABuffer.h"
+#include "../../../kits/SwitchDMA/SwitchHwPage.h"
 #include "../../../kits/SwitchMMIO/SwitchMMIOKernel.h"
 #include "../../ArmGIC/SwitchInterrupts.h"
 #include "../../TegraDisplayFlip/SwitchFrameTimeline.h"
@@ -27,7 +30,6 @@ vm_offset_t phystokv(uint64_t pa);  // physical aperture (osfmk/arm64/arm_vm_ini
 boolean_t ml_get_interrupts_enabled(void);
 boolean_t switch_ram_gpu_pool(uint64_t *start, uint64_t *end);
 void pmap_set_cache_attributes(ppnum_t pn, unsigned int cacheattr);
-boolean_t pmap_valid_page(ppnum_t pn);
 // NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
 void IOLogv(const char *format, va_list ap);
 // NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
@@ -407,59 +409,36 @@ extern "C" void nvxnu_irq_resume(void)
 		source->enable();
 }
 
-static void dcache_op(const void *va, nvxnu_u64 size, bool invalidate)
-{
-	// NOLINTNEXTLINE(misc-const-correctness): the mrs below writes it
-	uint64_t ctr = 0;
-	__asm__ volatile("mrs %0, ctr_el0" : "=r"(ctr));
-	const uintptr_t line = static_cast<uintptr_t>(4) << ((ctr >> 16) & 15);
-	uintptr_t a = reinterpret_cast<uintptr_t>(va) & ~(line - 1);
-	const uintptr_t end = reinterpret_cast<uintptr_t>(va) + size;
-	__asm__ volatile("dsb sy" ::: "memory");
-	for (; a < end; a += line) {
-		if (invalidate) {
-			__asm__ volatile("dc civac, %0" ::"r"(a) : "memory");
-		} else {
-			__asm__ volatile("dc cvac, %0" ::"r"(a) : "memory");
-		}
-	}
-	__asm__ volatile("dsb sy" ::: "memory");
-}
-
 extern "C" void nvxnu_dcache_clean(const void *va, nvxnu_u64 size)
 {
-	dcache_op(va, size, false);
+	switch_dcache_clean(va, size);
 }
 
 extern "C" void nvxnu_dcache_clean_inval(const void *va, nvxnu_u64 size)
 {
-	dcache_op(va, size, true);
+	switch_dcache_clean_invalidate(va, size);
 }
 
 // Pages outside the kernel's RAM (device memory a task mapped) have no cacheable alias to maintain.
 extern "C" void nvxnu_dcache_clean_inval_pa(nvxnu_u64 pa, nvxnu_u64 size)
 {
-	if (pmap_valid_page(static_cast<ppnum_t>(atop_64(pa))))
-		dcache_op(reinterpret_cast<const void *>(phystokv(pa)), size, true);
+	if (switch_dma_pa_managed(pa)) {
+		switch_dcache_phys_lines(SWITCH_DCACHE_CLEAN_INVALIDATE, pa, size);
+		switch_dcache_sync();
+	}
 }
 
-// A DSB waits for every maintenance op issued before it, so one before the list (prior stores ordered first) and one after
-// it (all lines at the point of coherency) cover all pages; a pair per page is ~1800 barriers for a 3.6 MB import.
+// One barrier for the whole list: a pair per page is ~1800 barriers for a 3.6 MB import.
 extern "C" void nvxnu_dcache_clean_inval_pages(const nvxnu_u64 *pas, nvxnu_u32 count)
 {
-	// NOLINTNEXTLINE(misc-const-correctness): the mrs below writes it
-	uint64_t ctr = 0;
-	__asm__ volatile("mrs %0, ctr_el0" : "=r"(ctr));
-	const uintptr_t line = static_cast<uintptr_t>(4) << ((ctr >> 16) & 15);
-	__asm__ volatile("dsb sy" ::: "memory");
 	for (nvxnu_u32 i = 0; i < count; i++) {
-		if (!pmap_valid_page(static_cast<ppnum_t>(atop_64(pas[i]))))
-			continue;
-		const uintptr_t va = phystokv(pas[i] & ~0xfffULL);
-		for (uintptr_t a = va; a < va + 4096; a += line)
-			__asm__ volatile("dc civac, %0" ::"r"(a) : "memory");
+		if (switch_dma_pa_managed(pas[i])) {
+			switch_dcache_phys_lines(SWITCH_DCACHE_CLEAN_INVALIDATE,
+						 pas[i] & ~SWITCH_HW_PAGE_MASK,
+						 SWITCH_HW_PAGE_SIZE);
+		}
 	}
-	__asm__ volatile("dsb sy" ::: "memory");
+	switch_dcache_sync();
 }
 
 // The system's page faults so far (every vm_fault) and those that zero-filled a page: XNU's own counters, as vm_stat reads
@@ -529,7 +508,7 @@ extern "C" int nvxnu_pool_init(int *zeroed)
 		return -12;
 	}
 	memset(va, 0, bytes);
-	dcache_op(va, bytes, true);
+	switch_dcache_clean_invalidate(va, bytes);
 	for (uint64_t off = 0; off < bytes; off += PAGE_SIZE) {
 		pmap_set_cache_attributes(static_cast<ppnum_t>(atop_64(first + off)),
 					  VM_WIMG_WCOMB);
@@ -552,34 +531,13 @@ extern "C" nvxnu_u64 nvxnu_ram_bytes(void)
 	return max_mem;
 }
 
-// The descriptor stays wired for the kext's life: nothing gives such memory back.
+// The buffer stays wired for the kext's life: nothing gives such memory back.
 extern "C" int nvxnu_contig_alloc(nvxnu_u64 bytes, nvxnu_u64 *pa)
 {
-	IOBufferMemoryDescriptor *md = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
-		kernel_task,
-		static_cast<IOOptionBits>(kIODirectionInOut) |
-			static_cast<IOOptionBits>(kIOMemoryMapperNone) |
-			kIOMemoryPhysicallyContiguous,
-		bytes, 0xffffffffffULL & ~static_cast<uint64_t>(PAGE_MASK));
-	if (!md)
+	switch_dma_buffer buffer = {};
+	if (!switch_dma_alloc(&buffer, bytes, 0xffffffffffULL & ~static_cast<uint64_t>(PAGE_MASK)))
 		return -12;
-	if (md->prepare() != kIOReturnSuccess) {
-		md->release();
-		return -12;
-	}
-	IOByteCount len = 0;
-	const addr64_t first = md->getPhysicalSegment(0, &len, kIOMemoryMapperNone);
-	void *va = md->getBytesNoCopy();
-	if (!first || !va || len < bytes) {
-		md->complete();
-		md->release();
-		return -12;
-	}
-	// The zero fill went through the cacheable aperture: no dirty line of it may land over what the GPU writes later.
-	// NOLINTNEXTLINE(clang-analyzer-osx.cocoa.RetainCount): the descriptor stays wired for the kext's life (above)
-	memset(va, 0, bytes);
-	dcache_op(va, bytes, true);
-	*pa = first;
+	*pa = buffer.pa;
 	return 0;
 }
 
