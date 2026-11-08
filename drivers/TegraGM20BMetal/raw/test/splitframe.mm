@@ -7,7 +7,8 @@
 // twins (Core Animation's handlers touch the textures of the frame). Over the mock's GPU (MOCK_GPU_US; 0 races the completion
 // thread against the submitting one) every chain must arrive intact and every handler run, each command buffer's scheduled
 // ones before its completed ones; ordercheck.py reads MOCK_GPU_LOG for the order on the GPU.
-// usage: splitframe <pack> <cache> <nvk host dylib> [command buffers per thread]
+// usage: NVK_COPIES=ce splitframe <pack> <cache> <nvk host dylib> [command buffers per thread] (NVK_COPIES=ce: m2v's copies on
+// the copy engine, which the mock runs; its shader copies it does not, and every chain through m2v would read as broken)
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #include <atomic>

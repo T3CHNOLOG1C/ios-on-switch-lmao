@@ -7,6 +7,10 @@
 //   that ran past one) and reaches the GPU whole.
 // - A draw whose vertex buffer is unbound fetches from NVK's empty stream (the zero page, its limit before its start), never
 //   from VA 0 with no limit.
+// - A pass with an empty color slot below a target disables the slot, as NVK does, and counts through the target.
+// - A freed texture header is the null descriptor, never zeroes (a buffer texture at VA 0).
+// - A commit whose later Exec the kernel refuses leaves nothing of its rings in flight, and the next command buffer a new
+//   channel.
 // - A channel the kernel killed is made again with its context before any command buffer is encoded for it: one whose
 //   ChannelCreate or context Exec the kernel refused gives no command buffer, and the next begin() tries again.
 // - Programs placed in the shader heap are behind an instruction-cache invalidate before any draw runs them, even when the
@@ -26,9 +30,11 @@
 
 extern "C" uint64_t cap_draws(void);
 extern "C" uint32_t cap_reg3d(uint32_t mthd);
+extern "C" bool cap_read(uint64_t va, void *out, uint64_t bytes);
 extern "C" uint64_t cap_instruction_invalidates(void);
 extern "C" void mock_iokit_kill_next(uint32_t error);
 extern "C" void mock_iokit_fail_next(unsigned method, unsigned count, int kr);
+extern "C" void mock_iokit_fail_after(unsigned method, unsigned skip, unsigned count, int kr);
 extern "C" unsigned long mock_iokit_calls(unsigned method);
 
 namespace {
@@ -120,9 +126,60 @@ void instances(raw::Device &dev, Pass &pass, const Expect &expect)
     dev.destroyBuffer(indices);
 }
 
+// A pass whose first color slot is empty below a target: the slot is DISABLED and CT_SELECT counts through the target, never
+// the earlier pass's first target still in the slot
+void holeTarget(raw::Device &dev, Pass &pass, const Expect &expect)
+{
+    constexpr uint32_t kTargetFormat0 = 0x0810, kCtSelect = 0x121c;  // SET_COLOR_TARGET_FORMAT(0), SET_CT_SELECT
+    if (pass.desc.count < 2) {
+        expect(false, "a state of two color targets");
+        return;
+    }
+    auto run = [&](const raw::PassDesc &desc) {
+        raw::CommandBuffer *cb = dev.begin();
+        raw::RenderEncoder *e = cb ? cb->render(desc) : nullptr;
+        if (!e)
+            return false;
+        e->end();
+        uint32_t seq = 0;
+        return cb->commit(seq) && dev.wait(seq);
+    };
+    raw::PassDesc hole = pass.desc;
+    hole.color[0].texture = nullptr;
+    expect(run(pass.desc) && cap_reg3d(kTargetFormat0) != 0, "a pass over both targets");
+    expect(run(hole), "a pass over the second alone");
+    std::printf("hole: target 0 format 0x%x, CT_SELECT 0x%x\n", cap_reg3d(kTargetFormat0), cap_reg3d(kCtSelect));
+    expect(cap_reg3d(kTargetFormat0) == 0 && (cap_reg3d(kCtSelect) & 0xf) == 2,
+           "slot 0 DISABLED, CT_SELECT counting through slot 1");
+}
+
 uint64_t method64(uint32_t hi)
 {
     return uint64_t(cap_reg3d(hi)) << 32 | cap_reg3d(hi + 4);
+}
+
+// A freed texture header (a texture's, a view's) reads as header 0, the null descriptor, never as zeroes (a buffer texture at
+// VA 0)
+void freedHeader(raw::Device &dev, const Expect &expect)
+{
+    constexpr uint32_t kHeaderPool = 0x1574;  // SET_TEX_HEADER_POOL_A
+    const uint64_t pool = method64(kHeaderPool);
+    raw::Texture t, v;
+    if (!pool || !dev.createTexture(64, 64, kBGRA8, t) || !dev.createView(t, kBGRA8sRGB, v)) {
+        expect(false, "the header pool, a texture and a view");
+        return;
+    }
+    const uint32_t tic = t.tic, view = v.tic;
+    dev.destroyTexture(v);
+    dev.destroyTexture(t);
+    uint32_t null[8], freed[8], freedView[8];
+    expect(cap_read(pool, null, 32) && cap_read(pool + 32 * tic, freed, 32) &&
+               cap_read(pool + 32 * view, freedView, 32),
+           "the headers read back");
+    std::printf("freed header %u: %08x %08x %08x; null %08x %08x %08x\n", tic, freed[0], freed[1], freed[2], null[0],
+                null[1], null[2]);
+    expect(null[0] && !memcmp(freed, null, 32) && !memcmp(freedView, null, 32),
+           "the freed texture's and view's headers are the null descriptor");
 }
 
 void unboundStream(raw::Device &dev, Pass &pass, const Expect &expect)
@@ -171,6 +228,39 @@ uint32_t copy(raw::Device &dev, const raw::Buffer &from, const raw::Buffer &to)
         return 0;
     }
     return seqno;
+}
+
+// A command buffer of more segments than one Exec takes, whose second Exec the kernel refuses: the first batch has completed
+// when commit returns (abandon gives its ring words back), and the next command buffer runs on a new channel with its context
+void partialCommit(raw::Device &dev, const Expect &expect)
+{
+    raw::Buffer a, b;
+    if (!dev.createBuffer(4096, a) || !dev.createBuffer(4096, b)) {
+        expect(false, "two buffers");
+        return;
+    }
+    raw::CommandBuffer *cb = dev.begin();
+    if (!cb) {
+        expect(false, "a command buffer");
+        return;
+    }
+    for (int i = 0; i < 300; i++) {
+        raw::BlitEncoder *e = cb->blit();
+        e->copyBytes(a.va, b.va, 64);
+        e->end();
+    }
+    const uint64_t reopens = dev.stats.reopens.load();
+    mock_iokit_fail_after(TegraGM20BMethodExec, 1, 1, kIOReturnNoMemory);
+    uint32_t seq = 0;
+    expect(!cb->commit(seq), "the commit fails at its second Exec");
+    const bool settled = dev.done(dev.submitted());
+    cb->abandon();
+    expect(settled, "its first batch completed before commit returned");
+    const uint32_t next = copy(dev, a, b);
+    expect(next && dev.wait(next) && dev.stats.reopens.load() == reopens + 1,
+           "the next command buffer ran on a new channel");
+    dev.destroyBuffer(a);
+    dev.destroyBuffer(b);
 }
 
 void reopenRefused(raw::Device &dev, const Expect &expect)
@@ -304,6 +394,9 @@ int main(int argc, char **argv)
     }
     instances(dev, pass, expect);
     unboundStream(dev, pass, expect);
+    holeTarget(dev, pass, expect);
+    freedHeader(dev, expect);
+    partialCommit(dev, expect);
     reopenRefused(dev, expect);
     invalidateRefused(dev, expect);
     waitRefused(dev, expect);

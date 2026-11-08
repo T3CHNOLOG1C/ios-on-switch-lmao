@@ -74,6 +74,15 @@ static void noteReplay(const switch_frame::Stamps &f, uint64_t returned)
 
 static bool submitSegments(RMCommandBuffer *cb);
 
+// A command buffer part of whose raw submission ran before the kernel refused the rest: replayed on m2v, that part would run
+// twice. It completes with an error, as Metal's does when its GPU work fails.
+static void finishPartial(RMCommandBuffer *cb)
+{
+    once(@"a command buffer whose raw submission the kernel refused after part of it ran completes with an error (not "
+         @"replayed: that part would run twice)");
+    finish(cb, [NSError errorWithDomain:MTLCommandBufferErrorDomain code:MTLCommandBufferErrorInternal userInfo:nil]);
+}
+
 static bool submitLocked(RMCommandBuffer *cb)
 {
     RawState &r = *gRM;
@@ -121,6 +130,10 @@ static bool submitLocked(RMCommandBuffer *cb)
         }
         r.stats.aborted++;
         r.stats.abortUs += nowUs() - began;
+        if (cb->_partial) {
+            finishPartial(cb);
+            return true;
+        }
         cb->_reason = WhyEncode;
         cb->_why = [NSString stringWithUTF8String:why ?: "?"];
     }
@@ -294,6 +307,10 @@ static bool submitSegments(RMCommandBuffer *cb)
             const char *why = nullptr;
             const uint64_t began = nowUs();
             if (!encodeRaw(cb, s.from, s.to, &why)) {
+                if (cb->_partial) {
+                    finishPartial(cb);
+                    return true;
+                }
                 s.raw = false;  // the kernel refused it: this segment on m2v
                 continue;
             }

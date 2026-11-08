@@ -5,7 +5,8 @@
 //   channel, and there is no m2v to replay it) runs its scheduled handlers, before its completed ones.
 // - With one: newBufferWithBytes: while the raw pool has no room (the kernel refuses its allocations) gives m2v's buffer with
 //   the bytes in it; and the buffers a compute pass names, as arguments and in arrays, are marked written by the GPU once it
-//   completes (on m2v, which the replay hands their twins), so the CPU's next read of them invalidates its cached lines.
+//   completes (on m2v, which the replay hands their twins), so the CPU's next read of them invalidates its cached lines; and a
+//   command buffer whose raw submission the kernel refused after part of it ran completes with an error, not replayed.
 // usage: contractcheck <pack> <cache dir> [<nvk dylib>]
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
@@ -22,6 +23,8 @@
 #include "bridge/NativeMetalObjects.h"
 
 extern "C" void mock_iokit_fail_next(unsigned method, unsigned count, int kr);
+extern "C" void mock_iokit_fail_after(unsigned method, unsigned skip, unsigned count, int kr);
+extern "C" unsigned long mock_iokit_calls(unsigned method);
 
 static int failed;
 
@@ -63,6 +66,41 @@ static void handlersRun(id<MTLDevice> dev)
     printf("handlers of a command buffer no GPU ran: \"%s\" (status %lu)\n", order.c_str(), (unsigned long)cb.status);
     expect(order == "sc", "its scheduled handler ran, before its completed one");
     [lock unlock];
+}
+
+// A command buffer of more blit encoders than one Exec takes, whose second Exec the kernel refuses: what ran is not run again
+// on m2v; it completes with an error
+static void partialNotReplayed(id<MTLDevice> dev)
+{
+    id<MTLCommandQueue> q = [dev newCommandQueue];
+    id<MTLBuffer> a = [dev newBufferWithLength:4096 options:MTLResourceStorageModeShared],
+                  b = [dev newBufferWithLength:4096 options:MTLResourceStorageModeShared];
+    auto counters = [&] {
+        return (NSDictionary<NSString *, NSNumber *> *)[(id)dev performSelector:@selector(switchRawCounters)];
+    };
+    {  // the raw channel open (its context's Exec) before the command buffer under test
+        id<MTLCommandBuffer> warm = [q commandBuffer];
+        id<MTLBlitCommandEncoder> e = [warm blitCommandEncoder];
+        [e copyFromBuffer:a sourceOffset:0 toBuffer:b destinationOffset:0 size:64];
+        [e endEncoding];
+        [warm commit];
+        [warm waitUntilCompleted];
+    }
+    const unsigned long m2vBefore = counters()[@"m2v"].unsignedLongValue,
+                        execs = mock_iokit_calls(TegraGM20BMethodExec);
+    id<MTLCommandBuffer> cb = [q commandBuffer];
+    for (int i = 0; i < 300; i++) {
+        id<MTLBlitCommandEncoder> e = [cb blitCommandEncoder];
+        [e copyFromBuffer:a sourceOffset:0 toBuffer:b destinationOffset:0 size:64];
+        [e endEncoding];
+    }
+    mock_iokit_fail_after(TegraGM20BMethodExec, 1, 1, kIOReturnNoMemory);
+    [cb commit];
+    [cb waitUntilCompleted];
+    const unsigned long m2v = counters()[@"m2v"].unsignedLongValue - m2vBefore;
+    printf("a command buffer the kernel ran part of: status %lu, %lu on m2v, %lu Exec calls\n",
+           (unsigned long)cb.status, m2v, mock_iokit_calls(TegraGM20BMethodExec) - execs);
+    expect(cb.status == MTLCommandBufferStatusError && !m2v, "it completes with an error, not replayed on m2v");
 }
 
 static void bytesWithoutRoom(id<MTLDevice> dev)
@@ -135,6 +173,7 @@ int main(int argc, char **argv)
         if (fallback) {
             bytesWithoutRoom(dev);
             computeWrites(dev);
+            partialNotReplayed(dev);
         } else
             handlersRun(dev);
         printf("%s: contractcheck\n", failed ? "FAIL" : "PASS");
