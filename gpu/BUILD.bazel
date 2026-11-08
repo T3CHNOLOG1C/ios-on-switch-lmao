@@ -68,7 +68,11 @@ rust_static_library(
     },
     # cargo's -C metadata for the crate (bazel/rust/defs.bzl: the release bridge is cargo's, byte for byte). A staticlib
     # takes no extra-filename: the archive's own object is named without cargo's suffix (no shipped byte depends on it).
-    rustc_flags = cargo_ids("0cd6ef7afe7b4328", "943b498a20400856")[:1],
+    # target_j181: iOS 27 identifies the hardware as iPad12,1 (NativeMetalTarget.rs's A13 answers).
+    rustc_flags = cargo_ids("0cd6ef7afe7b4328", "943b498a20400856")[:1] + ["--check-cfg=cfg(target_j181)"] + select({
+        "//ipsw:24B119": ["--cfg=target_j181"],
+        "//conditions:default": [],
+    }),
     version = "0.1.0",
     # switch_refusal_rs brings kits/SwitchRefusal's C, bundled into the archive by rustc (a static native library of a
     # staticlib): the plugin image's one copy, which the frontend and the raw path call too
