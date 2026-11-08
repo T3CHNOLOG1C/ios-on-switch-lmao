@@ -70,12 +70,15 @@ TEST(SdCqSource, DriverGuards)
     EXPECT_THAT(command, Not(HasSubstr("IOSleep")));
     EXPECT_THAT(command, Not(HasSubstr("IODelay")));
     // r16-sdcq: a CMD49's busy (the byte applied, a flush done) ends in transfer complete; DAT0 confirms it before the
-    // read-back; the limit covers the spec's 1 s of busy or data access.
-    // r18-sdcq: and an R1b's (CMD43: no task assigned before it completes); a failed command's response kept.
-    EXPECT_THAT(command, HasSubstr("(data == kRegWrite || (flags & 3) == 3) && !waitIdle(true, 1000000000)"));
+    // read-back (a card still holding it is released by interrupt, never polled); the limit covers the spec's 1 s of busy
+    // or data access. r18-sdcq: and an R1b's (CMD43: no task assigned before it completes); a failed command's response
+    // kept, read before any CMD13 could replace it.
+    EXPECT_THAT(command, HasSubstr("use = SwitchSdUse::kWrite;"));
+    EXPECT_THAT(command, HasSubstr("use = SwitchSdUse::kBusy;"));
+    EXPECT_THAT(command, HasSubstr("if (!step && !bus.idle() && awaitRelease())\n        step = 10;"));
+    EXPECT_LT(Index(command, "const uint32_t answer = r32(RESPONSE);"), Index(command, "awaitRelease()"));
     // r18-sdcq (r8d): not after a command error, where RESPONSE is still the previous command's.
-    EXPECT_THAT(command,
-                HasSubstr("if ((s & INT_COMMAND) && !(s & 0x000f0000u))\n            *response = r32(RESPONSE);"));
+    EXPECT_THAT(command, HasSubstr("if ((s & INT_COMMAND) && !(s & 0x000f0000u))\n            *response = answer;"));
     // An erase-based trim passes the longer busy its SD Status specifies; every other command keeps the default.
     EXPECT_THAT(command, HasSubstr("limit = limitNs"));
     EXPECT_THAT(source, HasSubstr("int data,\n                  uint64_t limitNs = 1500000000ULL);"));

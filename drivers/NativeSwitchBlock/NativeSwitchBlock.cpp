@@ -58,6 +58,7 @@
 #include "SwitchClientCopy.h"
 #include "SwitchAdma.h"
 #include "SwitchQueue.h"
+#include "SwitchSdBus.h"
 #include "SwitchSdCard.h"
 #include "SwitchSdTrim.h"
 #include "SwitchCq.h"
@@ -81,6 +82,8 @@ constexpr uint64_t kCarPA = 0x60006000, kApbMiscPA = 0x70000000, kPmcPagePA = 0x
 constexpr uint32_t kInterrupt = 46;
 // Longest single interrupt wait before the worker checks STATUS for a lost interrupt (see command()).
 constexpr uint64_t kInterruptCheckNs = 100000000;
+// The longest a write's programming or an R1b's busy may hold DAT0 once its own transfer complete came (awaitRelease).
+constexpr uint64_t kReleaseLimitNs = 2000000000ULL;
 constexpr uint32_t kSector = 512;
 // r8-sdboot: one physically contiguous 1 MiB bounce buffer, aligned to the 512 KiB SDMA boundary. A transfer of more
 // than 512 KiB pauses at each boundary with the DMA interrupt and resumes when the next address is written (command(),
@@ -235,7 +238,6 @@ enum : uint32_t {
     // bits STATUS_ENABLE latches, 16..25.
     ERROR_SIGNALS = 0x03ff0000u,
     PRESENT_BUSY = 0x307u,
-    PRESENT_DAT0 = 1u << 20,
     PRESENT_DAT = 0xfu << 20,
     PRESENT_CARD = 0x30000u,
     // R1 error bits (Linux's set plus SD AKE_SEQ and CID/CSD overwrite). A stop
@@ -434,6 +436,9 @@ struct Stats {
     uint64_t flushes, flushErrors, flushNs;
     // Erase-based trim: erase commands, the sectors they freed and the time the card was busy with them.
     uint64_t trimErases, trimSectors, trimNs;
+    // SwitchSdBus.h: commands refused because the bus was not free at their one PRESENT_STATE read, and DAT0 releases
+    // awaited by CMD13 with busy (the card still programming after a transfer complete).
+    uint64_t busRefused, releases;
 };
 }
 
@@ -691,6 +696,7 @@ class NativeSwitchBlock : public IOService {
     IOWorkLoop *irqLoop = nullptr;
     IOFilterInterruptEventSource *irqSource = nullptr;
     int irqEvent = 0;
+    SwitchSdBus bus;
     // Bus state: what the card runs at, its RCA after our re-initialization, the last STATUS a bring-up
     // command saw, and whether SDR104 tuning is in effect (a failed transfer is re-tuned before its retry)
     // at which kSpeeds step.
@@ -751,7 +757,10 @@ class NativeSwitchBlock : public IOService {
         return switchClientCopy(memory, at, length, toClient, copypv, from);
     }
 
-    bool waitIdle(bool dat0, uint64_t timeoutNs);
+    bool awaitTuningIdle(uint64_t timeoutNs);
+    bool claimBus(SwitchSdUse use);
+    void ended(uint32_t status);
+    int awaitRelease();
     void startInterrupt();
     static bool interruptFilter(OSObject *, IOFilterInterruptEventSource *);
     bool waitSignal(uint32_t signals, uint64_t timeoutNs);
@@ -837,7 +846,7 @@ class NativeSwitchBlock : public IOService {
     void dmaResume();
     void logStats();
     void logThroughput();
-    // SDR104 bring-up (bounded register polling, setup() and re-tuning only).
+    // SDR104 bring-up (setup() and re-tuning only).
     int cardCommand(uint32_t index, uint32_t arg, uint32_t flags, uint32_t *response, uint32_t data = 0);
     int appCommand(uint32_t index, uint32_t arg, uint32_t flags, uint32_t *response, uint32_t data = 0);
     void readR2(uint8_t out[16]);
@@ -996,16 +1005,14 @@ IOReturn NativeSwitchBlockDevice::doAsyncReadWrite(IOMemoryDescriptor *buffer, U
     return kIOReturnSuccess;
 }
 
-// The inhibit bits and DAT0 raise no interrupt of their own: SDHCI's interrupt status has none for a line level, and
-// Linux's mmc_poll_for_busy reads PRESENT_STATE too. Every caller has already slept on the command or transfer complete
-// that ends them (an R1b's busy ends in transfer complete), so this returns at its first read unless the card or the
-// controller is stuck.
-bool NativeSwitchBlock::waitIdle(bool dat0, uint64_t timeoutNs)
+// SDR104 tuning only (setup and re-tunes, never per I/O): while Execute Tuning is set the controller raises no transfer
+// complete (SD Host Controller Simplified Specification 4.20, 2.2.17 (d)), so nothing but PRESENT_STATE tells when the
+// previous tuning block's read has ended.
+bool NativeSwitchBlock::awaitTuningIdle(uint64_t timeoutNs)
 {
     const uint64_t start = switch_now_ns();
     for (;;) {
-        const uint32_t present = r32(PRESENT);
-        if (!(present & PRESENT_BUSY) && (!dat0 || (present & PRESENT_DAT0)))
+        if (!(r32(PRESENT) & PRESENT_BUSY))
             return true;
         const uint64_t elapsed = switch_now_ns() - start;
         if (elapsed >= timeoutNs)
@@ -1013,6 +1020,52 @@ bool NativeSwitchBlock::waitIdle(bool dat0, uint64_t timeoutNs)
         if (elapsed > 1000000)
             IOSleep(1);
     }
+}
+
+// One read of PRESENT_STATE before a command, never a wait: the previous command's interrupts were the wait for the bus
+// (SwitchSdBus.h). A data command that finds the card still programming has its release awaited by interrupt first.
+// Refused, the command is not issued and fails with its caller's step; the caller's recovery resets the lines.
+bool NativeSwitchBlock::claimBus(SwitchSdUse use)
+{
+    SwitchSdBusState state = bus.claim(r32(PRESENT), use);
+    if (state == SwitchSdBusState::kCardBusy && awaitRelease() == 0)
+        state = bus.claim(r32(PRESENT), use);
+    if (state == SwitchSdBusState::kFree)
+        return true;
+    ++stats.busRefused;
+    return false;
+}
+
+// The interrupt status a command ended with. PRESENT_STATE is read only when the card may still hold DAT0.
+void NativeSwitchBlock::ended(uint32_t status)
+{
+    bus.ended(status, bus.card ? r32(PRESENT) : 0);
+}
+
+// The card still holds DAT0 (programming) after a command's transfer complete, or before a write after a reset: CMD13,
+// which the card takes in every state, sent with the busy response type, so the controller raises transfer complete
+// when DAT0 is released (2.2.9, DAT Line Active (c)). Per the spec a write's or an R1b's own transfer complete already
+// waits for the release, so this runs only if the controller ends one early. 0, or 1 with the lines reset.
+int NativeSwitchBlock::awaitRelease()
+{
+    ++stats.releases;
+    if (bus.claim(r32(PRESENT), SwitchSdUse::kBusy) != SwitchSdBusState::kFree) {
+        ++stats.busRefused;
+        return 1;
+    }
+    w32(STATUS, 0xffffffff);
+    w16(TRANSFER, 0);
+    w32(ARGUMENT, rca << 16);
+    w16(COMMAND, 13u << 8 | RSP_R1B);
+    noteCommand(13);
+    const uint32_t s = awaitStatus(INT_TRANSFER, kReleaseLimitNs);
+    ended(s);
+    w32(STATUS, INT_COMMAND | INT_TRANSFER);
+    if (!(s & INT_ERRORS) && (s & INT_TRANSFER) && bus.idle())
+        return 0;
+    resetLines();
+    w32(STATUS, 0xffffffff);
+    return 1;
 }
 
 // Primary interrupt context. Masking the signals lowers the level line, so there is
@@ -1090,6 +1143,7 @@ void NativeSwitchBlock::resetLines()
     w8(RESET, 0x06);
     for (const uint64_t start = switch_now_ns(); (r8(RESET) & 0x06) && switch_now_ns() - start < 100000000;) {
     }
+    bus.reset();
 }
 
 // Reset the CMD and DAT state machines; for a failed data command,
@@ -1098,9 +1152,7 @@ void NativeSwitchBlock::recover(bool data)
 {
     resetLines();
     w32(STATUS, 0xffffffff);
-    if (!data)
-        return;
-    if (!waitIdle(false, 100000000))
+    if (!data || !claimBus(SwitchSdUse::kAbort))
         return;
     w16(TRANSFER, 0);
     w32(ARGUMENT, 0);
@@ -1109,8 +1161,9 @@ void NativeSwitchBlock::recover(bool data)
     noteCommand(12);
     // CMD12 is an R1b: transfer complete marks the end of the card's busy.
     const uint32_t s = awaitStatus(INT_TRANSFER, 2000000000);
+    ended(s);
     w32(STATUS, 0xffffffff);
-    if (!(s & INT_TRANSFER) || (s & INT_ERRORS)) {
+    if (!(s & INT_TRANSFER) || (s & INT_ERRORS) || (!bus.idle() && awaitRelease())) {
         resetLines();
         w32(STATUS, 0xffffffff);
     }
@@ -1128,8 +1181,8 @@ int NativeSwitchBlock::command(uint32_t lba, uint32_t sectors, bool write, unsig
     return complete(sectors, write, descriptors, status, nullptr, cmd23);
 }
 
-// The command's first half: the partition check, the registers and the command itself. 0, or step 1 when the controller
-// never went idle (then nothing was issued).
+// The command's first half: the partition check, the registers and the command itself. 0, or step 1 when the bus was not
+// free (claimBus; then nothing was issued).
 int NativeSwitchBlock::issue(uint32_t lba, uint32_t sectors, bool write, unsigned descriptors, bool cmd23,
                              uint32_t task)
 {
@@ -1142,7 +1195,7 @@ int NativeSwitchBlock::issue(uint32_t lba, uint32_t sectors, bool write, unsigne
     // r14-sdcq: the command queue carries reads only (a CQ write would need CMD47 and its own proofs).
     if (write && task != kNoTask)
         panic("SwitchSD: write lba=%u n=%u as a command-queue task", lba, sectors);
-    if (!waitIdle(write, 2000000000))
+    if (!claimBus(write ? SwitchSdUse::kWrite : SwitchSdUse::kRead))
         return 1;
     w32(STATUS, 0xffffffff);
     // DMA select per command: the bring-up commands' SDMA (cardCommand) and the data path share the controller.
@@ -1222,6 +1275,7 @@ int NativeSwitchBlock::complete(uint32_t sectors, bool write, unsigned descripto
     }
     if (early)
         *early = !waited;
+    ended(s);
     w32(STATUS, INT_COMMAND | INT_TRANSFER);
     if (!(s & INT_COMMAND) || (r32(RESPONSE) & R1_ERRORS))
         return 4;
@@ -1233,8 +1287,8 @@ int NativeSwitchBlock::complete(uint32_t sectors, bool write, unsigned descripto
         if (!cmd23 && (r32(STOP_RESPONSE) & R1_STOP_ERRORS))
             return 9;
     }
-    // Transfer complete follows the write busy period; DAT0 confirms it.
-    if (!waitIdle(write, 2000000000))
+    // A write's transfer complete follows the card's busy release, which DAT0 confirms (ended()).
+    if (!bus.idle() && awaitRelease())
         return 10;
     return 0;
 }
@@ -2068,18 +2122,27 @@ void NativeSwitchBlock::completeBatch(Batch &b)
 // One of the queue protocol's own commands, waited for by interrupt as the data commands are (complete()): no data
 // (CMD44/CMD45, R1; CMD43, R1b, whose busy end raises transfer complete on this controller, the hardware busy detection
 // L4T relies on with MMC_CAP_WAIT_WHILE_BUSY), or one 512-byte block by SDMA through regBuffer (CMD48 from the card,
-// CMD49 to it; transfer complete follows CMD49's busy). 0 or a step code (1 controller not idle, 2/3 an error interrupt
+// CMD49 to it; transfer complete follows CMD49's busy). 0 or a step code (1 bus not free (claimBus), 2/3 an error interrupt
 // without/with command complete, 6/7 no end within 1.5 s: the extension registers' limit is 1 s of data access (CMD48) or
-// busy (CMD49, a cache flush included: 5.7.2.1/5.7.2.2, 4.17) after the command, plus the block itself; 10 DAT0 still low
-// after a CMD49's transfer complete, as complete() checks a write); a failure resets the CMD and DAT lines. *response gets
-// the R1. r18-sdcq: also on a failure, when the command's response came (command complete seen: steps 3, 6 and 10), so
-// the error line has it; DAT0 is confirmed after an R1b's transfer complete too (CMD43: "not assign another task until
-// CMD43 is completed", 9.10 4.19.8); the interrupt status each command ended with is kept for the line (cardLastIrq).
+// busy (CMD49, a cache flush included: 5.7.2.1/5.7.2.2, 4.17) after the command, plus the block itself; 10 the card's
+// DAT0 release after a CMD49's transfer complete failed (awaitRelease), as complete() checks a write); a failure resets
+// the CMD and DAT lines. *response gets the R1. r18-sdcq: also on a failure, when the command's response came (command
+// complete seen: steps 3, 6 and 10), so the error line has it; the release is confirmed after an R1b's transfer complete
+// too (CMD43: "not assign another task until CMD43 is completed", 9.10 4.19.8); the interrupt status each command ended
+// with is kept for the line (cardLastIrq).
 int NativeSwitchBlock::cqCommand(uint32_t index, uint32_t argument, uint32_t flags, uint32_t *response, int data,
                                  uint64_t limitNs)
 {
     *response = 0;
-    if (!waitIdle(false, 100000000))
+    SwitchSdUse use = SwitchSdUse::kCommand;
+    if (data == kRegRead) {
+        use = SwitchSdUse::kRead;
+    } else if (data == kRegWrite) {
+        use = SwitchSdUse::kWrite;
+    } else if ((flags & 3) == 3) {
+        use = SwitchSdUse::kBusy;
+    }
+    if (!claimBus(use))
         return 1;
     w32(STATUS, 0xffffffff);
     if (data != kRegNone) {
@@ -2105,6 +2168,8 @@ int NativeSwitchBlock::cqCommand(uint32_t index, uint32_t argument, uint32_t fla
     const uint32_t done = data != kRegNone || (flags & 3) == 3 ? INT_TRANSFER : INT_COMMAND;
     const uint64_t limit = limitNs;
     const uint32_t s = awaitStatus(done, limit);
+    ended(s);
+    const uint32_t answer = r32(RESPONSE);
     int step = 0;
     if (s & INT_ERRORS) {
         step = (s & INT_COMMAND) ? 3 : 2;
@@ -2114,15 +2179,16 @@ int NativeSwitchBlock::cqCommand(uint32_t index, uint32_t argument, uint32_t fla
     if (!step && !(s & INT_COMMAND))
         step = 4;
     // r16-sdcq: transfer complete follows a CMD49's busy (the card applying the byte, or flushing its cache); DAT0
-    // confirms it before the read-back that checks it. r18-sdcq: and an R1b's (CMD43).
-    if (!step && (data == kRegWrite || (flags & 3) == 3) && !waitIdle(true, 1000000000))
+    // confirms it before the read-back that checks it. r18-sdcq: and an R1b's (CMD43). RESPONSE is read first: CMD13
+    // would replace it.
+    if (!step && !bus.idle() && awaitRelease())
         step = 10;
     cardLastIrq = s;
     if (step) {
         // r18-sdcq (r8d): not after a command error (timeout, CRC, end bit, index): this controller sets command complete
         // with a timeout too (irq 0x00018001) and RESPONSE still holds the previous command's.
         if ((s & INT_COMMAND) && !(s & 0x000f0000u))
-            *response = r32(RESPONSE);
+            *response = answer;
         stats.errors++;
         stats.lastError = static_cast<uint32_t>(step);
         stats.lastStatus = s;
@@ -2130,7 +2196,7 @@ int NativeSwitchBlock::cqCommand(uint32_t index, uint32_t argument, uint32_t fla
         w32(STATUS, 0xffffffff);
         return step;
     }
-    *response = r32(RESPONSE);
+    *response = answer;
     w32(STATUS, INT_COMMAND | INT_TRANSFER);
     if (data == kRegRead) {
         switch_dcache_invalidate_lines(regBuffer, kSector);
@@ -2968,6 +3034,12 @@ void NativeSwitchBlock::logThroughput()
         snprintf(cqState + at, sizeof(cqState) - at, " wflush %llu/%llu %llums", stats.flushes, stats.flushErrors,
                  stats.flushNs / 1000000);
     }
+    // SwitchSdBus.h: commands refused at their PRESENT_STATE read and DAT0 releases awaited by CMD13 (both 0 per the
+    // spec).
+    if (stats.busRefused || stats.releases) {
+        const size_t at = strlen(cqState);
+        snprintf(cqState + at, sizeof(cqState) - at, " bus refused %llu dat0 %llu", stats.busRefused, stats.releases);
+    }
     // Erase-based trim: erases, MiB freed and the card's busy ms for them (since boot), and AUs still due.
     if (stats.trimErases || trim.pending) {
         const size_t at = strlen(cqState);
@@ -3026,16 +3098,22 @@ void NativeSwitchBlock::reportState(const char *why)
 // powers the card off before chainloading L4T (bootloader/l4t/l4t.c:1028 sd_end ->
 // sdmmc1_disable_power), so U-Boot's 3.3 V init was the first since power-on and the card can
 // still accept 1.8 V. Nothing here writes the card's data area: CMD6 (switch), ACMD6 (bus
-// width) and ACMD42 (DAT3 pull-up) change volatile card state only. Commands are polled with
-// bounded waits: this runs once in setup(), before the worker exists (and for a re-tune); the
-// data path never polls.
+// width) and ACMD42 (DAT3 pull-up) change volatile card state only. Commands sleep on the
+// interrupt as the data path's do; the bounded spins left (tuning blocks, clock stable, software
+// resets) have no interrupt and run only here, in recovery and on resume.
 
 // One card command; flags is the COMMAND low byte (RSP_*). data > 0 reads one block of that many
 // bytes into the bounce buffer by SDMA. 0 or a nonzero code; *response gets RESPONSE[31:0] and
 // initStatus the last STATUS sample.
 int NativeSwitchBlock::cardCommand(uint32_t index, uint32_t arg, uint32_t flags, uint32_t *response, uint32_t data)
 {
-    if (!waitIdle(false, 100000000)) {
+    SwitchSdUse use = SwitchSdUse::kCommand;
+    if (data) {
+        use = SwitchSdUse::kRead;
+    } else if ((flags & 3) == 3) {
+        use = SwitchSdUse::kBusy;
+    }
+    if (!claimBus(use)) {
         initStatus = r32(PRESENT);
         return 1;
     }
@@ -3058,6 +3136,7 @@ int NativeSwitchBlock::cardCommand(uint32_t index, uint32_t arg, uint32_t flags,
     const bool transfers = data != 0 || (flags & 3) == 3;
     const uint32_t done = INT_COMMAND | (transfers ? INT_TRANSFER : 0);
     const uint32_t s = awaitStatus(transfers ? INT_TRANSFER : INT_COMMAND, transfers ? 1000000000ULL : 100000000ULL);
+    ended(s);
     initStatus = s;
     if ((s & INT_ERRORS) || (s & done) != done) {
         recover(false);
@@ -3066,8 +3145,8 @@ int NativeSwitchBlock::cardCommand(uint32_t index, uint32_t arg, uint32_t flags,
     if (response)
         *response = r32(RESPONSE);
     w32(STATUS, 0xffffffff);
-    if ((flags & 3) == 3 && !waitIdle(true, 1000000000))
-        return 4;  // R1b: card busy on DAT0
+    if (!bus.idle() && awaitRelease())
+        return 4;  // R1b: the card's DAT0 release failed
     if (data) {
         switch_dcache_invalidate_lines(bounce, data);
         switch_dcache_sync();
@@ -3398,7 +3477,7 @@ bool NativeSwitchBlock::enablePllc4()
 // controller compares it itself and moves to the next tap; buffer-read-ready says the step ended.
 void NativeSwitchBlock::tuneStep()
 {
-    if (!waitIdle(false, 2000000000)) {
+    if (!awaitTuningIdle(2000000000)) {
         resetLines();
         return;
     }
@@ -3443,7 +3522,8 @@ bool NativeSwitchBlock::tune()
     for (unsigned i = 0; i < 128 && (r16(HOST_CONTROL2) & CONTROL2_EXEC_TUNING); ++i)
         tuneStep();
     w32(STATUS, 0xffffffff);
-    if ((r16(HOST_CONTROL2) & (CONTROL2_EXEC_TUNING | CONTROL2_TUNED)) == CONTROL2_TUNED)
+    // The last tuning block raised no transfer complete either: the next command claims the bus by one read.
+    if ((r16(HOST_CONTROL2) & (CONTROL2_EXEC_TUNING | CONTROL2_TUNED)) == CONTROL2_TUNED && awaitTuningIdle(2000000000))
         return true;
     // No window: leave tuning mode and fixed sampling, as Linux sdhci_reset_tuning does.
     w16(HOST_CONTROL2, r16(HOST_CONTROL2) & ~(CONTROL2_EXEC_TUNING | CONTROL2_TUNED));
@@ -3737,6 +3817,7 @@ void NativeSwitchBlock::powerOnController()
         if (switch_now_ns() - begin > 100000000ULL)
             panic("SwitchSD: SDMMC1 reset did not complete after sleep");
     }
+    bus.reset();
     w32(IO_SPARE, r32(IO_SPARE) | 1u << 19);
     w32(VENDOR_IO_TRIM, r32(VENDOR_IO_TRIM) & ~4u);
     w32(VENDOR_CLOCK, (r32(VENDOR_CLOCK) & 0xe0fffffbu) | kTrimB01 << 24);
