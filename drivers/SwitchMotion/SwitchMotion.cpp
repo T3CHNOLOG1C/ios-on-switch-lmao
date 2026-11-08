@@ -471,6 +471,7 @@ class SwitchMotion : public IOService {
     // Work loop state.
     bool converting = false, suspended = false, on[2] = {};
     bool broken = false;       // the part misbehaved on its first boots: logged once, motion off for this boot (giveUp)
+    int busError = 0;          // the first failed SPI transfer's error (transferFailed); none is attempted after it
     bool firstLogged = false;  // the boot's first trusted accelerometer sample was logged (post)
     unsigned rate = 0;         // index into info->rates while converting
     unsigned every[2] = {}, count[2] = {};  // decimation per service
@@ -503,6 +504,7 @@ class SwitchMotion : public IOService {
     static void watchdogFired(OSObject *owner, IOTimerEventSource *sender);
     void readRegisters(uint8_t reg, uint8_t *buffer, size_t length);
     void writeRegister(uint8_t reg, uint8_t value);
+    void transferFailed(const char *what, uint8_t reg, int err);
     void giveUp();
     bool identify();
     bool reset();
@@ -530,21 +532,36 @@ OSDefineMetaClassAndStructors(SwitchMotion, IOService)
 
     void SwitchMotion::readRegisters(uint8_t reg, uint8_t *buffer, size_t length)
 {
+    memset(buffer, 0, length);
+    if (busError)
+        return;
     uint8_t tx[TEGRA_SPI_MAX_TRANSFER] = {};
     uint8_t rx[TEGRA_SPI_MAX_TRANSFER];
     tx[0] = static_cast<uint8_t>(0x80 | reg);
     const int err = tegra_spi_transfer(kBus, kChipSelect, tx, rx, length + 1);
-    if (err)
-        panic("SwitchMotion: SPI4 read of %s register %#x failed (%d)", part ? part->name : "IMU", reg, err);
+    if (err) {
+        transferFailed("read", reg, err);
+        return;
+    }
     memcpy(buffer, rx + 1, length);
 }
 
 void SwitchMotion::writeRegister(uint8_t reg, uint8_t value)
 {
+    if (busError)
+        return;
     const uint8_t tx[2] = {reg, value};
     const int err = tegra_spi_transfer(kBus, kChipSelect, tx, nullptr, sizeof(tx));
     if (err)
-        panic("SwitchMotion: SPI4 write of %s register %#x failed (%d)", part ? part->name : "IMU", reg, err);
+        transferFailed("write", reg, err);
+}
+
+// A transfer that fails is the bus or the part misbehaving, not a lost interrupt (TegraSPI panics for that itself):
+// one line, no further transfers, motion off for the boot (start fails, or the work loop gives up after the action).
+void SwitchMotion::transferFailed(const char *what, uint8_t reg, int err)
+{
+    busError = err;
+    IOLog("SwitchMotion: off: SPI4 %s of %s register %#x failed (%d)\n", what, part ? part->name : "IMU", reg, err);
 }
 
 // Both WHO_AM_I addresses, read only: nothing is written to a part before it is known (as the Linux drivers, which read
@@ -559,6 +576,8 @@ bool SwitchMotion::identify()
     uint8_t stId = 0;
     readRegisters(icm42607::WhoAmI, &icmId, 1);
     readRegisters(st::WhoAmI, &stId, 1);
+    if (busError)
+        return false;
     for (const Part &p : kParts) {
         if ((p.family == Family::ST ? stId : icmId) != p.whoAmI)
             continue;
@@ -587,6 +606,8 @@ bool SwitchMotion::reset()
         uint8_t ctrl3 = 0;
         uint8_t who = 0;
         readRegisters(st::Ctrl3C, &ctrl3, 1);
+        if (busError)
+            return false;
         if (ctrl3 & st::SwReset) {
             readRegisters(st::WhoAmI, &who, 1);
             IOLog("SwitchMotion: off: %s software reset did not complete (CTRL3_C %#x, WHO_AM_I now %#x)\n", part->name,
@@ -603,6 +624,8 @@ bool SwitchMotion::reset()
         uint8_t config = 0;
         uint8_t who = 0;
         readRegisters(icm40607::IntStatus, &status, 1);
+        if (busError)
+            return false;
         if (!(status & icm40607::ResetDone)) {
             readRegisters(icm40607::DeviceConfig, &config, 1);
             readRegisters(icm40607::WhoAmI, &who, 1);
@@ -624,6 +647,8 @@ bool SwitchMotion::reset()
         uint8_t config = 0;
         uint8_t who = 0;
         readRegisters(icm42607::IntStatus, &status, 1);
+        if (busError)
+            return false;
         if (!(status & icm42607::ResetDone)) {
             readRegisters(icm42607::DeviceConfig, &config, 1);
             readRegisters(icm42607::WhoAmI, &who, 1);
@@ -1184,14 +1209,20 @@ void SwitchMotion::drainFifo(uint64_t now)
 void SwitchMotion::interruptOccurred(OSObject *owner, IOInterruptEventSource *, int)
 {
     auto *self = OSDynamicCast(SwitchMotion, owner);
-    if (self && self->converting)
+    if (self && self->converting) {
         self->sample();
+        if (self->busError)
+            self->giveUp();
+    }
 }
 
 void SwitchMotion::kicked(OSObject *owner, IOInterruptEventSource *, int)
 {
-    if (auto *self = OSDynamicCast(SwitchMotion, owner))
+    if (auto *self = OSDynamicCast(SwitchMotion, owner)) {
         self->apply();
+        if (self->busError)
+            self->giveUp();
+    }
 }
 
 // Armed only while converting. No sample in a whole period: either the latched line is high and its interrupt never
@@ -1242,6 +1273,8 @@ bool SwitchMotion::start(IOService *provider)
     if (!identify() || !reset())
         return false;
     configurePart();
+    if (busError)
+        return false;
 
     IOService *nub = tegra_gpio_interrupt_nub(TEGRA_GPIO_IMU_INT, TEGRA_GPIO_LEVEL_HIGH);
     if (!nub) {
@@ -1336,6 +1369,8 @@ void SwitchMotion::resume()
             self->suspended = false;
             self->configurePart();  // the part stays powered through SC7; this only restates the pin setup
             self->apply();
+            if (self->busError)
+                self->giveUp();
             return kIOReturnSuccess;
         },
         this);
@@ -1361,7 +1396,7 @@ extern "C" int switch_motion_start(void)
     if (!resources || !candidate || !candidate->init() || !candidate->attach(resources)) {
         panic("SwitchMotion: attach failed");
     }
-    if (!candidate->start(resources)) {  // no IMU, or it did not come out of reset: logged, motion stays off
+    if (!candidate->start(resources)) {  // no IMU, no reset or a failed transfer: logged, motion stays off
         candidate->detach(resources);
         candidate->release();
         return 1;
