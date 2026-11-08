@@ -65,6 +65,7 @@ py_test(
         "//tools/package:overlay.py",
     ],
     deps = [
+        "//tools/common:macho",
         "//tools/package:boot_config",
         "//tools/trustcache",
         "@rules_python//python/runfiles",
