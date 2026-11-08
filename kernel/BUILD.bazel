@@ -2,6 +2,7 @@ load("@bazel_skylib//lib:selects.bzl", "selects")
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag", "string_flag")
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("//bazel/lint:defs.bzl", "lint_files")
+load("//ipsw:ipsw.bzl", "ipsw_volumes_header")
 # The kernel: which XNU it is built from, and (from the layout move on) the kernelcache's archives, link and prelink.
 
 load("//kernel:prelink.bzl", "kernel_prelink_switch")
@@ -194,6 +195,11 @@ outer_headers(
     srcs = [":native_data_seed_header"],
 )
 
+outer_headers(
+    name = "gen_ipsw_volumes",
+    srcs = [":ipsw_volumes_header"],
+)
+
 # --- Generated and pinned inputs, where the CMake flow's -I flags expected them (tree/build/<dir>) -----------------
 tool_output(
     name = "storage_abi",
@@ -206,6 +212,12 @@ tool_output(
     message = "IOStorageFamily-315 headers (storage-abi)",
     out_dirs = ["build/storage-abi/include"],
     tool = "storage_abi.py",
+)
+
+# The selected IPSW kind's System volume and cryptexes, for the drivers that find and mount them (BLOCK_FLAGS).
+ipsw_volumes_header(
+    name = "ipsw_volumes_header",
+    out = "build/ipsw-volumes/switch_ipsw_volumes.h",
 )
 
 # NativeRamBlock's seed pins: a pure function of the pinned seed and its volume UUID (XNU_OWNER_DATA_VOLUME_UUID).

@@ -78,6 +78,7 @@ py_binary(
     deps = [
         ":boot_config",
         ":loader_abi",
+        ":native_oled_adt",
         ":native_xnu_layout",
     ],
 )

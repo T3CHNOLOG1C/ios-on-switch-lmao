@@ -184,8 +184,8 @@ static int native_switch_raw_cache_prepare(proc_t p, user_addr_t scratch, user_a
         if ((error = native_switch_raw_union(p, scratch, source, cryptex_only[i])))
             printf("SwitchRawBoot: %s cryptex union failed: %d\n", cryptex_only[i], error);
     }
-    if (!native_owner_publish_raw_boot_manifest(os_device, "04769D26-2CA0-4825-B443-E2E5F88300F2", cache_device,
-                                                "8846FE78-2910-4297-AF97-D59BB6F8FC16"))
+    if (!native_owner_publish_raw_boot_manifest(os_device, SWITCH_OS_VOLUME_UUID, cache_device,
+                                                SWITCH_SYSTEM_CRYPTEX_UUID))
         printf("SwitchRawBoot: boot-manifest-hash not published (continuing)\n");
     /* Same development dyld mode as the FAT profile; no signature-policy change. */
     dyld_flags |= UINT64_C(8);

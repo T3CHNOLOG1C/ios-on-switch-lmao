@@ -14,6 +14,7 @@ def _install_spec_impl(ctx):
         "cryptex-h": ctx.file.cryptex_h,
         "cryptex-cpp": ctx.file.cryptex_cpp,
         "block-cpp": ctx.file.block_cpp,
+        "volumes-h": ctx.file.volumes_h,
     }
     args = ctx.actions.args()
     for flag, f in sources.items():
@@ -36,6 +37,7 @@ install_spec = rule(
         "cryptex_h": attr.label(allow_single_file = True, mandatory = True),
         "cryptex_cpp": attr.label(allow_single_file = True, mandatory = True),
         "block_cpp": attr.label(allow_single_file = True, mandatory = True),
+        "volumes_h": attr.label(allow_single_file = True, mandatory = True),
         "_tool": attr.label(default = "//tools/install:spec", executable = True, cfg = "exec"),
     },
     doc = "The partition size and volume/cryptex UUIDs the kernel was built with, parsed from its sources.",

@@ -301,6 +301,55 @@ def kernel_virt_base(kind):
         fail("IPSW kind {} has no derived kernel_virt_base in ipsw/pins.bzl".format(kind))
     return base
 
+def os_volume_uuid(kind):
+    """The kind's System volume UUID (pins.bzl's "volumes"): what /chosen/root-matching names.
+
+    Args:
+        kind: an IPSW kind.
+
+    Returns:
+        The UUID, upper case.
+    """
+    volumes = IPSWS[kind].get("volumes")
+    if not volumes:
+        fail("IPSW kind {} has no \"volumes\" in ipsw/pins.bzl".format(kind))
+    return volumes["os_volume_uuid"].upper()
+
+# Where the image builder stages the cryptex images on Preboot (tools/install/stages.py STAGING).
+_CRYPTEX_STAGING = "/private/preboot/Switch-Staging/"
+
+def _ipsw_volumes_header_impl(ctx):
+    kind = ctx.attr._kind[BuildSettingInfo].value
+    volumes = IPSWS[kind].get("volumes")
+    if not volumes:
+        fail("IPSW kind {} has no \"volumes\" in ipsw/pins.bzl".format(kind))
+    lines = ["// IPSW kind {}'s build and volumes (ipsw/pins.bzl), as the image builder lays them out.".format(kind)]
+    lines += ctx.attr.lines
+    lines.append("#define SWITCH_IPSW_BUILD \"{}\"".format(IPSWS[kind]["build"]))
+    for macro, key in (
+        ("SWITCH_OS_VOLUME_UUID", "os_volume_uuid"),
+        ("SWITCH_SYSTEM_CRYPTEX_UUID", "system_cryptex_uuid"),
+        ("SWITCH_APP_CRYPTEX_UUID", "app_cryptex_uuid"),
+    ):
+        lines.append("#define {} \"{}\"".format(macro, volumes[key].upper()))
+    for macro, key in (
+        ("SWITCH_SYSTEM_CRYPTEX_IMAGE", "system_cryptex_image"),
+        ("SWITCH_APP_CRYPTEX_IMAGE", "app_cryptex_image"),
+    ):
+        lines.append("#define {} \"{}{}\"".format(macro, _CRYPTEX_STAGING, volumes[key]))
+    ctx.actions.write(ctx.outputs.out, "\n".join(lines) + "\n")
+
+ipsw_volumes_header = rule(
+    implementation = _ipsw_volumes_header_impl,
+    doc = "A C header naming the selected kind's build (SWITCH_IPSW_BUILD), System volume and cryptexes " +
+          "(SWITCH_OS_VOLUME_UUID, SWITCH_{SYSTEM,APP}_CRYPTEX_{UUID,IMAGE}): what the kernel finds and mounts at boot.",
+    attrs = {
+        "out": attr.output(mandatory = True),
+        "lines": attr.string_list(doc = "lines written before the volumes'"),
+        "_kind": attr.label(default = "//ipsw:kind"),
+    },
+)
+
 def config_setting_any(name, settings, visibility):
     """A config_setting matching any of settings.
 

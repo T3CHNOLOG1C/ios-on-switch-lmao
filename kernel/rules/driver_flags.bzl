@@ -12,6 +12,8 @@ BLOCK_FLAGS = [
     "{tree}/diagnostics/switch",
     "-I",
     "{tree}/kits/VerifiedRoot/include",
+    "-include",
+    "{build}/ipsw-volumes/switch_ipsw_volumes.h",
 ]
 
 # TegraGM20B: the Tegra X1 GPU (vendored nouveau nvkm under an XNU shim, IOAcceleratorES + AGXDeviceUserClient). Apple

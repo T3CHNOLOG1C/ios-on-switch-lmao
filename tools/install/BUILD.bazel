@@ -135,6 +135,8 @@ py_test(
         "//drivers/NativeSwitchBlock:SwitchCryptex.cpp",
         "//drivers/NativeSwitchBlock:SwitchCryptex.h",
         "//drivers/NativeSwitchBlock:NativeSwitchBlock.cpp",
+        "//install:ipsw",
+        "//kernel:ipsw_volumes_header",
     ],
     deps = [
         ":spec_lib",

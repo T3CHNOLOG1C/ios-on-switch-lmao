@@ -68,7 +68,7 @@ from loader_abi import (
     WINDOW_SIZE,
     staged_bl33_bytes,
 )
-from native_oled_adt import ROOT_MATCHING
+from native_oled_adt import root_matching
 from native_xnu_layout import LayoutRequest, build_layout, parse_adt, validate_data_seed, validate_trustcache
 
 LIMIT = 128 << 20
@@ -408,18 +408,19 @@ def _check_exporter(phys_base: int, window_bytes: int) -> None:
     )
 
 
-class KernelPin(NamedTuple):
-    """An IPSW kind and its pinned kernel_virt_base (ipsw/pins.bzl)."""
+class KindPins(NamedTuple):
+    """An IPSW kind and the pins (ipsw/pins.bzl) its window is checked against."""
 
     kind: str
     virt_base: int
+    root_volume_uuid: str
 
 
-def _check_native_profile(m: dict, payload: bytes, pin: KernelPin) -> None:
+def _check_native_profile(m: dict, payload: bytes, pins: KindPins) -> None:
     _require(
-        m['virt_base'] == pin.virt_base,
-        f"the prelinked image's lowest segment {m['virt_base']:#x} is not {pin.kind}'s kernel_virt_base "
-        f'{pin.virt_base:#x} (ipsw/pins.bzl), which the kernel derives its boot_args virtBase from',
+        m['virt_base'] == pins.virt_base,
+        f"the prelinked image's lowest segment {m['virt_base']:#x} is not {pins.kind}'s kernel_virt_base "
+        f'{pins.virt_base:#x} (ipsw/pins.bzl), which the kernel derives its boot_args virtBase from',
     )
     _require(
         m['phys_base'] & ~0x1FFFFF == 0xB2000000 and (m['window_end'] + 0x1FFFFF) & ~0x1FFFFF == 0xE2200000,
@@ -438,11 +439,11 @@ def _check_native_profile(m: dict, payload: bytes, pin: KernelPin) -> None:
     _require(not len(payload) % 0x1000, 'native cacheable copy requires a page-aligned payload')
 
 
-def window_checks(m: dict, payload: bytes, adt: bytes, pin: KernelPin, manifest_hash: bytes | None = None) -> dict:
+def window_checks(m: dict, payload: bytes, adt: bytes, pins: KindPins, manifest_hash: bytes | None = None) -> dict:
     """Check what the cacheable-copy root-boot loader needs of a layout and return the loader's constants.
 
-    `m` is the layout's manifest, `payload` its image and `adt` the ADT it was laid out with; `pin` is the IPSW
-    kind's pinned kernel_virt_base. The staged window's constants are None until it is made.
+    `m` is the layout's manifest, `payload` its image and `adt` the ADT it was laid out with; `pins` are the IPSW kind's
+    kernel_virt_base and System volume. The staged window's constants are None until it is made.
     """
     _check_layout(m, payload)
 
@@ -515,7 +516,7 @@ def window_checks(m: dict, payload: bytes, adt: bytes, pin: KernelPin, manifest_
     # The root boot: the OS volume by UUID, persistent Data, no RAM root or runtime manifest.
     required = {
         'osenvironment': b'main\0',
-        'root-matching': ROOT_MATCHING,
+        'root-matching': root_matching(pins.root_volume_uuid),
         'crypto-hash-method': b'sha2-384\0',
         'amfi-only-platform-code': struct.pack('<I', 1),
         'ephemeral-storage': struct.pack('<I', 0),  # persistent SD Data
@@ -549,7 +550,7 @@ def window_checks(m: dict, payload: bytes, adt: bytes, pin: KernelPin, manifest_
     _check_sidecars(m, payload, properties, start, sidecars)
     _check_command_line(m, payload)
     _check_exporter(m['phys_base'], len(payload))
-    _check_native_profile(m, payload, pin)
+    _check_native_profile(m, payload, pins)
 
     return {
         'SOURCE': STAGE_SOURCE,
@@ -670,7 +671,7 @@ def layout(args: argparse.Namespace) -> None:
         )
         payload = (scratch / 'layout/kernel-window.bin').read_bytes()
         constants = window_checks(
-            m, payload, inputs['adt'].read_bytes(), KernelPin(args.kind, args.virt_base), manifest_hash
+            m, payload, inputs['adt'].read_bytes(), KindPins(args.kind, args.virt_base, args.root_volume_uuid), manifest_hash
         )
     runs, _ = pack_window(payload)
     blocks = lz4_blocks(runs)
@@ -730,6 +731,7 @@ def main() -> None:
                 type=lambda value: int(value, 0),
                 help="the kind's kernel_virt_base (ipsw/pins.bzl)",
             )
+            p.add_argument('--root-volume-uuid', required=True, help="the kind's System volume (ipsw/pins.bzl)")
             p.add_argument('--boot-manifest-hash', action='store_true', help="fill the ADT's zeroed slot")
     args = parser.parse_args()
     if args.step == 'layout':

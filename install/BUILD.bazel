@@ -28,6 +28,7 @@ install_spec(
     cryptex_cpp = "//drivers/NativeSwitchBlock:SwitchCryptex.cpp",
     cryptex_h = "//drivers/NativeSwitchBlock:SwitchCryptex.h",
     raw_mount = "//diagnostics/switch:SwitchRawMount.h",
+    volumes_h = "//kernel:ipsw_volumes_header",
 )
 
 ipsw_pins(name = "ipsw")

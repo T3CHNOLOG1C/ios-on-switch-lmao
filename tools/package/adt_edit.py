@@ -22,6 +22,7 @@ from loader_abi import (
     STAMPS_BYTES,
     STAMPS_PROPERTY,
 )
+from native_oled_adt import root_matching
 from native_xnu_layout import parse_adt
 
 # USB 2.0 device mode on the USB-C port (drivers/SwitchUSB): the USB function set configd's USBDeviceConfiguration
@@ -352,6 +353,13 @@ def ipad_adt(
     return adt_serialize(tree)
 
 
+def with_root_volume(data: bytes, volume_uuid: str) -> bytes:
+    """Return the ADT whose /chosen/root-matching names the IPSW kind's System volume (ipsw/pins.bzl "volumes")."""
+    tree, _ = adt_parse(data)
+    put(child(tree, 'chosen'), 'root-matching', root_matching(volume_uuid))
+    return adt_serialize(tree)
+
+
 def with_boot_manifest_hash_slot(data: bytes) -> bytes:
     """Return the ADT with a zeroed /chosen/boot-manifest-hash (loader_abi.BOOT_MANIFEST_HASH_PROPERTY)."""
     tree, _ = adt_parse(data)
@@ -390,6 +398,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     for name in ('adt', 'overlay-plan', 'bt-patch', 'portrait-header', 'out'):
         parser.add_argument('--' + name, required=True, type=Path)
+    parser.add_argument('--root-volume-uuid', required=True, help="the IPSW kind's System volume")
     parser.add_argument('--smp', action='store_true')
     parser.add_argument('--boot-manifest-hash', action='store_true', help='a zeroed slot the layout step fills')
     parser.add_argument('--a64x-cache-pretranslated', type=Path)
@@ -403,6 +412,7 @@ def main() -> None:
         bt_patch=args.bt_patch.read_bytes(),
         portrait=portrait_native(args.portrait_header),
     )
+    adt = with_root_volume(adt, args.root_volume_uuid)
     if args.boot_manifest_hash:
         adt = with_boot_manifest_hash_slot(adt)
     if args.a64x_cache_pretranslated:

@@ -28,10 +28,17 @@ GICC_BASE, GICC_SIZE = 0x50042000, 0x100
 MODEL = 'Nintendo Switch (OLED model)'
 COMPATIBLE = ('nvidia,fric', 'nintendo,aula', 'nintendo,nx', 'nvidia,tegra210b01')
 ROOT_VOLUME_UUID = '04769D26-2CA0-4825-B443-E2E5F88300F2'
-ROOT_MATCHING = (
-    '<dict><key>IOProviderClass</key><string>IOMedia</string>'
-    '<key>IOPropertyMatch</key><dict><key>UUID</key><string>' + ROOT_VOLUME_UUID + '</string></dict></dict>'
-).encode('ascii') + b'\0'
+
+
+def root_matching(volume_uuid: str) -> bytes:
+    """/chosen/root-matching: the IOMedia of the APFS volume `volume_uuid` (the IPSW kind's System volume)."""
+    return (
+        '<dict><key>IOProviderClass</key><string>IOMedia</string>'
+        '<key>IOPropertyMatch</key><dict><key>UUID</key><string>' + volume_uuid.upper() + '</string></dict></dict>'
+    ).encode('ascii') + b'\0'
+
+
+ROOT_MATCHING = root_matching(ROOT_VOLUME_UUID)
 
 
 def _node(name: str, properties: Iterable[tuple[str, bytes]] = (), children: Sequence[bytes] = ()) -> bytes:
