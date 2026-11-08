@@ -11,9 +11,35 @@
 #include "../../kits/SwitchRefusal/SwitchRefusal.h"
 #include "../TegraSE/TegraSE.h"
 
+extern "C" bool native_aks_device_digest(const char *label, uint8_t out[32]);
+extern "C" void native_aks_device_key_start(void);
+
 namespace {
 constexpr uint64_t kRefusedKey = switch_refusal_key("NativeAES", "hardware key");
+// Apple's engine holds the device-unique UID key (selector 2000) and keys derived from it, which the caller names but
+// never sees (AppleImage4 entangles its nonces with 2212); below 2000 are the GID keys that decrypt Apple's firmware,
+// which nothing here can stand in for.
+constexpr unsigned kFirstDeviceKey = 2000;
+
+// The console's own key for a UID-class selector: an HMAC of the selector under the device key AppleKeyStore uses
+// (drivers/NativeKeyStoreEvents/AKSDeviceKey.cpp), so it is the same on every boot of this console and only on it.
+bool deviceKey(const IOAESKeyData &key, IOAESKeyData *out)
+{
+    if (key.selector < kFirstDeviceKey)
+        return false;
+    native_aks_device_key_start();
+    char label[48];
+    snprintf(label, sizeof label, "Switch IOAESAccelerator key %u", key.selector);
+    uint8_t digest[32];
+    if (!native_aks_device_digest(label, digest))
+        return false;
+    out->bits = key.bits;
+    out->selector = 0;
+    memcpy(out->bytes, digest, sizeof out->bytes);
+    cc_clear(sizeof digest, digest);
+    return true;
 }
+}  // namespace
 
 extern "C" {
 volatile uint32_t native_aes_registered = 0;
@@ -45,7 +71,7 @@ OSDeclareDefaultStructors(NativeAES) public : bool start(IOService *) override;
 
     bool isKeySupported(unsigned selector) override
     {
-        return selector == 0;
+        return selector == 0 || selector >= kFirstDeviceKey;
     }
 
     unsigned getSupportedOptions() override
@@ -61,7 +87,7 @@ OSDeclareDefaultStructors(NativeAES) public : bool start(IOService *) override;
 
 OSDefineMetaClassAndStructors(NativeAES, IOAESAccelerator)
 
-    // No padding, hidden device keys, or change to the registered corecrypto modes.
+    // No padding, and no change to the registered corecrypto modes.
     static int cbc(const unsigned char *input, unsigned char *output, size_t bytes, unsigned char iv[16],
                    const IOAESKeyData &key, IOAESOperation operation)
 {
@@ -116,12 +142,20 @@ IOReturn NativeAES::performAES(IOMemoryDescriptor *input, IOMemoryDescriptor *ou
     if (!input || !output || !key || !iv || !bytes || (bytes & 15) ||
         (key->bits != 128 && key->bits != 192 && key->bits != 256))
         return kIOReturnBadArgument;
+    IOAESKeyData derived{};
+    const struct Wipe {
+        IOAESKeyData *key;
+        ~Wipe() { cc_clear(sizeof *key, key); }
+    } wipe{&derived};
+    if (key->selector && deviceKey(*key, &derived))
+        key = &derived;
     if (key->selector || (operation != IOAESEncrypt && operation != IOAESDecrypt)) {
         __atomic_fetch_add(&native_aes_unsupported_key, 1, __ATOMIC_RELAXED);
         switch_refusal_k(switch_refusal_key_with(kRefusedKey, static_cast<uint64_t>(key->selector) << 32 |
                                                                   static_cast<uint32_t>(operation)),
                          "NativeAES", "hardware key",
-                         "key selector %u, operation %d: only keys the caller passes, encrypt or decrypt",
+                         "key selector %u, operation %d: only keys the caller passes or the console's own, encrypt or "
+                         "decrypt",
                          static_cast<unsigned>(key->selector), static_cast<int>(operation));
         return kIOReturnUnsupported;
     }
