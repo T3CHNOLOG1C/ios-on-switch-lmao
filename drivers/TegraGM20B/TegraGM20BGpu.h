@@ -70,10 +70,13 @@ void tgm_waiter_unwoken(uint32_t waiter, uint32_t seq, uint32_t seqno);
 void *tgm_pool_alloc(uint64_t bytes, uint64_t align, uint64_t *pa);
 void tgm_pool_free(void *va, uint64_t bytes, uint64_t pa);
 
-/* Address spaces: one per user-client connection, which claims it (tgm_vm_claim): only channels made for that owner
- * may address it, so BoFree's wait for the connection's channels covers every channel that can reach its pages. */
+/* Address spaces: one per user-client connection, which claims it (tgm_vm_claim_connection): only channels made for
+ * that owner may address it, so BoFree's wait for the connection's channels covers every channel that can reach its
+ * pages. The kernel's own copiers claim theirs with tgm_vm_claim and an owner that is not an AGXDeviceUserClient: a
+ * hang's line reads pushes through a connection's claim only (tgm_client_interlocks). */
 int tgm_vm_new(struct tgm_vm **pvm);
 void tgm_vm_claim(struct tgm_vm *vm, const void *owner);
+void tgm_vm_claim_connection(struct tgm_vm *vm, const void *connection);
 void tgm_vm_del(struct tgm_vm **pvm);
 /* Wrap physical pages as GPU memory. `pas` (one entry per 4 KiB page) must stay valid until tgm_mem_del. lock_wait_ns
  * (or NULL): with the stats, how long the call waited for gpu.lock. */
@@ -205,8 +208,9 @@ void tgm_chan_stalled(struct tgm_chan *chan, const char *who, uint32_t seqno, ui
  * pending; a single submission that runs that long is taken for a hang. */
 void tgm_chan_check_progress(struct tgm_chan *chan, const char *who, uint32_t seqno);
 /* A hang's line (TegraGM20BUserClient.cpp): the SET_PIXEL_SHADER_INTERLOCK_CONTROL methods with conflict detection on
- * in the `n` pushes at va[i] (dwords[i] long) of `client`'s connection (tgm_chan_new's vm_owner). Returns the pushes it
- * read (one in a host import has no kernel view), or -1 when the connection's lock is held by another thread. */
+ * in the `n` pushes at va[i] (dwords[i] long) of `client`'s connection (its space's tgm_vm_claim_connection). Returns
+ * the pushes it read (one in a host import has no kernel view), or -1 when the connection's lock is held by another
+ * thread. */
 int tgm_client_interlocks(const void *client, const uint64_t *va, const uint32_t *dwords,
 			  uint32_t n, uint64_t *interlocks);
 
@@ -350,6 +354,10 @@ void tgm_relayout_by_cpu(const struct tgm_relayout_pages *surface,
 			 const struct tgm_relayout_pages *rows, const struct tgm_layout *layout,
 			 uint32_t bytes_per_row, int op, const struct tgm_relayout_writer *writers,
 			 uint32_t nwriters);
+/* tgm_writer_wait for a kernel copy's submission that starts with semaphore acquires on `acquired` (in push order):
+ * while one of them has not completed, the wait is late on that writer, which a long wait recovers, not on the copy. */
+void tgm_copy_wait(uint32_t uid, uint32_t seqno, const struct tgm_relayout_writer *acquired,
+		   uint32_t nacquired);
 /* The GPU address in `vm` (one that maps every connection's fence page, as every tgm_vm_new space does) of channel uid's
  * fence seqno; -ENOENT when it is gone or killed (its work is complete or abandoned). */
 int tgm_writer_fence_va(struct tgm_vm *vm, uint32_t uid, uint64_t *va);
