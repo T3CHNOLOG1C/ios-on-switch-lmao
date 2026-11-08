@@ -149,6 +149,12 @@ void ComputeEncoder::setBytes(uint32_t slot, const void *bytes, uint32_t length)
     dev_.stats.uploadBytes += chunk;
 }
 
+void ComputeEncoder::setBytesAt(uint32_t slot, uint64_t va, uint32_t length)
+{
+    if (slot < 31)
+        bufs_[slot] = {va, length, nullptr, 0};
+}
+
 void ComputeEncoder::setBuffer(uint32_t slot, const Buffer *b, uint64_t offset)
 {
     if (slot >= 31)

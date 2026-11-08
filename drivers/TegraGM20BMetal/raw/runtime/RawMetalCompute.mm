@@ -118,12 +118,7 @@ id rmComputeState(id device, id twin, id<MTLFunction> function, MTLComputePipeli
 {
     if (index < 31)
         _buffers[index] = nil;
-    Cmd m = cmd(OpKernelBytes, 3, uint16_t(index));
-    m.a = uint32_t(_cb->_bytes.size());
-    m.b = uint32_t(length);
-    _cb->_bytes.insert(_cb->_bytes.end(), static_cast<const uint8_t *>(bytes),
-                       static_cast<const uint8_t *>(bytes) + length);
-    [_cb record:m];
+    recordBytes(_cb, cmd(OpKernelBytes, 3, uint16_t(index)), bytes, length);
 }
 
 - (void)setBuffer:(id<MTLBuffer>)buffer offset:(NSUInteger)offset atIndex:(NSUInteger)index
@@ -363,7 +358,7 @@ void replayKernel(id encoder, RMCommandBuffer *cb, const Cmd &c, std::set<RMBuff
         [e setComputePipelineState:twinOf(object)];
         break;
     case OpKernelBytes:
-        [e setBytes:cb->_bytes.data() + c.a length:c.b atIndex:c.index];
+        [e setBytes:cb->_bytes.chunks[c.c].cpu + c.a length:c.b atIndex:c.index];
         break;
     case OpKernelBuffer:
         if ([object isKindOfClass:[RMBuffer class]])
@@ -408,9 +403,13 @@ bool encodeKernel(raw::ComputeEncoder &e, raw::CommandBuffer &rc, RMCommandBuffe
 {
     id object = (__bridge id)c.obj;
     switch (c.op) {
-    case OpKernelBytes:
-        e.setBytes(c.index, cb->_bytes.data() + c.a, c.b);
+    case OpKernelBytes: {
+        const raw::Buffer &k = cb->_bytes.chunks[c.c];
+        if (!k.wc)
+            rc.clean(k.cpu + c.a, std::max<uint32_t>((c.b + 255) & ~255u, 256));
+        e.setBytesAt(c.index, k.va + c.a, c.b);
         break;
+    }
     case OpKernelBuffer: {
         RMBuffer *b = (RMBuffer *)object;
         if (b)

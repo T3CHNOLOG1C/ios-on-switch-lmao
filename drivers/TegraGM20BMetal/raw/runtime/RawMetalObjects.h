@@ -365,6 +365,8 @@ id rmComputeState(id device, id twin, id<MTLFunction> function, MTLComputePipeli
 // m2v's replay and the raw encode of a compute encoder's commands (the Op*Kernel* ones and OpDispatch): false from the raw
 // encode where it refuses one (*why)
 bool isKernelCommand(Op op);
+// OpBytes and OpKernelBytes (`m`): the bytes into the command buffer's RMBytes, m.a/b/c set (RawMetalBindings.mm)
+void recordBytes(RMCommandBuffer *cb, Cmd m, const void *bytes, NSUInteger length);
 void replayKernel(id encoder, RMCommandBuffer *cb, const Cmd &c, std::set<RMBuffer *> &buffers);
 bool encodeKernel(raw::ComputeEncoder &e, raw::CommandBuffer &rc, RMCommandBuffer *cb, const Cmd &c, const char **why);
 

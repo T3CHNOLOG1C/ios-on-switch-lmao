@@ -117,6 +117,13 @@ int runNvk(char **argv)
     }
     id<MTLCommandQueue> q = [dev newCommandQueue];
     id<MTLCommandBuffer> cb = [q commandBuffer];
+    if (getenv("FRAME_BLIT_FIRST")) {
+        // a raw encoder before the compute one: a refused compute encoder sends only its own segment to m2v
+        id<MTLBuffer> b = [dev newBufferWithLength:4096 options:MTLResourceStorageModeShared];
+        id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
+        [blit fillBuffer:b range:NSMakeRange(0, 4096) value:0x5a];
+        [blit endEncoding];
+    }
     id<MTLComputeCommandEncoder> enc = [cb computeCommandEncoder];
     [enc setComputePipelineState:ps];
     for (uint32_t s = 0; s < kSlots; s++)
