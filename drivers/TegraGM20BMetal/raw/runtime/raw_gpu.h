@@ -118,8 +118,8 @@ struct Texture {
     uint8_t bpp = 0;
     bool renderable = false;  // a pitch render target as it is: a target format, address and pitch multiples of 128
     // A target format, but an address or pitch the render hardware does not take (NVK's linear-render rule, linearTarget): a pass
-    // renders it through a pool image the copy engine fills from it before and copies back to it after (NVK's own tiled shadow,
-    // nvk_linear_render_copy, for the same targets: the texels stored are the same)
+    // renders it, block-linear, through a pool image the copy engine fills from it before and copies back to it after (NVK's
+    // own tiled shadow, nvk_linear_render_copy, for the same targets: the texels stored are the same)
     bool shadowTarget = false;
     bool memoryless = false;  // no memory: a pass gives it a backing (Device::backing)
     bool wc =
@@ -162,8 +162,8 @@ struct Texture {
     }
 
     // Rows 16 but not 32 bytes apart (or an address off 32): the texture header's pitch takes multiples of 32, so it is sampled
-    // through `sampled`, a pool image of its texels the copy engine refreshes from it (CommandBuffer::refresh) before work that
-    // samples it, as m2v samples such a surface through a shadow image it copies in. tic is sampled's.
+    // through `sampled`, a block-linear pool image of its texels the copy engine refreshes from it before work that samples
+    // it, as m2v samples such a surface through a shadow image it copies in. tic is sampled's.
     Texture *sampled = nullptr;
 
     // An extended-range texture's (raw_xr.h): the image a draw samples, its codes' values as RGBA16Float, which a pass of the
