@@ -19,7 +19,6 @@ from pathlib import Path
 
 from tools.emu import machine, qemu, report, sdcard
 from tools.emu.monitor import Monitor, socket_path
-from tools.install import stages
 
 KINDS = {'ios17': '21H461', 'ios27': '24B119'}
 
@@ -51,11 +50,19 @@ def build_package(kind: str, flags: list[str]) -> Path:
     return Path(bazel(base, 'info', *options, 'execution_root')) / relative
 
 
-def default_container(kind: str) -> Path | None:
-    scratch = stages.default_scratch(KINDS[kind])
-    for name in (stages.POPULATED, stages.COMPOSED):
-        if (scratch / name).exists():
-            return scratch / name
+def default_image(kind: str) -> Path | None:
+    """Return the first part of `bazel run //:image`'s install image for the kind, here or in the main checkout."""
+    common = subprocess.run(
+        ['git', 'rev-parse', '--path-format=absolute', '--git-common-dir'],
+        cwd=workspace(),
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout.strip()
+    name = f'out/sd/switchroot/ios/IOS{kind[3:]}.SII.001'
+    for root in (workspace(), Path(common).parent if common else None):
+        if root and (root / name).exists():
+            return root / name
     return None
 
 
@@ -81,6 +88,10 @@ def run_machine(run: Path, inputs: machine.Inputs, seconds: float) -> None:
     with (run / 'qemu.log').open('w') as log:
         process = subprocess.Popen(command, cwd=run, stdout=log, stderr=subprocess.STDOUT)
     try:
+        while not inputs.qmp.exists() and process.poll() is None:
+            time.sleep(0.1)
+        if process.poll() is not None:
+            sys.exit(f'qemu exited at once ({run / "qemu.log"}):\n' + (run / 'qemu.log').read_text()[-2000:])
         monitor = Monitor(inputs.qmp)
         deadline = time.monotonic() + seconds
         while time.monotonic() < deadline and process.poll() is None:
@@ -101,13 +112,12 @@ def parse() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--kind', choices=sorted(KINDS), required=True)
     parser.add_argument('--seconds', type=float, default=120)
-    parser.add_argument('--sd', help="the APFS container image (tools/install's composed or populated.img), or none")
+    parser.add_argument('--sd', help="an install image's first part (IOS27.SII.001), or none (default: //:image's)")
     parser.add_argument('--bootargs', help='switchroot/ios/bootargs.txt for this run, e.g. -v')
     parser.add_argument('--out', type=Path, help='the run directory (default out/emu/<kind>-<time>)')
     parser.add_argument('--package', type=Path, help='a //:boot output to boot instead of building one')
     parser.add_argument('--bazel-flag', action='append', default=[], help='a flag for the //:boot build')
     parser.add_argument('--qemu', type=Path, help='this qemu-system-aarch64 instead of the cached build')
-    parser.add_argument('--keep-sd', action='store_true', help="keep the run's card (an APFS clone)")
     return parser.parse_args()
 
 
@@ -117,14 +127,10 @@ def main() -> None:
     binary = args.qemu.resolve() if args.qemu else qemu.ensure()
     run = (args.out or workspace() / 'out/emu' / f'{args.kind}-{time.strftime("%Y%m%d-%H%M%S")}').resolve()
     run.mkdir(parents=True, exist_ok=True)
-    container = None if args.sd == 'none' else Path(args.sd) if args.sd else default_container(args.kind)
-    card = sdcard.card_for_run(container, run, card_files(package, run, args.bootargs))
+    image = None if args.sd == 'none' else Path(args.sd) if args.sd else default_image(args.kind)
+    card = sdcard.card_for_run(image, run, card_files(package, run, args.bootargs))
     inputs = machine.Inputs(qemu=binary, package=package, regwrite=regwrite(), sd=card, qmp=socket_path())
-    try:
-        run_machine(run, inputs, args.seconds)
-    finally:
-        if not args.keep_sd:
-            card.unlink(missing_ok=True)
+    run_machine(run, inputs, args.seconds)
     print(report.summarize(run), end='')
 
 
