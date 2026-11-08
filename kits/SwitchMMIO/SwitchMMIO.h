@@ -108,6 +108,12 @@ static inline void switch_mmio_write32_flush(volatile uint8_t *base, uint32_t of
     (void)switch_mmio_read32(base, offset);
 }
 
+// Register blocks their documentation numbers in 32-bit words (Tegra's display controller and DSI): word `index`.
+static inline uint32_t switch_mmio_read32_word(const volatile uint32_t *regs, uint32_t index)
+{
+    return switch_mmio_read32((const volatile uint8_t *)regs, index * 4);
+}
+
 static inline void switch_mmio_rmw32(volatile uint8_t *base, uint32_t offset, uint32_t clear, uint32_t set)
 {
     switch_mmio_write32(base, offset, (switch_mmio_read32(base, offset) & ~clear) | set);

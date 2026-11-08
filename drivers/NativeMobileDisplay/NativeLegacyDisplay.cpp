@@ -22,6 +22,7 @@
 #include <pexpert/pexpert.h>
 #include "../ArmGIC/SwitchInterrupts.h"
 #include "../../kits/SwitchDMA/SwitchDcache.h"
+#include "../../kits/SwitchMMIO/SwitchMMIO.h"
 #include "../../kits/SwitchSysctl/SwitchSysctl.h"
 #include "../TegraDisplayFlip/TegraScanoutCopy.h"
 #include "../TegraDisplayFlip/TegraScanoutRing.h"
@@ -1466,11 +1467,12 @@ private:
     static bool vblankFilter(OSObject *owner, IOFilterInterruptEventSource *source)
     {
         NativeLegacyDisplay *self = static_cast<NativeLegacyDisplay *>(owner);
-        const uint32_t status = self->dc[kDcIntStatus] & (kVblankInt | kFrameEndInt | kVpulse2Int);
+        const uint32_t status =
+            switch_mmio_read32_word(self->dc, kDcIntStatus) & (kVblankInt | kFrameEndInt | kVpulse2Int);
         if (!status)
             return false;
         self->dc[kDcIntStatus] = status;
-        (void)self->dc[kDcIntStatus];  // read back: the line is low before ArmCpu's EOI
+        (void)switch_mmio_read32_word(self->dc, kDcIntStatus);  // read back: the line is low before ArmCpu's EOI
         if (gPanicRestore.panicking)
             return false;  // window A is the panic's (restorePitchOnPanic): no flip, no DSI command
         if (status & kVblankInt) {
@@ -2318,7 +2320,8 @@ private:
     static int tapeLatched(void *owner)
     {
         return static_cast<int>(
-            static_cast<int>((static_cast<NativeLegacyDisplay *>(owner)->dc[kDcStateControl] & kWinAActReq)) == 0u);
+            static_cast<int>((switch_mmio_read32_word(static_cast<NativeLegacyDisplay *>(owner)->dc, kDcStateControl) &
+                              kWinAActReq)) == 0u);
     }
 
     static int tapeWait(void *owner)
