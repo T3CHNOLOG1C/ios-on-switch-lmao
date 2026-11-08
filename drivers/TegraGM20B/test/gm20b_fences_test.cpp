@@ -257,6 +257,17 @@ protected:
 	}
 };
 
+// A kernel copy (the copy engine's plane copies, a tiling move) follows every writer it is given: on the GPU when it can map
+// the writer's fence, on the CPU when it cannot (another kernel channel's: the copy engine records its own copies), never
+// by dropping it; its own channel's earlier work runs before it anyway.
+TEST(WriterOrder, AKernelCopyNeverDropsAWriter)
+{
+	EXPECT_EQ(tgm_writer_order(7, 7, 0), TGM_WRITER_IN_CHANNEL);
+	EXPECT_EQ(tgm_writer_order(7, 7, 1), TGM_WRITER_IN_CHANNEL);
+	EXPECT_EQ(tgm_writer_order(7, 9, 1), TGM_WRITER_GPU_ACQUIRE);
+	EXPECT_EQ(tgm_writer_order(7, 9, 0), TGM_WRITER_CPU_WAIT);
+}
+
 TEST_F(Fences, AReadOfASurfaceAnotherChannelIsWritingWaitsOnceForThatWrite)
 {
 	Surface s(0x90000000, 101);

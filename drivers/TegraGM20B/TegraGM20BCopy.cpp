@@ -203,8 +203,8 @@ struct Surface {
 			tgm_coherency_put(coh);
 	}
 
-	// lock held: its GPU writers' fences, appended at waits[n]
-	void writers(tgm_relayout_wait *waits, uint32_t &n) const
+	// lock held: its GPU writers' fences, appended at waits[n] (TegraGM20BRelayout.h tgm_relayout_waits)
+	void writers(uint32_t self, tgm_relayout_wait *waits, uint32_t &n) const
 	{
 		if (!coh)
 			return;
@@ -212,10 +212,7 @@ struct Surface {
 		tgm_coh_lock(coh);
 		const uint32_t found = tgm_coh_writers(coh, w, TGM_RELAYOUT_MAX_WAITS - n);
 		tgm_coh_unlock(coh);
-		for (uint32_t i = 0; i < found; i++) {
-			if (!tgm_writer_fence_va(gCopy.vm, w[i].uid, &waits[n].va))
-				waits[n++].seqno = w[i].seqno;
-		}
+		n = tgm_relayout_waits(gCopy.vm, self, w, found, waits, n);
 	}
 
 	bool whole(const tegra_gm20b_ce_plane &p, uint32_t rowBytes, uint32_t rows) const
@@ -268,8 +265,8 @@ extern "C" int tegra_gm20b_ce_copy_plane(const struct tegra_gm20b_ce_plane *src,
 	const Surface to(dstMemory);
 	tgm_relayout_wait waits[TGM_RELAYOUT_MAX_WAITS];
 	uint32_t nwaits = 0;
-	from.writers(waits, nwaits);
-	to.writers(waits, nwaits);
+	from.writers(tgm_chan_uid(chan), waits, nwaits);
+	to.writers(tgm_chan_uid(chan), waits, nwaits);
 	int ret = shapeOk(from, to, *src, *dst, row_bytes, rows) ? 0 : -22;
 	const uint64_t srcBytes =
 		from.tiled ? from.layout.bytes : uint64_t(src->pitch) * (rows - 1) + row_bytes;

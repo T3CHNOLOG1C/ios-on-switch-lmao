@@ -134,6 +134,13 @@ static inline uint32_t tgm_relayout_copy(uint32_t *w, const struct tgm_layout *l
 	return i;
 }
 
+// Appends to waits[nwaits..] the acquires a kernel copy on channel `self` in `vm` makes on `writers` (TegraGM20BFences.h
+// tgm_writer_order: a writer whose fence `vm` cannot map, or past TGM_RELAYOUT_MAX_WAITS acquires, is waited for here on
+// the CPU) and returns the new count. Thread context.
+uint32_t tgm_relayout_waits(struct tgm_vm *vm, uint32_t self,
+			    const struct tgm_relayout_writer *writers, uint32_t nwriters,
+			    struct tgm_relayout_wait *waits, uint32_t nwaits);
+
 // The whole push of one move, at most TGM_RELAYOUT_DWORDS words; `nwaits` at most TGM_RELAYOUT_MAX_WAITS
 static inline uint32_t tgm_relayout_push(uint32_t *w, const struct tgm_layout *l,
 					 const struct tgm_relayout_move *m,

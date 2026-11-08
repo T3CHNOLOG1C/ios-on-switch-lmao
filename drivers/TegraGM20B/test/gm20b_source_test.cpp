@@ -811,3 +811,21 @@ TEST(GM20BDeviceSource, DisplayParamsArriveByMethodAndByTrap)
 		    HasSubstr("case kSetDisplayParams: if (arguments->scalarInputCount != "
 			      "2) return kIOReturnBadArgument; storeDeadline("));
 }
+
+// The tiling move and the copy engine's plane copies follow the surface's writers through tgm_relayout_waits, which waits
+// on the CPU for one whose fence the copy's space cannot map instead of dropping it.
+TEST(GM20BRelayoutSource, KernelCopiesFollowEveryWriter)
+{
+	const std::string relayout = SourceText("../TegraGM20BRelayout.cpp");
+	const std::string waits =
+		flat(definition(relayout, "extern \"C\" uint32_t tgm_relayout_waits("));
+	EXPECT_THAT(waits, HasSubstr("switch (tgm_writer_order(self, writers[i].uid, mapped)) {"));
+	EXPECT_THAT(waits, HasSubstr("case TGM_WRITER_CPU_WAIT: tgm_writer_wait(writers[i].uid, "
+				     "writers[i].seqno); break;"));
+	EXPECT_THAT(flat(definition(relayout, "int move(")),
+		    HasSubstr("tgm_relayout_waits(r.vm, tgm_chan_uid(chan), writers, nwriters, "
+			      "waits, 0)"));
+	EXPECT_THAT(flat(SourceText("../TegraGM20BCopy.cpp")),
+		    HasSubstr("n = tgm_relayout_waits(gCopy.vm, self, w, found, waits, n);"));
+	EXPECT_EQ(Count(relayout, "tgm_writer_fence_va("), 1u);
+}

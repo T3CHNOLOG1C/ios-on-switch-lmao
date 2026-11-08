@@ -50,6 +50,23 @@ static inline int tgm_fence_merge(uint64_t *acc, uint32_t *n, uint32_t max, uint
 	return 0;
 }
 
+/* How a kernel copy on channel `self` (the copy engine's, a tiling move's) follows a surface writer `uid`: its own channel
+ * runs it in order; another channel's fence it can map is a semaphore acquire; one it cannot (a kernel channel's fence is
+ * no slot of the fence view: the copy engine's plane copies record themselves as writers) is waited for on the CPU, never
+ * dropped. */
+enum tgm_writer_order {
+	TGM_WRITER_IN_CHANNEL,
+	TGM_WRITER_GPU_ACQUIRE,
+	TGM_WRITER_CPU_WAIT,
+};
+
+static inline enum tgm_writer_order tgm_writer_order(uint32_t self, uint32_t uid, int fence_mapped)
+{
+	if (uid == self)
+		return TGM_WRITER_IN_CHANNEL;
+	return fence_mapped != 0 ? TGM_WRITER_GPU_ACQUIRE : TGM_WRITER_CPU_WAIT;
+}
+
 /* A writer's channel as gpu.c finds it under live_lock (a channel that is gone needs no wait): the follower itself, killed
  * (its fence word passed every seqno it gave out), and its completed seqno. */
 struct tgm_fence_source {

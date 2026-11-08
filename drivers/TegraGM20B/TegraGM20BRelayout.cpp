@@ -11,6 +11,7 @@
 #include <kern/task.h>
 #include <stdint.h>
 #include <string.h>
+#include "TegraGM20BFences.h"
 #include "TegraGM20BGpu.h"
 #include "TegraGM20BRelayout.h"
 #include "TegraGM20BTiled.h"
@@ -78,11 +79,8 @@ int move(const tgm_relayout_pages &surface, const tgm_relayout_pages &rows, cons
 	if (!chan)
 		return -12;
 	tgm_relayout_wait waits[TGM_RELAYOUT_MAX_WAITS];
-	uint32_t nwaits = 0;
-	for (uint32_t i = 0; i < nwriters && nwaits < TGM_RELAYOUT_MAX_WAITS; i++) {
-		if (!tgm_writer_fence_va(r.vm, writers[i].uid, &waits[nwaits].va))
-			waits[nwaits++].seqno = writers[i].seqno;
-	}
+	const uint32_t nwaits =
+		tgm_relayout_waits(r.vm, tgm_chan_uid(chan), writers, nwriters, waits, 0);
 	tgm_mem *surfaceMem = nullptr;
 	tgm_mem *rowsMem = nullptr;
 	int ret = tgm_mem_new(r.vm, surface.pas, surface.npages, &surfaceMem);
@@ -118,6 +116,29 @@ int move(const tgm_relayout_pages &surface, const tgm_relayout_pages &rows, cons
 	return ret;
 }
 }  // namespace
+
+extern "C" uint32_t tgm_relayout_waits(struct tgm_vm *vm, uint32_t self,
+				       const struct tgm_relayout_writer *writers, uint32_t nwriters,
+				       struct tgm_relayout_wait *waits, uint32_t nwaits)
+{
+	for (uint32_t i = 0; i < nwriters; i++) {
+		uint64_t va = 0;
+		const int mapped =
+			static_cast<int>(nwaits < TGM_RELAYOUT_MAX_WAITS &&
+					 tgm_writer_fence_va(vm, writers[i].uid, &va) == 0);
+		switch (tgm_writer_order(self, writers[i].uid, mapped)) {
+		case TGM_WRITER_GPU_ACQUIRE:
+			waits[nwaits++] = {va, writers[i].seqno};
+			break;
+		case TGM_WRITER_CPU_WAIT:
+			tgm_writer_wait(writers[i].uid, writers[i].seqno);
+			break;
+		case TGM_WRITER_IN_CHANNEL:
+			break;
+		}
+	}
+	return nwaits;
+}
 
 extern "C" vm_offset_t phystokv(uint64_t pa);
 
