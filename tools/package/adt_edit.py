@@ -98,6 +98,10 @@ PRODUCT_IDENTITY = (
     'has-exclaves',
     'exclaves-enabled',
 )
+# /product/audio's keys that name the iPad's acoustic design, copied as PRODUCT_IDENTITY is. MobileGestalt's AcousticID
+# is acoustic-id, which iOS 27's VirtualAudio takes its tunings directory from (J181's 2003:
+# /Library/Audio/Tunings/AID2003). J120 has none and its tunings are named by the model.
+AUDIO_IDENTITY = ('acoustic-id',)
 
 
 def adt_parse(data: bytes, pos: int = 0) -> tuple[list, int]:
@@ -217,7 +221,12 @@ def _product(tree: list, apple: list) -> None:
             put(product, key, identity[key])
     put(product, 'model', apple_properties(apple, '/')['model'])
     put(product, 'artwork-display-gamut', DISPLAY_GAMUT.encode() + b'\0')
-    put(child(product, 'audio'), 'wireless-splitter', u32(1))  # as UniXNU's 21H461 profile
+    audio = child(product, 'audio')
+    put(audio, 'wireless-splitter', u32(1))  # as UniXNU's 21H461 profile
+    apple_audio = apple_properties(apple, '/product/audio')
+    for key in AUDIO_IDENTITY:
+        if key in apple_audio:
+            put(audio, key, apple_audio[key])
 
 
 def _radios(tree: list, bt_patch: bytes | None) -> None:

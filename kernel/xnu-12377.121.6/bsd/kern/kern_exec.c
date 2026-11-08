@@ -9111,16 +9111,16 @@ native_switch_gamut_cache(proc_t p, user_addr_t scratch, mount_t data_mount)
 }
 
 /* MobileGestalt answers what it reads of /product (GraphicsFeatureSetClass and its fallbacks, the memory class, the
- * artwork traits), of /arm-io (soc-generation, which gates its codec answers) and of the root (platform-name, its
- * HardwarePlatform) from the same build-keyed cache, so an answer made before a package changed one of them outlives the
- * change. A digest of the three nodes' own properties is kept in a marker, and the cache is dropped once whenever it
- * differs. Failures are logged only; the next boot tries again. */
+ * artwork traits), of /product/audio (acoustic-id, its AcousticID), of /arm-io (soc-generation, which gates its codec
+ * answers) and of the root (platform-name, its HardwarePlatform) from the same build-keyed cache, so an answer made
+ * before a package changed one of them outlives the change. A digest of the four nodes' own properties is kept in a
+ * marker, and the cache is dropped once whenever it differs. Failures are logged only; the next boot tries again. */
 static void
 native_switch_identity_cache(proc_t p, user_addr_t scratch, mount_t data_mount)
 {
 	static const char cache[] = "/private/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/"
 	    "Library/Caches/com.apple.MobileGestalt.plist", marker[] = "/private/var/Switch/mobilegestalt-identity";
-	static const char *const nodes[] = {"/", "/product", "/arm-io"};
+	static const char *const nodes[] = {"/", "/product", "/product/audio", "/arm-io"};
 	uint64_t digest = 0xcbf29ce484222325ULL;
 	for (unsigned int n = 0; n < sizeof(nodes) / sizeof(nodes[0]); ++n) {
 		DTEntry node;
