@@ -13,6 +13,7 @@ The kernelcache is fully stripped. Sources, strongest first:
   4. ipsw's signatures of this Darwin version, where every GOT section holding the address allows the name.
   5. pinned_names.py: functions identified by hand for one kernelcache, under the same GOT check. A pin that a
      source above already names is redundant (same function) or a conflict; the prelink refuses conflicts.
+  6. shims.py: imports our kernel answers with a function of its own, where nothing above names the address.
 Output: prelink26/kernel-names.json {address: name}, with per-source counts and conflicts.
 """
 import bisect, collections, itertools, json, os, struct, sys
@@ -25,6 +26,7 @@ import funcnames
 import kc17
 import paths
 import pinned_names
+import shims
 import sysctls
 import vnodeops
 
@@ -483,6 +485,13 @@ def main():
     cl = json.load(open(paths.work("closure.json")))
     need = sorted(set(cl["kernel_targets"]) | set(cl["kernel_branch_targets"]))
     order_violations = [(hex(a), names[a], source[a]) for a in need if a in names and a in occ and not fits(a, names[a])]
+    # after the GOT-order audit: a shim's name is ours, not the one the kexts imported
+    shim_conflicts = []
+    for a, (n, why) in shims.shims_for(KCPATH).items():
+        if a in names or n not in oname:
+            shim_conflicts.append((hex(a), n, names.get(a, "not in our kernel"), source.get(a, "")))
+        else:
+            assign(a, n, "shim")
     viol = 0
     for key, ks in secs_k.items():
         kn = [names[a] for a in ks if a in names]
@@ -494,14 +503,18 @@ def main():
     print("conflicts", len(conflicts)); [print("  ", c) for c in conflicts[:10]]
     print("signatures rejected", len(rejected_signatures), "pins redundant", len(pins_redundant),
           "pin conflicts", len(pin_conflicts), "needed names out of GOT order", len(order_violations),
-          "retracted", len(retracted))
+          "retracted", len(retracted), "shim conflicts", len(shim_conflicts))
     print("kept kexts need", len(need), "named", len(got), "by source", collections.Counter(source[a] for a in got))
     missing = [a for a in need if a not in names]
     json.dump({"names": {hex(a): n for a, n in names.items()}, "source": {hex(a): s for a, s in source.items()},
                "missing": [hex(a) for a in missing], "conflicts": conflicts, "vt_slots": vt_slots,
                "rejected_signatures": rejected_signatures, "pins_redundant": pins_redundant,
-               "pin_conflicts": pin_conflicts, "order_violations": order_violations, "retracted": retracted},
+               "pin_conflicts": pin_conflicts, "order_violations": order_violations, "retracted": retracted,
+               "shim_conflicts": shim_conflicts},
               open(paths.work("kernel-names.json"), "w"), indent=0)
+    if pin_conflicts or order_violations or shim_conflicts:
+        raise SystemExit("names.py: a pin or shim against what the kernelcache shows, or a name out of GOT order:\n" +
+                         "\n".join(map(str, pin_conflicts + order_violations + shim_conflicts)))
 
 if __name__ == "__main__":
     main()

@@ -65,9 +65,9 @@ base = next(s["va"] for s in img["segments"] if s["name"] == "__PRELINK_TEXT")
 for off in struct.unpack_from("<%dI" % n, packed, 4):
     v = struct.unpack_from("<Q", o, backed_offset(img["segments"], base + off, 8, len(o)))[0]
     res["pointer mapped" if mapped(v) else "pointer NOT mapped"] += 1
-# stub area + trampolines
+# stub area
 sa = int(rep["stub_area"]["va"], 16)
-nw = rep["stub_area"]["a64x_words"] + rep["stub_area"]["trampoline_words"]
+nw = rep["stub_area"]["a64x_words"]
 sw = struct.unpack_from("<%dI" % nw, o, backed_offset(img["segments"], sa, 4 * nw, len(o)))
 r2 = subprocess.run([paths.ARM64E, "class"], input="\n".join("%08x" % w for w in sw[:rep["stub_area"]["a64x_words"]]) + "\n",
                     capture_output=True, text=True)

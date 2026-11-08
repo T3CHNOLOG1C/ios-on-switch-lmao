@@ -33,6 +33,7 @@ SWITCH_OBJECTS = {
         ("bsd/kern/mach_loader.c", "//translate/arm64e/a64x/a64x_classify.c", [], ["12377.121.6"]),
         ("bsd/kern/mach_loader.c", "//translate/arm64e/a64x/a64x_rewrite.c", [], ["12377.121.6"]),
         ("bsd/kern/mach_loader.c", "//translate/arm64e/a64x/a64x_image.c", [], ["12377.121.6"]),
+        ("bsd/kern/kern_codesigning.c", "prelink/shims.c", [], ["12377.121.6"]),
     ],
     "iokit": [
         ("iokit/Kernel/IOUserClient.cpp", "iokit/iosurface.cpp", []),

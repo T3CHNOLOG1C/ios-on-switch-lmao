@@ -10,8 +10,8 @@ _PrelinkLinkKASLROffsets), with what an arm64e MH_FILESET source needs on top:
     kext -> kext: target + slide; kext -> kernel: our kernel's address of the same name (prelink26/names.py);
   * branches: the kernel collection builder removed the kexts' stubs (BL straight into Apple's kernel), so every
     B/BL into the kernel is re-aimed at our kernel's function of the same name;
-  * kernel targets without a name: functions go to a trampoline that panics naming the Apple address, data to
-    _switch_prelink_cut_null; both are listed in the report (nothing is silently wrong).
+  * every kernel target has a name (names.py, pinned_names.py, shims.py): the prelink refuses any it is missing,
+    with the kexts that import it.
 usage: emit26.py OUR_KERNEL KERNELCACHE OUTPUT   (writes OUTPUT and OUTPUT.json)
 """
 import base64, bisect, collections, copy, hashlib, json, os, struct, subprocess, sys, tempfile
@@ -152,7 +152,7 @@ def main():
     source = json.load(open(paths.work("kernel-names.json")))["source"]
     def exported(a, n):
         return (n in kpi or n.startswith(prefixes) or n.startswith("__ZTV") or n.endswith("gMetaClassE")
-                or source.get(hex(a)) in ("vtable", "got17", "got17+order", "symbolicator-class"))
+                or source.get(hex(a)) in ("vtable", "got17", "got17+order", "symbolicator-class", "shim"))
     names = {a: n for a, n in names.items() if exported(a, n)}
     # extents
     ext = []
@@ -251,24 +251,7 @@ def main():
     pointer_sites = []
     unresolved_fn, unresolved_data = collections.Counter(), collections.Counter()
     unresolved_by_component = collections.defaultdict(lambda: {"functions": set(), "data": set()})
-    tramp = {}                                  # apple function address -> trampoline va (unslid frame)
-    tramp_words = []
-    tramp_base = stub_va + len(stubs)
-    panic = nsym.get("_panic")
     cut_null = nsym.get("_switch_prelink_cut_null")
-    def trampoline(apple):
-        if apple not in tramp:
-            at = tramp_base + 4 * len(tramp_words)
-            tramp[apple] = at
-            msg = b"SwitchPrelink: kext called Apple kernel function 0x%x, which has no name here\n" % apple
-            msg += b"\0" * (-len(msg) % 4)
-            # adr x0, msg ; b _panic ; msg
-            imm = 8
-            tramp_words.append(0x10000000 | ((imm & 3) << 29) | (((imm >> 2) & 0x7FFFF) << 5))
-            off = panic - (at + 4 + slide)
-            tramp_words.append(0x14000000 | ((off >> 2) & 0x3FFFFFF))
-            tramp_words.extend(struct.unpack("<%dI" % (len(msg) // 4), msg))
-        return tramp[apple]
     kmod_address_sites = {(kc.plist[b]["_PrelinkKmodInfo"] & M64) + 156 for b in sel}
     kinds = collections.Counter()
     fixup_sites = set()
@@ -284,10 +267,10 @@ def main():
             if n and n in nsym:
                 new = nsym[n]; kinds["kernel"] += 1
             elif any(lo <= tgt < hi for lo, hi in kernel_text):
-                new = trampoline(tgt) + slide; unresolved_fn[tgt] += 1; kinds["kernel unresolved function"] += 1
+                new = 0; unresolved_fn[tgt] += 1; kinds["kernel unresolved function"] += 1
                 unresolved_by_component[o[2]]["functions"].add(tgt)
             else:
-                new = cut_null; unresolved_data[tgt] += 1; kinds["kernel unresolved data"] += 1
+                new = 0; unresolved_data[tgt] += 1; kinds["kernel unresolved data"] += 1
                 unresolved_by_component[o[2]]["data"].add(tgt)
         elif t and (o[2], t[2]) in CUTS:
             new = cut_null; kinds["cut"] += 1
@@ -325,12 +308,13 @@ def main():
                     if n and n in nsym and in_our_text(nsym[n]):
                         dest = nsym[n]; br["kernel"] += 1
                     else:
-                        dest = trampoline(tgt) + slide; unresolved_fn[tgt] += 1; br["kernel unresolved"] += 1
+                        unresolved_fn[tgt] += 1; br["kernel unresolved"] += 1
                         unresolved_by_component[b]["functions"].add(tgt)
+                        continue
                     off = dest - (pc + slide)
                     if not -(1 << 27) <= off < (1 << 27): raise SystemExit("branch out of range at %x" % pc)
                     struct.pack_into("<I", text, o0 + 4 * i, (w & 0xFC000000) | ((off >> 2) & 0x3FFFFFF))
-    stub_area = stubs + struct.pack("<%dI" % len(tramp_words), *tramp_words)
+    stub_area = stubs
     if len(stub_area) > stub_reserve: raise SystemExit("stub area overflow")
     text.extend(bytes(stub_va - text_lo - len(text)))
     text.extend(stub_area)
@@ -457,8 +441,7 @@ def main():
               "unresolved_kernel_data": {hex(a): c for a, c in sorted(unresolved_data.items())},
               "unresolved_by_component": {b: {k: [hex(a) for a in sorted(v)] for k, v in u.items()}
                                           for b, u in sorted(unresolved_by_component.items())},
-              "translation": xlate, "stub_area": {"va": hex(stub_va + slide), "a64x_words": len(stubs) // 4,
-                                                   "trampoline_words": len(tramp_words)},
+              "translation": xlate, "stub_area": {"va": hex(stub_va + slide), "a64x_words": len(stubs) // 4},
               "kmod_info": kmods, "sparse_index": {"va": hex(index_va), "headers": len(headers)},
               "early_security_initializers": {}, "runtime_qualified": False}
     json.dump(report, open(out_path + ".json", "w"), indent=1)
@@ -470,6 +453,11 @@ def main():
     for x in xlate.values():
         tot["words"] += x["words"]; tot["changed"] += x["changed"]; tot["stub_words"] += x["stub_words"]
     print("translation", dict(tot))
+    if unresolved_fn or unresolved_data:
+        raise SystemExit("emit26.py: kernel targets the kexts use that nothing names (names.py, pinned_names.py, "
+                         "shims.py):\n" + "\n".join("  %s: functions %s, data %s" % (b, sorted(map(hex, u["functions"])),
+                                                                                       sorted(map(hex, u["data"])))
+                                                   for b, u in sorted(unresolved_by_component.items())))
 
 
 if __name__ == "__main__":
