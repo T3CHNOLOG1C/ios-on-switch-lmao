@@ -1,7 +1,7 @@
 import HWTestCore
 import HWTestGPU
 
-enum Registry {
+public enum Registry {
     /// The GPU scenes come first: the first of them reproduces the process's first command buffer.
     static let gpuScenes: [any HWTest] = Scenes.all.map { GPUSceneTest(scene: $0) }
 
@@ -35,13 +35,13 @@ enum Registry {
     ]
 
     static let cpuAndSystem: [any HWTest] = [
-        CPUSingleTest(), CPUMultiTest(), CryptoKitTest(), CommonCryptoTest(), KeychainTest(), LocalAuthenticationTest(),
-        IdentityTest(), PowerStateTest(),
+        CPUSingleTest(), CPUMultiTest(), A64XSelfTest(), CryptoKitTest(), CommonCryptoTest(), KeychainTest(),
+        LocalAuthenticationTest(), IdentityTest(), PowerStateTest(),
     ]
 
     static let compositor: [any HWTest] = UISceneTests.all + PacingTests.all
 
-    static let all: [any HWTest] =
+    public static let all: [any HWTest] =
         gpuScenes + metal + video + images + audio + display + compositor + sensorsAndInput + connectivityAndStorage
         + cpuAndSystem
 }

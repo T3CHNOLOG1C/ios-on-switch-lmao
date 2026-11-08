@@ -2,18 +2,18 @@ import HWTestCore
 import SwiftUI
 import UIKit
 
-struct ContentView: View {
+public struct ContentView: View {
     @ObservedObject var suite: Suite
     @ObservedObject var prompter: Prompter
     @ObservedObject var stage: Stage
 
-    init(suite: Suite) {
+    public init(suite: Suite) {
         self.suite = suite
         prompter = suite.prompter
         stage = suite.stage
     }
 
-    var body: some View {
+    public var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
                 if stage.visible && !stage.fullScreen {
