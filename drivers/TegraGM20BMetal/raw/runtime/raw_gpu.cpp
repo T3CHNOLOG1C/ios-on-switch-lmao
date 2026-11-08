@@ -236,7 +236,7 @@ uint8_t *Device::alloc(Ring &r, uint32_t bytes, uint32_t align, uint64_t &va)
         if (it->begin < at + bytes && at < it->end && it->seqno) {
             stats.ringWaits++;
             r.waited = true;
-            k_.wait(channel_, it->seqno);
+            wait(it->seqno);
             it = r.inflight.erase(it);
             continue;
         }
@@ -1367,7 +1367,7 @@ void Device::selfTest()
     if (k_.exec(channel_, &seg, 1, lastSeqno_, seq)) {
         lastSeqno_ = seq;
         retire(push_, seq);
-        if (k_.wait(channel_, seq)) {
+        if (wait(seq)) {
             for (uint32_t i = 0; i < fx::kSamplings; i++) {
                 const uint8_t *cpu = chains.cpu + i * stride;
                 selfTestTegra[i] = fx::selfTestCheck(c, cpu, nullptr, false);
@@ -1931,6 +1931,45 @@ void Device::trimBackings()
 }
 
 // ---- command buffer ----
+
+// A wait the kernel refuses with no kill (the call failed, or the submit thread's reopen destroyed the channel meanwhile) is
+// no completion: the channel's status decides. A healthy channel is waited on again; one that keeps refusing is taken as
+// killed, with everything it has not completed, so nothing it may still run is released or written over as done.
+bool Device::waitFence(uint32_t seqno)
+{
+    constexpr unsigned kRefusals = 3;
+    const uint32_t ch = channel_;
+    for (unsigned refused = 0; !done(seqno);) {
+        if (k_.wait(ch, seqno))
+            break;
+        TegraGM20BAbiStatus st;
+        if (k_.lost(ch) || !k_.status(ch, st)) {  // killed, or destroyed by a reopen that kept its kill record
+            noteLost();
+            break;
+        }
+        if (st.error) {
+            k_.markLost(ch);
+            noteLost();
+            break;
+        }
+        if (int32_t(st.completed - seqno) >= 0)
+            return !lost(seqno);
+        if (++refused == kRefusals) {
+            os_log_error(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "raw"),
+                         "raw: the kernel refused %u waits on channel %u's seqno %u (%s): taken as killed", refused, ch,
+                         seqno, k_.error().c_str());
+            {
+                std::lock_guard<std::mutex> l(killedLock_);
+                killedKept_[killedNext_++ % killedKept_.size()] = {
+                    st.completed + 1, __atomic_load_n(&lastSeqno_, __ATOMIC_RELAXED), kWaitRefused};
+            }
+            k_.markLost(ch);  // begin() makes it again
+            noteLost();
+            return false;
+        }
+    }
+    return !lost(seqno);
+}
 
 void Device::noteLost()
 {

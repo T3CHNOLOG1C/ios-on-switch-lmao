@@ -749,9 +749,7 @@ public:
     // In the kernel, on the fence interrupt. False: the submission failed, the channel died with it in flight (reopen).
     bool wait(uint32_t seqno)
     {
-        if (!done(seqno) && !k_.wait(channel_, seqno) && k_.lost(channel_))
-            noteLost();
-        return !lost(seqno);
+        return done(seqno) ? !lost(seqno) : waitFence(seqno);
     }
 
     bool lost(uint32_t seqno) const
@@ -761,6 +759,10 @@ public:
         return lostAny_.load(std::memory_order_acquire) &&
                int32_t(lostThrough_.load(std::memory_order_relaxed) - seqno) >= 0;
     }
+
+    // A kill record's error the device writes itself (waitFence): the kernel kept refusing to wait on a channel it called
+    // healthy
+    static constexpr uint32_t kWaitRefused = 0x100;
 
     // Why the kernel killed the channel of the last seqno lost() named (its kill record's error), else Kernel::lostError and
     // lostFaultVa: the channel last found dead
@@ -1047,6 +1049,7 @@ private:
     uint32_t contextWords() const;
     void emitContext(Push &p);
     bool reopen();
+    bool waitFence(uint32_t seqno);
     void noteLost();
     // the last seqno of a channel that died: it and every one before it failed (or completed before; not told apart),
     // where the kernel writes no kill records

@@ -11,6 +11,8 @@
 //   ChannelCreate or context Exec the kernel refused gives no command buffer, and the next begin() tries again.
 // - Programs placed in the shader heap are behind an instruction-cache invalidate before any draw runs them, even when the
 //   kernel refused the submission whose prologue was to invalidate it.
+// - A fence wait the kernel refuses with no kill is no completion: it is waited again, and one the kernel keeps refusing is a
+//   failure (the GPU runs each submission for MOCK_GPU_US, so it is in flight when waited for).
 // usage: faultcheck <pack.bin>
 #include <cstdio>
 #include <cstdlib>
@@ -222,6 +224,31 @@ void invalidateRefused(raw::Device &dev, const Expect &expect)
     dev.destroyBuffer(b);
 }
 
+void waitRefused(raw::Device &dev, const Expect &expect)
+{
+    raw::Buffer a, b;
+    if (!dev.createBuffer(4096, a) || !dev.createBuffer(4096, b)) {
+        expect(false, "two buffers");
+        return;
+    }
+    const uint32_t once = copy(dev, a, b);
+    mock_iokit_fail_next(TegraGM20BMethodWaitFence, 1, kIOReturnAborted);
+    const bool waited = dev.wait(once);
+    expect(once && waited && dev.done(once), "a wait refused once answers when the fence has passed, and completed");
+    const uint32_t stuck = copy(dev, a, b);
+    mock_iokit_fail_next(TegraGM20BMethodWaitFence, 1000, kIOReturnAborted);
+    const bool answered = dev.wait(stuck);
+    const bool passed = dev.done(stuck);
+    mock_iokit_fail_next(TegraGM20BMethodWaitFence, 0, 0);
+    std::printf("a wait refused for good: %s, fence %s\n", answered ? "completed" : "failed",
+                passed ? "passed" : "not passed");
+    expect(stuck && (!answered || passed), "one refused for good never reads as completed before its fence");
+    const uint32_t next = copy(dev, a, b);
+    expect(next && dev.wait(next), "the next command buffer completes");
+    dev.destroyBuffer(a);
+    dev.destroyBuffer(b);
+}
+
 }  // namespace
 
 int main(int argc, char **argv)
@@ -231,6 +258,7 @@ int main(int argc, char **argv)
         return 2;
     }
     setenv("RAWCAP_LOG", "/dev/null", 0);  // the mock decodes every submission
+    setenv("MOCK_GPU_US", "20000", 0);
     raw::Device dev;
     std::string err;
     if (!dev.open(argv[1], 0, err)) {
@@ -252,6 +280,7 @@ int main(int argc, char **argv)
     unboundStream(dev, pass, expect);
     reopenRefused(dev, expect);
     invalidateRefused(dev, expect);
+    waitRefused(dev, expect);
     if (failures) {
         std::printf("FAIL: faultcheck (%d)\n", failures);
         return 1;
