@@ -1,0 +1,23 @@
+# The _MTLDevice ABI of each IPSW kind (kinds/<kind>.json): the base class's instance size and its limits table's field
+# offsets, which the frontend's device subclass depends on. extract.py reads them out of a kind's Metal.framework.
+load("@rules_python//python:py_binary.bzl", "py_binary")
+load("@rules_python//python:py_test.bzl", "py_test")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+exports_files(glob(["kinds/*.json"]))
+
+py_binary(
+    name = "extract",
+    srcs = ["extract.py"],
+)
+
+# LimitsTable.h writes every field each kind's accessors read, at that kind's offset.
+py_test(
+    name = "limits_test",
+    srcs = ["limits_test.py"],
+    data = glob(["kinds/*.json"]) + ["//drivers/NativeMetal:LimitsTable.h"],
+)
