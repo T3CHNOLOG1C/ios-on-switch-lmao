@@ -222,9 +222,10 @@ def raw_bound(simple: list[dict], programs: dict[str, dict]) -> tuple[list[dict]
 
 
 # Why a probed state may stay out of the pack (the raw path hands it to m2v): what its draw needs that the raw path
-# draws otherwise. Any other reason is a generator fault and fails the build.
+# draws otherwise. Any other reason is a generator fault and fails the build, m2v failing a state's draw among them: its
+# pipeline did not build (a compiler regression: 39 RenderBox states once failed in NAK's encoder), and the device would
+# draw nothing for it either.
 EXPECTED_SKIPS = (
-    'm2v failed its draw',
     'draws',
     'dispatches',
     'storage form',
@@ -322,16 +323,20 @@ def split_probes(probes: list[dict]) -> tuple[list[dict], list[tuple[dict, str]]
     return simple, skipped
 
 
-# a color target's own registers (per-target blend 0x1e00 + 0x20 j, SET_CT_WRITE 0x1a00 + 4 j) mean nothing for a
-# state without target j: what the probe saw there is an earlier state's leftover. Not that state's, so neither in
-# its blob nor in deciding what varies (r8-rawca: two states with a third target made targets 2's blend "vary" for
-# every other state)
+# a color target's own registers (per-target blend 0x1e00 + 0x20 j, SET_CT_WRITE 0x1a00 + 4 j, SET_BLEND 0x1360 + 4 j)
+# mean nothing for a state without target j: what the probe saw there is an earlier state's leftover. Not that state's,
+# so neither in its blob nor in deciding what varies (r8-rawca: two states with a third target made targets 2's blend
+# "vary" for every other state)
 def targets(key: str) -> int:
     return sum(1 for t in key.split() if t[:1] == 'c' and t[1:2].isdigit() and '=' in t)
 
 
 def foreign(m: int, n: int) -> bool:
-    return (0x1E00 <= m < 0x1F00 and (m - 0x1E00) // 0x20 >= n) or (0x1A00 <= m < 0x1A20 and (m - 0x1A00) // 4 >= n)
+    return (
+        (0x1E00 <= m < 0x1F00 and (m - 0x1E00) // 0x20 >= n)
+        or (0x1A00 <= m < 0x1A20 and (m - 0x1A00) // 4 >= n)
+        or (0x1360 <= m < 0x1380 and (m - 0x1360) // 4 >= n)
+    )
 
 
 def split_registers(simple: list[dict], post: dict[int, dict[int, int]]) -> tuple[list[int], dict[int, int]]:
@@ -553,10 +558,9 @@ def main() -> None:
         n = targets(p['key'])
         p['records'][0]['regs'] = {m: v for m, v in p['records'][0]['regs'].items() if not foreign(m, n)}
     varying, baseline = split_registers(simple, post)
-    barriers = sum(1 for p in simple if p['form'])
     report.append(
-        f'{len(probes)} records probed, {len(simple)} taken ({barriers} of them barrier forms of storage-form states), '
-        f'{len(skipped)} set aside'
+        f'{len(probes)} records probed, {len(simple)} taken ({sum(1 for p in simple if p["form"])} of them barrier '
+        f'forms of storage-form states), {len(skipped)} set aside'
     )
     names = ' '.join(f'{m:x}' for m in varying)
     report.append(f'{len(varying)} per-pipeline registers: {names}')

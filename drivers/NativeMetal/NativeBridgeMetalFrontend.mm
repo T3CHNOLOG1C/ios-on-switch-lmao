@@ -31,12 +31,14 @@
 #include <execinfo.h>
 #include <mach/mach.h>
 #include <mach/mach_time.h>
+#include <os/proc.h>
 #include "bridge/NativeMetalObjects.h"
 #include "NativeBridgeMetalFrontend.h"
 #include "AsyncPipelines.h"
 #include "GpuMemoryRelease.h"
 #include "ImageFilterLink.h"
 #include "LimitsTable.h"
+#include "MetalABI.h"
 #include "QueuePriority.h"
 #include "SurfaceLayout.h"
 #include "SwitchFrameTimeline.h"
@@ -523,6 +525,20 @@ static void waitForResource(id resource);
         if (!nmb_##kind##_make_aliasable(_handle))                          \
             NBLOG(@"native-metal: makeAliasable refused: %@", lastError()); \
     }
+// Every allocation of this device is resident for its whole life (NBResidencySet), so naming a residency set changes nothing
+// a queue, command buffer or encoder does.
+#define NB_RESIDENCY_SETS(verb)                                                                                      \
+    -(void)verb##ResidencySet : (id<MTLResidencySet>)set API_AVAILABLE(ios(18.0), macos(15.0))                       \
+    {                                                                                                                \
+        (void)set;                                                                                                   \
+    }                                                                                                                \
+    -(void)verb##ResidencySets : (const id<MTLResidencySet> _Nonnull[])sets count : (NSUInteger)count API_AVAILABLE( \
+                                                                                        ios(18.0), macos(15.0))      \
+    {                                                                                                                \
+        (void)sets;                                                                                                  \
+        (void)count;                                                                                                 \
+    }
+
 @interface NBBuffer : NBObject
 @property (nonatomic) NmbBuffer *handle;
 @property (nonatomic) MTLResourceOptions options;
@@ -2558,6 +2574,8 @@ static void waitForResource(id resource)
 
 @implementation NBEncoder
 
+NB_RESIDENCY_SETS(use)
+
 - (void)dealloc
 {
     if (_handle)
@@ -3644,6 +3662,15 @@ static void completed(void *context);
 static void scheduled(void *context);
 @implementation NBCommandBuffer
 
+NB_RESIDENCY_SETS(use)
+
+// The kernel charges GPU time to the task that submits the work: there is no other task to name.
+- (void)setResponsibleTaskIDs:(const uint32_t *)taskIDs count:(uint32_t)count
+{
+    (void)taskIDs;
+    (void)count;
+}
+
 // The planes' codes into `standIn` before a pass that loads it: one draw reading the texture (Metal's tile of the attachment).
 - (void)loadStandIn:(NBTwoPlaneStandIn *)standIn from:(id<MTLTexture>)planes
 {
@@ -4535,6 +4562,9 @@ static void completed(void *context)
 }
 
 @implementation NBQueue
+
+NB_RESIDENCY_SETS(add)
+NB_RESIDENCY_SETS(remove)
 
 - (void)dealloc
 {
@@ -5555,8 +5585,7 @@ static NSData *codeGenRequest(uint32_t type, const std::vector<uint8_t> &request
     static dispatch_once_t loaded, created;
     static std::mutex lock;
     dispatch_once(&loaded, ^{
-        void *library =
-            dlopen("/System/Library/PrivateFrameworks/MTLCompiler.framework/MTLCompiler", RTLD_NOW | RTLD_LOCAL);
+        void *library = dlopen(SWITCH_METAL_COMPILER, RTLD_NOW | RTLD_LOCAL);
         create = library ? (void *(*)(const char *))dlsym(library, "MTLCodeGenServiceCreate") : nullptr;
         build = library ? (void (*)(void *, void *, uint32_t, const void *, size_t, NBCodeGenReply))dlsym(
                               library, "MTLCodeGenServiceBuildRequest")
@@ -5776,6 +5805,105 @@ static void fillLimits(id device)
 static void fillLimits(id)
 {}  // the host's _MTLDevice has its own layout
 #endif
+
+// Every allocation of this device is resident from its creation to its release (one GPU address space, no paging), so a
+// residency set keeps its allocations for the client and asks nothing of the GPU. _MTLDevice's own
+// newResidencySetWithDescriptor: asks the driver's allocResidencySet, which the base class answers nil, and returns nil
+// with no error.
+API_AVAILABLE(ios(18.0), macos(15.0))
+@interface NBResidencySet : NBObject <MTLResidencySet>
+@end
+@implementation NBResidencySet {
+    std::mutex _lock;
+    NSMutableArray<id<MTLAllocation>> *_pending;
+    NSArray<id<MTLAllocation>> *_committed;
+}
+
+@dynamic device, label;
+
+- (instancetype)initWithDescriptor:(MTLResidencySetDescriptor *)descriptor
+{
+    if ((self = [super init])) {
+        self.label = descriptor.label;
+        _pending = [NSMutableArray arrayWithCapacity:descriptor.initialCapacity];
+        _committed = @[];
+    }
+    return self;
+}
+
+- (uint64_t)allocatedSize
+{
+    std::lock_guard<std::mutex> hold(_lock);
+    uint64_t bytes = 0;
+    for (id<MTLAllocation> allocation in _committed)
+        bytes += allocation.allocatedSize;
+    return bytes;
+}
+
+- (void)addAllocation:(id<MTLAllocation>)allocation
+{
+    std::lock_guard<std::mutex> hold(_lock);
+    if (allocation && ![_pending containsObject:allocation])
+        [_pending addObject:allocation];
+}
+
+- (void)addAllocations:(const id<MTLAllocation> _Nonnull[])allocations count:(NSUInteger)count
+{
+    for (NSUInteger i = 0; i < count; i++)
+        [self addAllocation:allocations[i]];
+}
+
+- (void)removeAllocation:(id<MTLAllocation>)allocation
+{
+    std::lock_guard<std::mutex> hold(_lock);
+    [_pending removeObject:allocation];
+}
+
+- (void)removeAllocations:(const id<MTLAllocation> _Nonnull[])allocations count:(NSUInteger)count
+{
+    for (NSUInteger i = 0; i < count; i++)
+        [self removeAllocation:allocations[i]];
+}
+
+- (void)removeAllAllocations
+{
+    std::lock_guard<std::mutex> hold(_lock);
+    [_pending removeAllObjects];
+}
+
+- (BOOL)containsAllocation:(id<MTLAllocation>)allocation
+{
+    std::lock_guard<std::mutex> hold(_lock);
+    return [_pending containsObject:allocation];
+}
+
+- (NSArray<id<MTLAllocation>> *)allAllocations
+{
+    std::lock_guard<std::mutex> hold(_lock);
+    return [_pending copy];
+}
+
+- (NSUInteger)allocationCount
+{
+    std::lock_guard<std::mutex> hold(_lock);
+    return _pending.count;
+}
+
+- (void)commit
+{
+    std::lock_guard<std::mutex> hold(_lock);
+    _committed = [_pending copy];
+}
+
+- (void)requestResidency
+{}
+
+- (void)endResidency
+{}
+
+@end
+
+static uint64_t askAnswer(SEL cmd, NSUInteger arg);
 
 @interface NBDeviceMethods : NSObject
 @end
@@ -6223,6 +6351,63 @@ static void fillLimits(id)
     NBEvent *event = [NBEvent new];
     event.handle = handle;
     return (id<MTLEvent>)event;
+}
+
+// _MTLDevice's own versions of these make Metal's generic _MTLSharedEvent, which this device's command buffers cannot signal
+// or wait on. Only an in-process event with no options is this device's to make; QuartzCore takes nil from
+// newSharedEventWithOptions: as the absent feature and keeps its own path.
+- (id<MTLSharedEvent>)newSharedEventWithOptions:(NSInteger)options
+{
+    if (!options)
+        return [self newSharedEvent];
+    NBREFUSE("sharedevent.options", uint64_t(options), @"newSharedEventWithOptions:%ld: no shared event with options",
+             (long)options);
+    return nil;
+}
+
+- (id<MTLSharedEvent>)newSharedEventWithHandle:(MTLSharedEventHandle *)handle
+{
+    (void)handle;
+    NBREFUSE("sharedevent.handle", 0, @"newSharedEventWithHandle:: no cross-process shared events");
+    return nil;
+}
+
+- (id<MTLSharedEvent>)newSharedEventWithMachPort:(mach_port_t)port
+{
+    (void)port;
+    NBREFUSE("sharedevent.handle", 1, @"newSharedEventWithMachPort:: no cross-process shared events");
+    return nil;
+}
+
+- (id<MTLResidencySet>)newResidencySetWithDescriptor:(MTLResidencySetDescriptor *)descriptor
+                                               error:(NSError **)error API_AVAILABLE(ios(18.0), macos(15.0))
+{
+    if (error)
+        *error = nil;
+    return [[NBResidencySet alloc] initWithDescriptor:descriptor];
+}
+
+// A texture buffer is a linear texture over its buffer: the runtime places both at the same alignment.
+- (NSUInteger)minimumTextureBufferAlignmentForPixelFormat:(MTLPixelFormat)format
+{
+    return (NSUInteger)askAnswer(@selector(minimumLinearTextureAlignmentForPixelFormat:), format);
+}
+
+- (NSUInteger)currentAllocatedSize
+{
+    uint64_t memory[3] = {};
+    return gDevice && nmb_device_memory(gDevice, memory) ? memory[0] : 0;
+}
+
+// This device's memory is charged to the process that maps it (its jetsam footprint), so what it can still hold without
+// paging is what it holds now and what the process may still take.
+- (uint64_t)recommendedMaxWorkingSetSize
+{
+#if TARGET_OS_IPHONE
+    return [self currentAllocatedSize] + os_proc_available_memory();
+#else
+    return NSProcessInfo.processInfo.physicalMemory;
+#endif
 }
 
 - (id<MTLSharedEvent>)newSharedEvent
