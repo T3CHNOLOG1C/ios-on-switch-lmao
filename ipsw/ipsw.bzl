@@ -326,6 +326,10 @@ def _ipsw_volumes_header_impl(ctx):
     lines = ["// IPSW kind {}'s build and volumes (ipsw/pins.bzl), as the image builder lays them out.".format(kind)]
     lines += ctx.attr.lines
     lines.append("#define SWITCH_IPSW_BUILD \"{}\"".format(IPSWS[kind]["build"]))
+
+    # The preprocessor cannot compare strings: per-kind data selects on these.
+    lines.append("#define SWITCH_IPSW_KIND_{} 1".format(IPSWS[kind]["build"]))
+    lines.append("#define SWITCH_IPSW_DEVICE_{} 1".format(IPSWS[kind]["device_class"].upper()))
     for macro, key in (
         ("SWITCH_OS_VOLUME_UUID", "os_volume_uuid"),
         ("SWITCH_SYSTEM_CRYPTEX_UUID", "system_cryptex_uuid"),
@@ -341,7 +345,8 @@ def _ipsw_volumes_header_impl(ctx):
 
 ipsw_volumes_header = rule(
     implementation = _ipsw_volumes_header_impl,
-    doc = "A C header naming the selected kind's build (SWITCH_IPSW_BUILD), System volume and cryptexes " +
+    doc = "A C header naming the selected kind's build (SWITCH_IPSW_BUILD; SWITCH_IPSW_KIND_<build> and " +
+          "SWITCH_IPSW_DEVICE_<DEVICE CLASS> as 1 for #if), System volume and cryptexes " +
           "(SWITCH_OS_VOLUME_UUID, SWITCH_{SYSTEM,APP}_CRYPTEX_{UUID,IMAGE}): what the kernel finds and mounts at boot.",
     attrs = {
         "out": attr.output(mandatory = True),
