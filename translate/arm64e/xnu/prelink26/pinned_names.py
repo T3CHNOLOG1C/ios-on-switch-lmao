@@ -362,6 +362,17 @@ NAMES = {
     0xFFFFFFF00AC407D8: '_decmpfs_ctx',
     0xFFFFFFF00AC57D18: '_tk_rawcc',
     0xFFFFFFF00A682FFC: '_ttyinput',
+    # apfs, read from the code: vn_pathconf (21H461's apfs import there); build_path_with_parent with flags 0 and
+    # the current context, EINVAL for a negative length; the mount flags cleared but MNT_VISFLAGMASK's two bits;
+    # UT_FS_ENTITLED_RESERVE_ACCESS (uthread 0x20000) or P_VFS_IOPOLICY_ENTITLED_RESERVE_ACCESS (0x2000).
+    0xFFFFFFF00A31BE2C: '_vn_pathconf',
+    0xFFFFFFF00A2F19C4: '_vn_getpath_fsenter_with_parent',
+    0xFFFFFFF00A320BEC: '_vfs_clearflags',
+    0xFFFFFFF00A32251C: '_vfs_context_allow_entitled_reserve_access',
+    # MAC framework entries in apfs's GOT between lck_spin_unlock and mach_absolute_time, by the mac_policy_ops
+    # slot each calls: 0x440 is mpo_mount_check_snapshot_mount (six arguments), 0x8a8 mpo_vnode_check_setflags.
+    0xFFFFFFF00A939C98: '_mac_mount_check_snapshot_mount',
+    0xFFFFFFF00A937794: '_mac_vnode_check_setflags',
 }
 
 
