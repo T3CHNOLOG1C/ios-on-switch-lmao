@@ -5,6 +5,7 @@
 #include <IOKit/IOLib.h>
 #include <IOKit/IOLocks.h>
 #include <kern/clock.h>
+#include "../SwitchTime/SwitchTime.h"
 
 namespace {
 constexpr uint64_t kPage = 4096, kGrain = 64 << 10;
@@ -12,13 +13,6 @@ constexpr uint64_t kPage = 4096, kGrain = 64 << 10;
 IOLock *gLock;
 switch_scratch *gKept;
 uint64_t gKeptBytes, gHeld, gPeak;
-
-uint64_t nowNs()
-{
-    uint64_t ns = 0;
-    absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
-    return ns;
-}
 
 // The one place a scratch's memory is charged: to `owner`'s graphics footprint
 IOReturn charge(IOBufferMemoryDescriptor *memory, task_t owner)
@@ -105,7 +99,7 @@ switch_scratch *switch_scratch_get(uint64_t bytes, task_t owner)
             break;
         }
     }
-    switch_scratch *drop = trim(nowNs());
+    switch_scratch *drop = trim(switch_now_ns());
     IOLockUnlock(gLock);
     while (drop) {
         switch_scratch *next = drop->next;
@@ -138,7 +132,7 @@ void switch_scratch_put(switch_scratch *s)
     s->memory->setPurgeable(kIOMemoryPurgeableVolatile, &was);
     IOLockLock(gLock);
     gHeld -= s->bytes;
-    s->idleSince = nowNs();
+    s->idleSince = switch_now_ns();
     s->next = gKept;
     gKept = s;
     gKeptBytes += s->bytes;

@@ -2788,7 +2788,7 @@ static id<MTLSamplerState> clampedSampler(id<MTLSamplerState> s, float lodMin, f
     (void)stages;
 }
 
-// A barrier on some resources is the scope barrier over all of them
+// A barrier on some resources is the scope barrier over all of them (iOS's texture scope covers render attachments)
 - (void)memoryBarrierWithResources:(const id<MTLResource> __unsafe_unretained[])resources
                              count:(NSUInteger)count
                        afterStages:(MTLRenderStages)after
@@ -7255,7 +7255,7 @@ id<MTLDevice> raw_metal_device_open(const char *packPath, uint64_t stack, id<MTL
         const void *from = ((const void *(*)(id, SEL))objc_msgSend)(fallback, limits);
         void *to = ((void *(*)(id, SEL))objc_msgSend)(r->device, limits);
         if (from && to && from != to) {
-            memcpy(to, from, kLimitsTableBytes);
+            memcpy(to, from, kMTLDeviceLimitsBytes);
             fillLimitsFromMethods(r->device, static_cast<uint8_t *>(to), [](const LimitField &field, LimitFill how) {
                 if (how != LimitFill::Filled)
                     SWITCH_REFUSE_DETAIL("raw", "limits.layout", field.offset,

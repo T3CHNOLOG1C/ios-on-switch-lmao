@@ -80,6 +80,13 @@ inline bool depthStencil()
     return getenv("FRAME_DS") != nullptr;
 }
 
+// FRAME_QC27: iOS 27's Core Animation states (caspec27.py), whose second attachment is RGBA16Float and whose blur passes
+// draw into RGBA16Float
+inline bool qc27()
+{
+    return getenv("FRAME_QC27") != nullptr;
+}
+
 // FRAME_XR: the blur passes draw Core Animation's extended-range blur states (RGB10A8_2P_XR10, format 550, both attachments) into
 // targets of that format, each sampling the one before; every fourth main draw samples the last of them
 inline bool extendedRange()
@@ -116,9 +123,12 @@ inline std::vector<State> states(const char *corpusPath)
         const bool blurLine = l.find("v downsample_blur_vert_lph") != std::string::npos,
                    xrBlur = extendedRange() && blurLine;
         const char *c0 = xrBlur                    ? " c0=550:"
+                         : qc27() && blurLine      ? " c0=115:"
                          : snapshot() && !blurLine ? " c0=542:"
                                                    : " c0=80:",
-                   *c1 = xrBlur ? " c1=550:" : " c1=80:";
+                   *c1 = xrBlur   ? " c1=550:"
+                         : qc27() ? " c1=115:"
+                                  : " c1=80:";
         if (l.find(c0) == std::string::npos || l.find(c1) == std::string::npos ||
             (a3() && !xrBlur ? l.find(" c2=55:") == std::string::npos || l.find(" c3=") != std::string::npos
                              : l.find(" c2=") != std::string::npos))
@@ -207,12 +217,12 @@ inline TexDesc texture(int t)
     case FB1:
         return {pitchShapes("fb") ? 1272 : 1280, 720, true, false, true, snapshot() ? 542u : 80u};
     case MEMORYLESS:
-        return {1280, 720, false, true, true};
+        return {1280, 720, false, true, true, qc27() ? 115u : 80u};
     case BLUR0:
     case BLUR1:
-        return {320, 180, false, false, true, extendedRange() ? 550u : 80u};
+        return {320, 180, false, false, true, extendedRange() ? 550u : qc27() ? 115u : 80u};
     case BLUR_MEMORYLESS:
-        return {320, 180, false, true, true, extendedRange() ? 550u : 80u};
+        return {320, 180, false, true, true, extendedRange() ? 550u : qc27() ? 115u : 80u};
     case IMAGE0:
         return {1280, 720, true, false, false};
     case A3TARGET:

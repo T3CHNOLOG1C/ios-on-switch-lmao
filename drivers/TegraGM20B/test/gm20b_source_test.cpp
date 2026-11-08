@@ -149,7 +149,7 @@ TEST(GM20BPoolPolicySource, SystemBosTakeAndReturnSpares)
 		     "p->ready[c] = s;");
 	const std::string zeros =
 		flat(definition(client(), "void cleanZeros(void *va, uint64_t bytes, bool zero)"));
-	expectBefore(zeros, "bzero(va, bytes);", "dc civac");
+	expectBefore(zeros, "bzero(va, bytes);", "switch_dcache_clean_invalidate(va, bytes);");
 	// A spare is only ever a BO's pages once no task maps them, nothing imports them (the view's release waits for
 	// every import's UPL) and the freeing connection's channels finished (reap).
 	const std::string orphans = flat(definition(client(), "void releaseOrphans()"));
@@ -746,4 +746,111 @@ TEST(GM20BChannelSource, SeqnoCursorsStartAtTheSlotsFence)
 		EXPECT_THAT(create,
 			    HasSubstr(std::string("chan->") + cursor + " = chan->submitted;"))
 			<< cursor;
+}
+
+// nvkm_chan_error preempts from the interrupt pass with interrupts off under the channel's spinlock: the wrapped preempt
+// decides by tgm_preempt_how and waits for a preempt in flight only in thread context.
+TEST(GM20BSchedSource, ThePreemptWaitsOnlyWithInterruptsOn)
+{
+	const std::string preempt =
+		flat(definition(SourceText("../sched.c"),
+				"static void sched_chan_preempt(struct nvkm_chan *chan)"));
+	EXPECT_THAT(preempt, HasSubstr("switch (tgm_preempt_how(irqs_disabled(), pending)) {"));
+	expectBefore(preempt, "case TGM_PREEMPT_RECOVER: nvkm_runl_rc_cgrp(chan->cgrp); return;",
+		     "case TGM_PREEMPT_AFTER_WAIT:");
+	expectBefore(preempt, "case TGM_PREEMPT_AFTER_WAIT:", "nvkm_wait_msec(");
+	expectBefore(preempt, "nvkm_wait_msec(", "case TGM_PREEMPT_NOW:");
+	EXPECT_EQ(Count(preempt, "nvkm_wait_msec("), 1u);
+}
+
+// Linux's work items, as kits/SwitchLinux's calls (whose host test holds that a call never runs twice at once): nvkm's
+// shim allocates them there, a flush runs one still queued, and irqs_disabled() answers.
+TEST(GM20BShimSource, WorkItemsKeepLinuxSemantics)
+{
+	const std::string nvxnu = flat(SourceText("../shim/include/nvxnu.h"));
+	EXPECT_THAT(nvxnu, HasSubstr("return switch_linux_call_alloc(fn, arg);"));
+	EXPECT_THAT(nvxnu, HasSubstr("return switch_linux_irqs_disabled() ? 0 : 1;"));
+	const std::string os = flat(SourceText("../shim/include/nvif/os.h"));
+	EXPECT_THAT(
+		os,
+		HasSubstr("static inline bool flush_work(struct work_struct *w) { return "
+			  "switch_linux_call_flush(w->thread_call, nvxnu_work_trampoline, w); }"));
+	EXPECT_THAT(os, HasSubstr("#define irqs_disabled() (!nvxnu_irqs_enabled())"));
+}
+
+// Rail-down stops what reaches the GPU from callouts as system sleep does: the deadline's holds released while the GPU
+// is up and its callouts stopped before the fences drain, back at the rail-up; a context-switch tick's work stopped once
+// interrupts are off.
+TEST(GM20BRailSource, RailDownStopsTheGpuCallouts)
+{
+	const std::string down = flat(definition(gpu(), "int tgm_rail_down(void)"));
+	expectBefore(down, "sleep_gate();", "tgm_deadline_suspend();");
+	expectBefore(down, "tgm_deadline_suspend();", "sleep_fences();");
+	expectBefore(flat(definition(gpu(), "static void rail_up_locked(const void *site)")),
+		     "__atomic_store_n(&gpu.railed, 0, __ATOMIC_SEQ_CST);",
+		     "tgm_deadline_resume();");
+	const std::string power = flat(definition(gpu(), "static void sleep_power_down(void)"));
+	expectBefore(power, "nvxnu_irq_suspend();", "tgm_recover_suspend();");
+	expectBefore(power, "tgm_recover_suspend();", "regulator_disable(");
+}
+
+// IOGPUDeviceSetDisplayParams is scalar method 0x21 in iOS 17's IOGPU.framework and IOConnectTrap2 index 8 in iOS 27's;
+// XNU answers a trap index with no trap behind it kIOReturnSuccess, so the device connection serves index 8 and refuses
+// every other by name instead of letting it pass unseen.
+TEST(GM20BDeviceSource, DisplayParamsArriveByMethodAndByTrap)
+{
+	const std::string client = SourceText("../TegraGM20BDeviceClient.cpp");
+	EXPECT_THAT(
+		flat(definition(client, "IOExternalTrap "
+					"*TegraGM20BDeviceUserClient::getTargetAndTrapForIndex(")),
+		HasSubstr("*targetP = this; if (index == kSetDisplayParamsTrap) return "
+			  "&displayParams; switch_refusal_k("));
+	EXPECT_THAT(flat(client), HasSubstr("constexpr UInt32 kSetDisplayParamsTrap = 8;"));
+	EXPECT_THAT(
+		flat(definition(client, "IOReturn TegraGM20BDeviceUserClient::setDisplayParams(")),
+		HasSubstr("storeDeadline(reinterpret_cast<uint64_t>(nextVblank), "
+			  "reinterpret_cast<uint64_t>(interval));"));
+	EXPECT_THAT(flat(client),
+		    HasSubstr("case kSetDisplayParams: if (arguments->scalarInputCount != "
+			      "2) return kIOReturnBadArgument; storeDeadline("));
+}
+
+// The tiling move and the copy engine's plane copies follow the surface's running writers through tgm_relayout_waits:
+// acquires in their own push (TegraGM20BRelayout.h tgm_relayout_follow), a refusal for one they cannot acquire on, never a
+// CPU wait. The kernel's own client channels' fences sit in the fence view's last slot, which every space maps and the
+// connections' allocator never hands out, so a copy can acquire on the copy engine's writes.
+TEST(GM20BRelayoutSource, KernelCopiesOrderOnTheGpu)
+{
+	const std::string relayout = SourceText("../TegraGM20BRelayout.cpp");
+	const std::string waits =
+		flat(definition(relayout, "extern \"C\" uint32_t tgm_relayout_waits("));
+	EXPECT_THAT(waits,
+		    HasSubstr("nwaits = tgm_relayout_follow(self, running, fenceVa, n, waits, "
+			      "nwaits, &refused);"));
+	EXPECT_THAT(
+		waits,
+		HasSubstr("\"gpu-order\", \"writer-unordered\", \"a kernel copy goes ahead of"));
+	EXPECT_THAT(waits, Not(HasSubstr("tgm_writer_wait(")));
+	EXPECT_THAT(flat(definition(relayout, "int move(")),
+		    HasSubstr("tgm_relayout_waits(r.vm, tgm_chan_uid(chan), writers, nwriters, "
+			      "waits, 0)"));
+	EXPECT_THAT(
+		flat(definition(relayout, "bool openSpace()")),
+		HasSubstr("tgm_fence_kernel(TGM_FENCE_KERNEL_RELAYOUT, &r.fenceCpu, &fencePage, "
+			  "&fenceOffset)"));
+	const std::string copy = flat(SourceText("../TegraGM20BCopy.cpp"));
+	EXPECT_THAT(copy, HasSubstr("n = tgm_relayout_waits(gCopy.vm, self, w, found, waits, n);"));
+	EXPECT_THAT(copy,
+		    HasSubstr("tgm_fence_kernel(TGM_FENCE_KERNEL_COPY, &c.fenceCpu, &fencePage, "
+			      "&fenceOffset)"));
+	const std::string fences = flat(gpu());
+	EXPECT_THAT(fences, HasSubstr("#define TGM_FENCE_PAGES (TGM_FENCE_USER_PAGES + 1)"));
+	EXPECT_THAT(flat(definition(
+			    gpu(), "int tgm_fence_page_get(volatile uint32_t **va, uint64_t *pa)")),
+		    HasSubstr("i = (fences.next + n) % TGM_FENCE_USER_PAGES;"));
+	EXPECT_THAT(flat(definition(gpu(), "int tgm_fence_kernel(")),
+		    HasSubstr("TGM_FENCE_USER_PAGES * TGM_FENCE_SLOT + which * sizeof(struct "
+			      "TegraGM20BAbiFence);"));
+	EXPECT_THAT(flat(definition(gpu(), "int tgm_writer_fence_va(")),
+		    HasSubstr("off < TGM_FENCE_BYTES"));
 }

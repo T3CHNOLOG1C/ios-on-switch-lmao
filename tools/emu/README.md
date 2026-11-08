@@ -8,14 +8,21 @@ device's.
 ```sh
 bazel run //tools/emu:boot -- --kind=ios27                   # build //:boot for iOS 27, boot it for 120 s
 bazel run //tools/emu:boot -- --kind=ios17 --sd none --seconds 60 --bootargs -v
+bazel run //tools/emu:check -- --kind=ios17 --until launchd  # a gate: 0 at the milestone, 1 on a panic, 2 on timeout
 bazel run //tools/emu:build                                  # only the emulator: prints its path
 ```
 
-`--kind` builds `//:boot` with `--//ipsw:kind` in the output base `bazel run` itself uses. `--bazel-flag` passes
-flags to that build (for example `--bazel-flag=--config=agent`). `--package DIR` boots an existing `//:boot` output
-instead, and `--kernel` names its prelinked kernel for the live log. `--icount` makes guest time follow executed
-instructions: slower, since it runs one host thread, but a busy Mac can no longer expire a driver's timeout before the
-device it waits for has run. The run directory is `out/emu/<kind>-<time>` unless `--out` names one:
+`check` watches the live kernel log and the panic record every 3 s and stops at the first of the milestone
+(`cores`, `display`, `sd`, `root`, `launchd`), a panic or `--timeout`. It prints the panic line or the last kernel
+lines, and keeps the run directory. iOS 17 reaches `launchd` in about 10 s of wall time.
+
+`--kind` builds `//:boot` with `--//ipsw:kind` in the output base `bazel run` itself uses. `--bazel-flag` passes flags
+to that build (for example `--bazel-flag=--config=agent`). `--package DIR` boots an existing `//:boot` output instead,
+and `--kernel` names its prelinked kernel for the live log. Guest time follows executed instructions
+(`-icount shift=auto`, one host thread for all four cores), so a busy Mac cannot expire a driver's timeout before the
+device it waits for has run: with one thread per core (`--mttcg`) and the Mac at load 50, drivers panicked on interrupts
+that had not been lost. `--mttcg` is faster on an idle Mac. The run directory is `out/emu/<kind>-<time>` unless `--out`
+names one:
 
 | File | What |
 |---|---|
@@ -24,6 +31,8 @@ device it waits for has run. The run directory is `out/emu/<kind>-<time>` unless
 | `kernel.log`, `panic.txt` | The kernel's log (XNU's msgbuf, read live through a core's MMU) and its panic record |
 | `screen.png`, `framebuffer.png` | What display controller A scans out, and hekate's framebuffer |
 | `registers.txt` | Every core's registers when the run stopped |
+| `gpu-methods.log` | Every class method a GPU channel ran, named from Mesa's class headers, invalid ones flagged |
+| `gpu-events.log` | The GPU's bring-up (falcons, PMU and FECS commands, runlists), MMU faults, stopped channels |
 
 ## What runs
 
@@ -40,6 +49,13 @@ and `bootargs.txt`, and the iOS partition, which maps straight onto the install 
 (`out/sd/switchroot/ios/IOS<NN>.SII.*` in this checkout or the main one, else
 `~/Library/Caches/switch-ios/sd-<build>/switchroot/ios/`). QEMU writes to a snapshot overlay, so a run
 never changes the image. The card is 2 TiB rather than the real 1 TB because QEMU only takes power-of-two cards.
+
+The GPU (patch 0030) answers our TegraGM20B kext's bring-up with synthesized firmware: the PMU's ACR load and
+RTOS messages, FECS's method interface. It runs channels: runlists, GPFIFO and pushbuffer parsing, host semaphores,
+syncpoint increments, and the copy engine's copies and fills. Every access goes through a real GMMU walk from the
+channel's instance block. A bad or unmapped VA, or a write to a read-only page, raises the fault GM20B reports (the
+fault record at 0x2800 + unit, PFIFO's MMU_FAULT interrupt) and stops the channel. 3D, compute and 2D methods are
+logged, never drawn, apart from their report semaphores.
 
 ## Caches
 
@@ -67,6 +83,8 @@ Different from the hardware:
 - The SD card stays in U-Boot's 48 MHz mode. The controller reports no SDR104, so SwitchSD's SDR104 bring-up does not
   run.
 - No BPMP firmware runs, so the EMC keeps its rate.
+- No GPU falcon code runs and nothing is drawn. The GMMU has no TLB, so stale-translation bugs don't show, and
+  channels run to completion in runlist order on one PBDMA, without timeslicing or preemption.
 - Missing: security engine keys, TSEC, audio, USB, and the Wi-Fi and Bluetooth radios behind their buses.
 
 A boot that gets further here is a hint. A panic here is a lead to check on the device.

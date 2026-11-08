@@ -18,9 +18,9 @@ IPSW's), the corpus's states as they are.
      dispatches are left out: the raw path hands them to m2v. (An extended-range attachment is loaded and stored
      DontCare, so its state's draw is the pass's only one: probe.mm.)
 
-usage: rawpack.py --bridge <host libnative_metal_bridge.a> --nvk <host twin dylib> --qc <default.metallib>
-                  --corpus <corpus.log> --out <dir> [--stack <hex key>] [--prebuilt <dir>]
-       rawpack.py --build-only --bridge <host libnative_metal_bridge.a> --out <dir>
+usage: rawpack.py --bridge <host libnative_metal_bridge.a> --metal-abi <MetalABI.h> --nvk <host twin dylib>
+                  --qc <default.metallib> --corpus <corpus.log> --out <dir> [--stack <hex key>] [--prebuilt <dir>]
+       rawpack.py --build-only --bridge <host libnative_metal_bridge.a> --metal-abi <MetalABI.h> --out <dir>
 writes <out>/pack.bin, pack.json, layouts.txt, report.txt and keeps the probe logs in <out>/work (deleted with --clean).
 --build-only compiles the probe, the mock GPU (libmock_iokit.dylib) and own.metallib into <dir> and stops; --prebuilt
 <dir> runs those instead of compiling them (//gpu/seed:local_tools makes them its own action, so a corpus edit only
@@ -109,7 +109,7 @@ def library_root(qc: Path) -> str:
 
 # The Core Animation states the pack holds (ca/caset.py's tiers): every one. The runtime makes a state and places its
 # programs in the shader heap at its first lookup (raw_gpu.cpp Device::pipeline), so the pack's size is file size only.
-CA_TIERS = ('corpus', 'manifest', 'blend', 'fetch')
+CA_TIERS = ('corpus', 'manifest', 'variants', 'blend', 'fetch')
 
 
 def ca_corpus(qc: Path, corpus: Path, work: Path) -> Path:
@@ -136,7 +136,7 @@ def ca_corpus(qc: Path, corpus: Path, work: Path) -> Path:
     return out
 
 
-def build(work: Path, bridge: Path) -> None:
+def build(work: Path, bridge: Path, metal_abi: Path) -> None:
     """Build the mock GPU, the probe and the raw path's own states into `work`.
 
     The mock GPU with nvdec on every submission, the probe through the frontend + host bridge (beside it: rpath
@@ -185,6 +185,8 @@ def build(work: Path, bridge: Path) -> None:
             *maps,
             '-I',
             METAL,
+            '-I',
+            metal_abi.parent,
             '-x',
             'objective-c++',
             HERE / 'probe.mm',
@@ -278,10 +280,12 @@ def barrier_set(d: Path) -> Path | None:
     sys.path.insert(0, str(HERE))
     import probelog  # noqa: PLC0415  the pack directory's module, on the path only now
 
+    # the interlock on in any of a probe's draws: a fetched color whose texture lacks STORAGE is drawn in a scratch
+    # between m2v's copy in and copy out (mkpack.py interlocked)
     keys = {
         p['key']
         for p in probelog.load(str(d / 'probe256.out'), str(d / 'probe256.log'))
-        if p['records'] and p['records'][0]['regs'].get(0x1224, 0) & 3
+        if any(r and r.get('regs', {}).get(0x1224, 0) & 3 for r in p['records'])
     }
     lines = (d / 'corpus.log').read_text().splitlines(keepends=True)
     chosen = [line for line in lines[1:] if state_key(line.rstrip('\n')) in keys]
@@ -411,7 +415,7 @@ def main() -> None:
         out = Path(option('--out')).resolve()
         out.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory() as scratch:
-            build(Path(scratch), Path(option('--bridge')).resolve())
+            build(Path(scratch), Path(option('--bridge')).resolve(), Path(option('--metal-abi')).resolve())
             for name in BUILT:
                 shutil.copyfile(Path(scratch) / name, out / name)
                 (out / name).chmod(0o755)
@@ -443,7 +447,7 @@ def main() -> None:
             shutil.copyfile(Path(prebuilt) / name, work / name)
             (work / name).chmod(0o755)
     else:
-        build(work, Path(option('--bridge')).resolve())
+        build(work, Path(option('--bridge')).resolve(), Path(option('--metal-abi')).resolve())
     env = probe_env()
     buckets = split_buckets(corpus, work, BUCKETS)
     with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count() or 1) as pool:

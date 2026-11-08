@@ -23,6 +23,15 @@ PATH_BLIT = (0x7C, 0x7D)
 PATH_CLEAR = 0x7B
 # create_function_constants counts two images for this texture function wherever it has fewer
 TWO_IMAGE_FUNCTION = 0x3D
+# Texture functions QuartzCore picks among by a filter's parameters at draw time, each family drawn with the same
+# pipeline: glass by its refraction, chromatic and edge amounts (GlassBackgroundFilter::render), the blur chain's passes
+# by radius (create_blur_surface_internal). The offline manifest holds only the members Apple's GPUs warm.
+VARIANT_FAMILIES = (
+    ('gba', 'gbb', 'gbc', 'gbd', 'gbe', 'gbf', 'gbg', 'gbh'),
+    ('gsa', 'gsb', 'gsc', 'gsd', 'gse', 'gsf', 'gsg', 'gsh'),
+    ('gfg', 'gfs'),
+    ('ds4', 'ds6', 'ds8', 'db2', 'db4', 'nb7', 'n11', 'n15', 'n19', 'n23', 'n27', 'sb3'),
+)
 
 
 class Image:
@@ -291,6 +300,24 @@ def vertex_attributes(tables: Tables27, s: Spec) -> list[tuple[int, int, int, in
     info = tables.t['vertex_layout_info'][s.L]
     stride, count = info[0] & 0x3F, info[0] >> 6 & 7
     return sorted((a & 7, a >> 3 & 0x1F, a >> 8 & 0x3F, stride) for a in info[1 : 1 + count])
+
+
+def variants(tables: Tables27, name: str) -> list[str]:
+    """Give the names of the states `name`'s texture function family draws with the same pipeline (VARIANT_FAMILIES).
+
+    Each member keeps the name's other segments, with as many image segments as it samples (the first one repeated).
+    """
+    prefix, _, fragment = name.partition('_')
+    head, *images = fragment.split('_')
+    if not head.startswith('T') or not images:
+        return []
+    family = next((f for f in VARIANT_FAMILIES if head[1:4] in f), ())
+    out = []
+    for code in family:
+        count = tables.images(tables.dec['TextureFunction'][code])
+        segments = (images + [images[0]] * count)[:count]
+        out.append('_'.join([prefix, 'T' + code + head[4:], *segments]))
+    return [n for n in out if n != name]
 
 
 def lifted(tables: Tables27, fragment: str, fmt: int, blend: int) -> bool:

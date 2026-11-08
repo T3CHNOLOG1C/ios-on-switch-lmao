@@ -67,7 +67,8 @@
       "maxIOCommandsInFlight": 240,
       "maxPredicatedNestingDepth": 244,
       "maxAccelerationStructureLevels": 248,
-      "maxConstantBufferArguments": 252
+      "maxConstantBufferArguments": 252,
+      "maxBufferLength": 256
     },
     "limits_fields": {
       "maxFramebufferStorageBits": [
@@ -1655,7 +1656,7 @@
   },
   "found": {
     "instance_size": "_MTLDevice's class_ro_t instanceSize",
-    "limits": "the _limits ivar's offset, size and type encoding; the integer fields _MTLDevice has methods of",
+    "limits": "the _limits ivar's offset, size and type encoding; the integer fields with an accessor in _MTLDevice or a Metal class below it (maxBufferLength: MTLIOAccelDevice's only)",
     "sent": "each object's protocols' methods that some image's code sends (sends.py), Metal's own and the GPU drivers' and tools' aside (interface.json not_senders)"
   }
 }

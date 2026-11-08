@@ -137,6 +137,8 @@
 #include <string.h>
 #include "SwitchBluetooth.h"
 #include "SwitchBluetoothLeFilter.h"
+#include "../../kits/SwitchDMA/SwitchDcache.h"
+#include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
 #include "../../kits/SwitchRefusal/SwitchRefusal.h"
 #include "SwitchBluetoothLinks.h"
 #include "SwitchBluetoothRxDma.h"
@@ -144,8 +146,6 @@
 #include "../ArmGIC/SwitchInterrupts.h"
 #include "../TegraAPBDMA/TegraAPBDMA.h"
 #include "../SwitchSuspend/SwitchWake.h"
-
-extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 
 // The rail Joy-Con driver's strong definition wins when it is linked (../SwitchJoyCon/SwitchJoyCon.h).
 extern "C" __attribute__((weak)) void switch_joycon_bluetooth_address(const uint8_t[6])
@@ -394,16 +394,6 @@ constexpr uint32_t kLinkTraceLines = 600;  // link trace lines a boot (os_log; "
 constexpr uint16_t kTracedSetup[] = {0x1003, 0x1005, 0x1009, 0x0c31, 0x0c33, 0x0c56,
                                      0x0c7a, 0x0c24, 0x0c18, 0x0c16, 0x0c47, 0x0c43};
 #endif
-
-inline uint32_t r32(const volatile uint8_t *base, uint32_t o)
-{
-    return *reinterpret_cast<const volatile uint32_t *>(base + o);
-}
-
-inline void w32(volatile uint8_t *base, uint32_t o, uint32_t v)
-{
-    *reinterpret_cast<volatile uint32_t *>(base + o) = v;
-}
 
 inline uint16_t le16(const uint8_t *p)
 {
@@ -746,12 +736,12 @@ private:
     // Registers and pins.
     void setPin(unsigned pin, uint32_t reg, bool on)
     {
-        w32(gpio, portReg(pin, reg) + GPIO_MSK, (1u << (pin & 7)) << 8 | (on ? 1u << (pin & 7) : 0));
+        switch_mmio_write32(gpio, portReg(pin, reg) + GPIO_MSK, (1u << (pin & 7)) << 8 | (on ? 1u << (pin & 7) : 0));
     }
 
     bool pin(unsigned p, uint32_t reg) const
     {
-        return (r32(gpio, portReg(p, reg)) & (1u << (p & 7))) != 0u;
+        return (switch_mmio_read32(gpio, portReg(p, reg)) & (1u << (p & 7))) != 0u;
     }
 
     void setupPins();
@@ -767,7 +757,7 @@ private:
             leaveRxDmaLocked(false);  // what an unpowered core sends is noise; the flush after power-on starts it again
             ier &= ~IER_RX;
             rxStalled = false;
-            w32(uart, IER, ier);
+            switch_mmio_write32(uart, IER, ier);
         }
         IOSimpleLockUnlockEnableInterrupt(hwLock, s);
         setPin(PH4, GPIO_OUT, on);
@@ -909,11 +899,12 @@ OSDefineMetaClassAndStructors(SwitchBluetooth, IOService)
     {
         if (__atomic_load_n(&gStagedState, __ATOMIC_ACQUIRE) == kStagedFound)
             return;
-        volatile uint8_t *car = reinterpret_cast<volatile uint8_t *>(ml_io_map(kCarPA, 0x1000));
-        if (!car || !(r32(car, CLK_OUT_ENB_H) & kFuseClock) || !(r32(car, MISC_CLK_ENB) & kFuseVisible))
+        volatile uint8_t *car = switch_mmio_map(kCarPA, 0x1000);
+        if (!car || !(switch_mmio_read32(car, CLK_OUT_ENB_H) & kFuseClock) ||
+            !(switch_mmio_read32(car, MISC_CLK_ENB) & kFuseVisible))
             return;
-        volatile uint8_t *fuse = reinterpret_cast<volatile uint8_t *>(ml_io_map(kFusePA, 0x1000));
-        const uint32_t lot0 = fuse ? r32(fuse, kFuseLotCode0) : 0;
+        volatile uint8_t *fuse = switch_mmio_map(kFusePA, 0x1000);
+        const uint32_t lot0 = fuse ? switch_mmio_read32(fuse, kFuseLotCode0) : 0;
         if (!lot0)
             return;
         const uint8_t unit[6] = {0x98,
@@ -933,10 +924,10 @@ bool SwitchBluetooth::start(IOService *provider)
 {
     if (!IOService::start(provider))
         return false;
-    uart = reinterpret_cast<volatile uint8_t *>(ml_io_map(kUartPA, 0x1000));
-    car = reinterpret_cast<volatile uint8_t *>(ml_io_map(kCarPA, 0x1000));
-    gpio = reinterpret_cast<volatile uint8_t *>(ml_io_map(kGpioPA, 0x1000));
-    pinmux = reinterpret_cast<volatile uint8_t *>(ml_io_map(kPinmuxPA, 0x1000));
+    uart = switch_mmio_map(kUartPA, 0x1000);
+    car = switch_mmio_map(kCarPA, 0x1000);
+    gpio = switch_mmio_map(kGpioPA, 0x1000);
+    pinmux = switch_mmio_map(kPinmuxPA, 0x1000);
     hwLock = IOSimpleLockAlloc();
     cmdLock = IOSimpleLockAlloc();
     stateLock = IOLockAlloc();
@@ -1019,10 +1010,8 @@ bool SwitchBluetooth::start(IOService *provider)
 // host wake an input. Masked GPIO writes only; nxk Pads::setup and power() order.
 void SwitchBluetooth::setupPins()
 {
-    for (const Pad &pad : kPads) {
-        volatile uint32_t *reg = reinterpret_cast<volatile uint32_t *>(pinmux + pad.offset);
-        *reg = (*reg & ~PM_LOW) | pad.value;
-    }
+    for (const Pad &pad : kPads)
+        switch_mmio_rmw32(pinmux, pad.offset, PM_LOW, pad.value);
     for (unsigned p = PI4; p < PI4 + 4; ++p)
         setPin(p, GPIO_CNF, false);
     setPin(PH3, GPIO_OUT, false);
@@ -1033,7 +1022,7 @@ void SwitchBluetooth::setupPins()
     setPin(PH4, GPIO_CNF, true);
     setPin(PH5, GPIO_OE, false);
     setPin(PH5, GPIO_CNF, true);
-    (void)r32(gpio, portReg(PH4, GPIO_OUT));
+    (void)switch_mmio_read32(gpio, portReg(PH4, GPIO_OUT));
 }
 
 // Reset and clock UART-D, then hekate uart_init's order with Linux tegra_uart_hw_init's FIFO setup: 8N1, FIFOs on
@@ -1048,24 +1037,24 @@ void SwitchBluetooth::setupPins()
 // that RTS holds the chip (MCR RTS_EN), as when the ring is full, so nothing is lost.
 void SwitchBluetooth::setupUart(bool rts)
 {
-    w32(car, RST_DEV_U_SET, kUartDBit);
-    w32(car, CLK_ENB_U_SET, kUartDBit);
-    w32(car, CLK_SOURCE_UARTD, 0);
+    switch_mmio_write32(car, RST_DEV_U_SET, kUartDBit);
+    switch_mmio_write32(car, CLK_ENB_U_SET, kUartDBit);
+    switch_mmio_write32(car, CLK_SOURCE_UARTD, 0);
     IODelay(10);
-    w32(car, RST_DEV_U_CLR, kUartDBit);
-    (void)r32(car, RST_DEVICES_U);
+    switch_mmio_write32(car, RST_DEV_U_CLR, kUartDBit);
+    (void)switch_mmio_read32(car, RST_DEVICES_U);
 
     const IOInterruptState s = IOSimpleLockLockDisableInterrupt(hwLock);
-    w32(uart, IER, 0);
-    w32(uart, LCR, LCR_8N1);
-    w32(uart, IRDA_CSR, 0);  // no line inversion left behind
-    w32(uart, FCR, FCR_ENABLE);
-    (void)r32(uart, SPR);
+    switch_mmio_write32(uart, IER, 0);
+    switch_mmio_write32(uart, LCR, LCR_8N1);
+    switch_mmio_write32(uart, IRDA_CSR, 0);  // no line inversion left behind
+    switch_mmio_write32(uart, FCR, FCR_ENABLE);
+    (void)switch_mmio_read32(uart, SPR);
     IODelay(20);
     setBaudLocked(kInitBaud);
-    w32(uart, FCR, FCR_ENABLE | FCR_CLEAR_RX | FCR_CLEAR_TX | FCR_RX_TRIG_16 | FCR_TX_TRIG_16);
-    w32(uart, MCR, rts ? MCR_CTS_EN | MCR_RTS_EN | MCR_RTS : MCR_CTS_EN);
-    (void)r32(uart, SPR);
+    switch_mmio_write32(uart, FCR, FCR_ENABLE | FCR_CLEAR_RX | FCR_CLEAR_TX | FCR_RX_TRIG_16 | FCR_TX_TRIG_16);
+    switch_mmio_write32(uart, MCR, rts ? MCR_CTS_EN | MCR_RTS_EN | MCR_RTS : MCR_CTS_EN);
+    (void)switch_mmio_read32(uart, SPR);
     IOSimpleLockUnlockEnableInterrupt(hwLock, s);
     IODelay(100);
 }
@@ -1077,18 +1066,18 @@ void SwitchBluetooth::setBaudLocked(uint32_t rate)
 {
     uint32_t divisor = 1;
     if (rate == 3000000) {
-        w32(car, CLK_SOURCE_UARTD, kUartDivEnable | 15);
+        switch_mmio_write32(car, CLK_SOURCE_UARTD, kUartDivEnable | 15);
     } else if (rate == 1000000) {
-        w32(car, CLK_SOURCE_UARTD, kUartDivEnable | 49);
+        switch_mmio_write32(car, CLK_SOURCE_UARTD, kUartDivEnable | 49);
     } else {
-        w32(car, CLK_SOURCE_UARTD, 2);
+        switch_mmio_write32(car, CLK_SOURCE_UARTD, 2);
         divisor = (8 * rate + kPllpHz) / (16 * rate);
     }
-    w32(uart, LCR, LCR_DLAB | LCR_8N1);
-    w32(uart, THR, divisor & 0xff);
-    w32(uart, IER, (divisor >> 8) & 0xff);
-    w32(uart, LCR, LCR_8N1);
-    (void)r32(uart, SPR);
+    switch_mmio_write32(uart, LCR, LCR_DLAB | LCR_8N1);
+    switch_mmio_write32(uart, THR, divisor & 0xff);
+    switch_mmio_write32(uart, IER, (divisor >> 8) & 0xff);
+    switch_mmio_write32(uart, LCR, LCR_8N1);
+    (void)switch_mmio_read32(uart, SPR);
     baud = rate;
 }
 
@@ -1099,12 +1088,12 @@ void SwitchBluetooth::setHostBaud(uint32_t rate)
 {
     IOInterruptState s = IOSimpleLockLockDisableInterrupt(hwLock);
     clearInterruptsLocked();
-    w32(uart, IER, 0);
+    switch_mmio_write32(uart, IER, 0);
     setBaudLocked(rate);
     IOSimpleLockUnlockEnableInterrupt(hwLock, s);
     IODelay(2 * 10 * 1000000 / rate + 20);
     s = IOSimpleLockLockDisableInterrupt(hwLock);
-    w32(uart, IER, ier);
+    switch_mmio_write32(uart, IER, ier);
     IOSimpleLockUnlockEnableInterrupt(hwLock, s);
 }
 
@@ -1152,7 +1141,7 @@ bool SwitchBluetooth::filter(OSObject *owner, IOFilterInterruptEventSource *)
     const uint32_t errorsBefore = self->lineErrors;
     uint32_t budget = kIrqRxBudget;
     for (unsigned round = 0; round < kFilterRounds && !done; ++round) {
-        const uint32_t iir = r32(self->uart, IIR);
+        const uint32_t iir = switch_mmio_read32(self->uart, IIR);
         if (iir & IIR_NO_INT) {
             done = true;
             break;
@@ -1160,13 +1149,13 @@ bool SwitchBluetooth::filter(OSObject *owner, IOFilterInterruptEventSource *)
         const uint32_t id = (iir >> 1) & 7;
         if (self->rxDmaOn && id != ID_TX && id != ID_MODEM) {
             if (!dmaRx) {
-                w32(self->uart, IER, self->ier | IER_RDI);
-                w32(self->uart, IER, self->ier & ~(IER_RX | IER_EORD));
+                switch_mmio_write32(self->uart, IER, self->ier | IER_RDI);
+                switch_mmio_write32(self->uart, IER, self->ier & ~(IER_RX | IER_EORD));
             }
             dmaRx = true;
             idle |= id == ID_EORD || id == ID_RX_TIMEOUT;
             if (id == ID_LINE) {
-                const uint32_t lsr = r32(self->uart, LSR);  // the read clears the error bits
+                const uint32_t lsr = switch_mmio_read32(self->uart, LSR);  // the read clears the error bits
                 if (lsr & LSR_ERRORS) {
                     ++self->lineErrors;
                     dmaLineError = true;
@@ -1190,7 +1179,7 @@ bool SwitchBluetooth::filter(OSObject *owner, IOFilterInterruptEventSource *)
             rxWork |= self->drainRx(budget, true);
             break;
         case ID_MODEM:
-            (void)r32(self->uart, MSR);
+            (void)switch_mmio_read32(self->uart, MSR);
             break;
         default:
             break;  // 5 and 7: T210's break indications (serial-tegra), receive side like the line status
@@ -1216,9 +1205,9 @@ bool SwitchBluetooth::filter(OSObject *owner, IOFilterInterruptEventSource *)
         // kFilterRounds conditions and IIR still reports one. All but THRE and modem status (both cleared above) are
         // receive conditions, so RX goes off; anything left after that takes every source with it.
         self->maskRxFaultLocked("an IIR condition no read clears");
-        if (!(r32(self->uart, IIR) & IIR_NO_INT)) {
+        if (!(switch_mmio_read32(self->uart, IIR) & IIR_NO_INT)) {
             self->ier = 0;
-            w32(self->uart, IER, 0);
+            switch_mmio_write32(self->uart, IER, 0);
         }
     }
     // Counted for describe(): a steady rate of these is an interrupt source the loop above does not clear. kIdleStorm
@@ -1238,7 +1227,7 @@ bool SwitchBluetooth::filter(OSObject *owner, IOFilterInterruptEventSource *)
                     self->maskRxFaultLocked("an interrupt storm with IIR clear");
                 } else {
                     self->ier = 0;
-                    w32(self->uart, IER, 0);
+                    switch_mmio_write32(self->uart, IER, 0);
                 }
             }
             self->idleRun = 0;
@@ -1271,18 +1260,18 @@ bool SwitchBluetooth::drainRx(uint32_t &budget, bool stallWhenSpent)
     const uint32_t tail = __atomic_load_n(&rx.tail, __ATOMIC_ACQUIRE);
     bool any = false;
     uint32_t lsr = 0;
-    while ((lsr = r32(uart, LSR)) & LSR_DR) {
+    while ((lsr = switch_mmio_read32(uart, LSR)) & LSR_DR) {
         if (lsr & LSR_ERRORS)
             ++lineErrors;
         if (head - tail == kRingBytes || budget == 0) {
             if (head - tail == kRingBytes || stallWhenSpent) {
                 ier &= ~IER_RX;
-                w32(uart, IER, ier);
+                switch_mmio_write32(uart, IER, ier);
                 rxStalled = true;
             }
             break;
         }
-        const uint8_t byte = static_cast<uint8_t>(r32(uart, THR));
+        const uint8_t byte = static_cast<uint8_t>(switch_mmio_read32(uart, THR));
         rx.data[head++ & (kRingBytes - 1)] = byte;
         if (lsr & LSR_ERRORS)
             rxFrame.lost = true;  // the byte may not be the one sent: framing unknown till the sync
@@ -1348,7 +1337,7 @@ void SwitchBluetooth::maskRxFaultLocked(const char *what)
 {
     leaveRxDmaLocked(true);  // DMA mode too ends here; the next flush starts it again
     ier &= ~IER_RX;
-    w32(uart, IER, ier);
+    switch_mmio_write32(uart, IER, ier);
     if (!rxFault)
         ++rxFaults;
     rxFault = true;
@@ -1360,11 +1349,11 @@ void SwitchBluetooth::maskRxFaultLocked(const char *what)
 // writing IER with RDI set, then 0, reading each back; IER as it was afterwards.
 void SwitchBluetooth::clearInterruptsLocked()
 {
-    w32(uart, IER, ier | IER_RDI);
-    (void)r32(uart, IER);
-    w32(uart, IER, 0);
-    (void)r32(uart, IER);
-    w32(uart, IER, ier);
+    switch_mmio_write32(uart, IER, ier | IER_RDI);
+    (void)switch_mmio_read32(uart, IER);
+    switch_mmio_write32(uart, IER, 0);
+    (void)switch_mmio_read32(uart, IER);
+    switch_mmio_write32(uart, IER, ier);
 }
 
 // hwLock held. Tops the TX FIFO up from the ring; THRI stays enabled while the ring has bytes. With TX DMA (header): a
@@ -1375,7 +1364,7 @@ bool SwitchBluetooth::fillTx()
     if (txDmaBytes) {
         if (ier & IER_THRI) {  // the FIFO stays below the trigger while the channel fills it
             ier &= ~IER_THRI;
-            w32(uart, IER, ier);
+            switch_mmio_write32(uart, IER, ier);
         }
         return txWanted;
     }
@@ -1387,14 +1376,10 @@ bool SwitchBluetooth::fillTx()
         const uint32_t run = head - tail < kRingBytes - at ? head - tail : kRingBytes - at;
         if (!(at & 3) && run >= 16) {
             txDmaBytes = run & ~15u;
-            for (uintptr_t line = reinterpret_cast<uintptr_t>(tx.data + at) & ~static_cast<uintptr_t>(63),
-                           end = reinterpret_cast<uintptr_t>(tx.data + at + txDmaBytes);
-                 line < end; line += 64)
-                __asm__ volatile("dc cvac, %0" ::"r"(line) : "memory");
-            __asm__ volatile("dsb sy" ::: "memory");
+            switch_dcache_clean(tx.data + at, txDmaBytes);
             if (ier & IER_THRI) {
                 ier &= ~IER_THRI;
-                w32(uart, IER, ier);
+                switch_mmio_write32(uart, IER, ier);
             }
             tegra_apbdma_start_once(txDma, static_cast<uint32_t>(kUartPA + kUartD + THR), TEGRA_APBDMA_REQ_UARTD,
                                     txBuf.pa + at, txDmaBytes);
@@ -1403,13 +1388,13 @@ bool SwitchBluetooth::fillTx()
         const uint32_t piece = (at & 3) ? 4 - (at & 3) : run;  // to the boundary, or the short rest of the run
         stop = tail + (piece < run ? piece : run);
     }
-    while (tail != stop && !(r32(uart, LSR) & LSR_TXFIFO_FULL))
-        w32(uart, THR, tx.data[tail++ & (kRingBytes - 1)]);
+    while (tail != stop && !(switch_mmio_read32(uart, LSR) & LSR_TXFIFO_FULL))
+        switch_mmio_write32(uart, THR, tx.data[tail++ & (kRingBytes - 1)]);
     txBytes += tail - tx.tail;
     __atomic_store_n(&tx.tail, tail, __ATOMIC_RELEASE);
     if (tail == head && (ier & IER_THRI)) {
         ier &= ~IER_THRI;
-        w32(uart, IER, ier);
+        switch_mmio_write32(uart, IER, ier);
     }
     return txWanted;
 }
@@ -1432,7 +1417,7 @@ void SwitchBluetooth::kickTx()
     }
     if (want != ier) {
         ier = want;
-        w32(uart, IER, ier);
+        switch_mmio_write32(uart, IER, ier);
     }
     IOSimpleLockUnlockEnableInterrupt(hwLock, s);
 }
@@ -1455,7 +1440,7 @@ void SwitchBluetooth::txDone(void *context)
     (void)self->fillTx();
     if (self->tx.used() && !self->txDmaBytes && !(self->ier & IER_THRI)) {
         self->ier |= IER_THRI;
-        w32(self->uart, IER, self->ier);
+        switch_mmio_write32(self->uart, IER, self->ier);
     }
     const bool wake = self->txWanted;
 #if DEVELOPMENT || DEBUG
@@ -1482,7 +1467,7 @@ void SwitchBluetooth::txDmaFailedLocked(uint32_t moved)
     (void)fillTx();
     if (tx.used() && !(ier & IER_THRI)) {
         ier |= IER_THRI;
-        w32(uart, IER, ier);
+        switch_mmio_write32(uart, IER, ier);
     }
 }
 
@@ -1504,11 +1489,7 @@ bool SwitchBluetooth::takeRxDmaLocked(uint32_t movedBytes, bool ended)
     const uint32_t n = count < room ? count : room;
     if (n) {
         const uint32_t *words = reinterpret_cast<const uint32_t *>(rxBuf.va) + rxDmaTaken;
-        for (uintptr_t line = reinterpret_cast<uintptr_t>(words) & ~static_cast<uintptr_t>(63),
-                       end = reinterpret_cast<uintptr_t>(words + n);
-             line < end; line += 64)
-            __asm__ volatile("dc civac, %0" ::"r"(line) : "memory");
-        __asm__ volatile("dsb sy" ::: "memory");
+        switch_dcache_clean_invalidate(words, static_cast<size_t>(n) * sizeof(*words));
         if (!rxDmaChecked && !rxFrame.lost) {
             rxDmaChecked = true;
             const uint8_t type = static_cast<uint8_t>(words[0]);
@@ -1535,7 +1516,7 @@ bool SwitchBluetooth::takeRxDmaLocked(uint32_t movedBytes, bool ended)
     if (n < count && !rxStalled) {
         rxStalled = true;
         ier &= ~(IER_RX | IER_EORD);
-        w32(uart, IER, ier);
+        switch_mmio_write32(uart, IER, ier);
     }
     return n != 0;
 }
@@ -1564,7 +1545,7 @@ bool SwitchBluetooth::rxDmaIdleLocked(bool idle, bool lineError)
                 rxDmaProven = true;
             // Bytes in the FIFO 4 characters after the line went quiet, the transfer running and not moving: the
             // channel does not serve the UART. Twice in a row with no progress (one that landed just now is not that).
-            const bool waiting = (r32(uart, LSR) & LSR_DR) != 0u;
+            const bool waiting = (switch_mmio_read32(uart, LSR) & LSR_DR) != 0u;
             if (waiting && rxDmaIdleFull && moved == rxDmaIdleMoved)
                 rxDmaFailedLocked("bytes waited in the FIFO across two line-idle interrupts and the channel took none");
             rxDmaIdleFull = waiting;
@@ -1574,7 +1555,7 @@ bool SwitchBluetooth::rxDmaIdleLocked(bool idle, bool lineError)
     if (rxDmaOff && rxDmaOn)
         leaveRxDmaLocked(true);
     if (rxDmaOn && !rxStalled)
-        w32(uart, IER, ier);
+        switch_mmio_write32(uart, IER, ier);
     return took || lineError || rxStalled || (rxDmaFailed != nullptr);
 }
 
@@ -1645,14 +1626,14 @@ void SwitchBluetooth::enterRxDmaLocked()
     (void)drainRx(budget, false);
     if (rxFault)
         return;  // the drain found a fault (maskRxFaultLocked): RX stays off until the next flush or send
-    w32(uart, FCR, FCR_ENABLE | FCR_DMA | FCR_RX_TRIG_1 | FCR_TX_TRIG_16);
+    switch_mmio_write32(uart, FCR, FCR_ENABLE | FCR_DMA | FCR_RX_TRIG_1 | FCR_TX_TRIG_16);
     rxDmaOn = true;
     rxDmaArmed = false;
     rxDmaLength = rxDmaTaken = 0;
     if (!rxStalled)
         armRxDmaLocked();
     ier = (ier & IER_THRI) | (rxStalled ? 0 : IER_RX_DMA);
-    w32(uart, IER, ier);
+    switch_mmio_write32(uart, IER, ier);
 }
 
 // hwLock held: back to PIO (RX interrupt per FIFO trigger). DMA select off first, then the read the channel may have
@@ -1661,8 +1642,8 @@ void SwitchBluetooth::leaveRxDmaLocked(bool keep)
 {
     if (!rxDmaOn)
         return;
-    w32(uart, FCR, FCR_ENABLE | FCR_RX_TRIG_16 | FCR_TX_TRIG_16);
-    (void)r32(uart, LSR);
+    switch_mmio_write32(uart, FCR, FCR_ENABLE | FCR_RX_TRIG_16 | FCR_TX_TRIG_16);
+    (void)switch_mmio_read32(uart, LSR);
     IODelay(kRxDmaSettleUs);
     if (keep) {
         bool ended = !rxDmaArmed;
@@ -1677,7 +1658,7 @@ void SwitchBluetooth::leaveRxDmaLocked(bool keep)
     tegra_apbdma_stop(rxDma);
     rxDmaOn = rxDmaArmed = false;
     ier = (ier & IER_THRI) | (chipOn && !rxFault && !rxStalled ? IER_RX : 0);
-    w32(uart, IER, ier);
+    switch_mmio_write32(uart, IER, ier);
 }
 
 // hwLock held: a never-booted check failed (header "RX by APB DMA"): PIO for the boot; the action logs `why` once.
@@ -3020,11 +3001,11 @@ bool SwitchBluetooth::resumeRx()
         } else if (!rxStalled) {
             armRxDmaLocked();
             ier = (ier & IER_THRI) | IER_RX_DMA;
-            w32(uart, IER, ier);
+            switch_mmio_write32(uart, IER, ier);
         }
     } else if (chipOn && !rxFault) {  // power() and a fault mask RX until a flush (the one after power-on) enables it
         ier |= IER_RX;
-        w32(uart, IER, ier);
+        switch_mmio_write32(uart, IER, ier);
         const uint32_t before = rx.head;
         uint32_t budget = kFifoBytes;
         (void)drainRx(budget, false);
@@ -3047,8 +3028,8 @@ void SwitchBluetooth::checkDelivery(const char *what)
         bool ended = false;
         const uint32_t inFlight = txDmaBytes;
         const uint32_t moved = inFlight ? tegra_apbdma_moved(txDma, &ended) : 0;
-        const uint32_t lsr = r32(uart, LSR);
-        const uint32_t msr = r32(uart, MSR);
+        const uint32_t lsr = switch_mmio_read32(uart, LSR);
+        const uint32_t msr = switch_mmio_read32(uart, MSR);
         if (inFlight && !ended && !moved && (lsr & LSR_THRE) && (msr & MSR_CTS) && pass) {
             txDmaFailedLocked(0);
             IOSimpleLockUnlockEnableInterrupt(hwLock, s);
@@ -3112,7 +3093,7 @@ void SwitchBluetooth::checkDelivery(const char *what)
     uint32_t before = 0;
     for (unsigned pass = 0; pass < 2; ++pass) {
         const IOInterruptState s = IOSimpleLockLockDisableInterrupt(hwLock);
-        const uint32_t lsr = r32(uart, LSR);
+        const uint32_t lsr = switch_mmio_read32(uart, LSR);
         const uint32_t enabled = ier;
         const uint32_t seen = irqs;
         const bool pending =
@@ -3138,7 +3119,7 @@ void SwitchBluetooth::describe(char *buffer, size_t size)
     switch_interrupt_describe(kIntid, gic, sizeof(gic));
     const uint32_t port = portReg(PH4, 0);
     const auto mux = [this](uint32_t o) {
-        return r32(pinmux, o) & PM_LOW;
+        return switch_mmio_read32(pinmux, o) & PM_LOW;
     };
     const char *rxDmaState = "pio";
     if (rxDmaOn)
@@ -3151,14 +3132,16 @@ void SwitchBluetooth::describe(char *buffer, size_t size)
              "errors %u rx-resets %u rx-faults %u (last %s)%s dropped %u resyncs %u hw-errors %u fixes %u strays %u; "
              "gpio H cnf/oe/out/in "
              "%02x/%02x/%02x/%02x; pinmux %x/%x/%x/%x %x/%x/%x; car clk %u rst %u src %#x; %s",
-             r32(uart, LSR), r32(uart, MSR), flag(r32(uart, MSR), MSR_CTS), ier, r32(uart, MCR), r32(uart, LCR), baud,
-             rxBytes, txBytes, tx.used(), txDmaBytes, txDmaRuns, txDma && !txDmaOff ? "" : " off", rxDmaState,
-             rxDmaTaken, rxDmaLength, rxDmaTransfers, rxDmaEnds, rxDmaIdleTakes, irqs, idleIrqs, lineErrors, rxResets,
-             rxFaults, lastFault, rxFault ? " RX off" : "", dropped, resyncs, hardwareErrors, completionFixes,
-             strayDrops, r32(gpio, port + GPIO_CNF) & 0xff, r32(gpio, port + GPIO_OE) & 0xff,
-             r32(gpio, port + GPIO_OUT) & 0xff, r32(gpio, port + GPIO_IN) & 0xff, mux(0x114), mux(0x118), mux(0x11c),
-             mux(0x120), mux(0x1c0), mux(0x1c4), mux(0x1c8), flag(r32(car, CLK_OUT_ENB_U), kUartDBit),
-             flag(r32(car, RST_DEVICES_U), kUartDBit), r32(car, CLK_SOURCE_UARTD), gic);
+             switch_mmio_read32(uart, LSR), switch_mmio_read32(uart, MSR), flag(switch_mmio_read32(uart, MSR), MSR_CTS),
+             ier, switch_mmio_read32(uart, MCR), switch_mmio_read32(uart, LCR), baud, rxBytes, txBytes, tx.used(),
+             txDmaBytes, txDmaRuns, txDma && !txDmaOff ? "" : " off", rxDmaState, rxDmaTaken, rxDmaLength,
+             rxDmaTransfers, rxDmaEnds, rxDmaIdleTakes, irqs, idleIrqs, lineErrors, rxResets, rxFaults, lastFault,
+             rxFault ? " RX off" : "", dropped, resyncs, hardwareErrors, completionFixes, strayDrops,
+             switch_mmio_read32(gpio, port + GPIO_CNF) & 0xff, switch_mmio_read32(gpio, port + GPIO_OE) & 0xff,
+             switch_mmio_read32(gpio, port + GPIO_OUT) & 0xff, switch_mmio_read32(gpio, port + GPIO_IN) & 0xff,
+             mux(0x114), mux(0x118), mux(0x11c), mux(0x120), mux(0x1c0), mux(0x1c4), mux(0x1c8),
+             flag(switch_mmio_read32(car, CLK_OUT_ENB_U), kUartDBit),
+             flag(switch_mmio_read32(car, RST_DEVICES_U), kUartDBit), switch_mmio_read32(car, CLK_SOURCE_UARTD), gic);
 }
 
 // Every wait in a bring-up or a connect is bounded, so one that is still running after kStuckMs has stopped for a
@@ -3564,7 +3547,7 @@ IOReturn SwitchBluetooth::gated(OSObject *owner, void *what, void *, void *, voi
             ier |= IER_THRI;  // a fault that took every source left bytes queued
         if (ier != self->ier) {
             self->ier = ier;
-            w32(self->uart, IER, ier);
+            switch_mmio_write32(self->uart, IER, ier);
         }
         self->enterRxDmaLocked();  // header "RX by APB DMA": from here on the channel reads the FIFO
         IOSimpleLockUnlockEnableInterrupt(self->hwLock, s);
@@ -3600,11 +3583,11 @@ void SwitchBluetooth::resetRxFifoLocked()
     leaveRxDmaLocked(false);  // DMA mode's FCR goes with it; a flush starts it again (gated)
     rxFrame.lost = true;      // whatever the FIFO held is gone (a flush starts the framing afresh after this)
     const uint32_t fcr = FCR_RX_TRIG_16 | FCR_TX_TRIG_16;
-    w32(uart, FCR, fcr);
+    switch_mmio_write32(uart, FCR, fcr);
     IODelay(60);
-    w32(uart, FCR, fcr | FCR_CLEAR_RX);
-    w32(uart, FCR, fcr | FCR_ENABLE);
-    (void)r32(uart, SPR);
+    switch_mmio_write32(uart, FCR, fcr | FCR_CLEAR_RX);
+    switch_mmio_write32(uart, FCR, fcr | FCR_ENABLE);
+    (void)switch_mmio_read32(uart, SPR);
     IODelay(20);  // 32 UART clocks (serial-tegra), generous at any rate here
 }
 
@@ -4041,13 +4024,13 @@ bool SwitchBluetooth::sleep()
     if (hostWake)
         setPin(PH3, GPIO_OUT, true);
     IOInterruptState s = IOSimpleLockLockDisableInterrupt(hwLock);
-    w32(uart, MCR, MCR_CTS_EN);
+    switch_mmio_write32(uart, MCR, MCR_CTS_EN);
     IOSimpleLockUnlockEnableInterrupt(hwLock, s);
     IODelay(2 * 10 * 1000000 / baud + 20);  // a character the controller had started
     loop->runAction(&SwitchBluetooth::gated, this, reinterpret_cast<void *>(1));  // the ring to the client
     s = IOSimpleLockLockDisableInterrupt(hwLock);
     leaveRxDmaLocked(true);
-    w32(uart, IER, 0);
+    switch_mmio_write32(uart, IER, 0);
     IOSimpleLockUnlockEnableInterrupt(hwLock, s);
     switch_power_journal("SwitchBluetooth: sleep: %u controllers dropped, host wake %s%s%s", linksDropped,
                          hostWake ? "on (PH5, PMC 52)" : "off", boundary ? "" : " (client mid-packet)",
@@ -4066,8 +4049,8 @@ void SwitchBluetooth::wake()
             setHostBaud(rate);
         flushRx();
         const IOInterruptState s = IOSimpleLockLockDisableInterrupt(hwLock);
-        w32(uart, IER, ier);
-        w32(uart, MCR, MCR_CTS_EN | MCR_RTS_EN | MCR_RTS);
+        switch_mmio_write32(uart, IER, ier);
+        switch_mmio_write32(uart, MCR, MCR_CTS_EN | MCR_RTS_EN | MCR_RTS);
         IOSimpleLockUnlockEnableInterrupt(hwLock, s);
         setPin(PH3, GPIO_OUT, false);
         uint8_t params[SWITCH_BT_SLEEP_PARAMS];

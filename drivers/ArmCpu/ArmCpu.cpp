@@ -13,6 +13,7 @@
 #include "../ArmGIC/ArmGIC.h"
 #include "../../kits/SwitchDMA/SwitchDcache.h"
 #include "../../kits/SwitchDMA/SwitchHwPage.h"
+#include "../../kits/SwitchMMIO/SwitchMMIO.h"
 #include "../../diagnostics/switch/SwitchPowerTrail.h"
 #include "../SwitchSuspend/SwitchSleepSteps.h"
 #include "ArmCpuIdle.h"
@@ -160,14 +161,15 @@ OSDefineMetaClassAndStructors(ArmCpu, IOCPU)
     // Redistributor ISENABLER0: SGIs 0..15 (only SGI 0 is used by the kernel; the others let the self-SGI probe tell which INTIDs the GIC accepts) and PPI 27.
     static const uint32_t kSgiPpiEnable = 0xffffU | (1U << 27);
 
+// The GIC's frames are kept as addresses (uintptr_t): the accesses are kits/SwitchMMIO's.
 static uint32_t read32(uintptr_t base, unsigned offset)
 {
-    return *reinterpret_cast<volatile uint32_t *>(base + offset);
+    return switch_mmio_read32(reinterpret_cast<const volatile uint8_t *>(base), offset);
 }
 
 static void write32(uintptr_t base, unsigned offset, uint32_t value)
 {
-    *reinterpret_cast<volatile uint32_t *>(base + offset) = value;
+    switch_mmio_write32(reinterpret_cast<volatile uint8_t *>(base), offset, value);
 }
 
 // NOLINTBEGIN(misc-const-correctness): each value is written by the asm after it
@@ -548,8 +550,8 @@ void ArmCpu::configureBankedV2() const
 // and ATF's warm boot (tegra_gic_pcpu_init) reset, with nothing pending cleared: the IPI that woke the core may be.
 void armcpu::restoreBankedGic()
 {
-    *reinterpret_cast<volatile uint8_t *>(gDist + 0x400) = 0x80;
-    *reinterpret_cast<volatile uint8_t *>(gDist + 0x400 + 27) = 0x80;
+    switch_mmio_write8(reinterpret_cast<volatile uint8_t *>(gDist), 0x400, 0x80);
+    switch_mmio_write8(reinterpret_cast<volatile uint8_t *>(gDist), 0x400 + 27, 0x80);
     write32(gV2CpuIf, 4, 0xff);
     write32(gV2CpuIf, 8, 0);
     write32(gV2CpuIf, 0, (read32(gV2CpuIf, 0) & 0x1e0U) | 1U);

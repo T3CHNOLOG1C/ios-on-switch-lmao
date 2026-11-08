@@ -101,6 +101,8 @@ kernel_driver(
         "drivers/TegraI2C",
         "drivers/TegraSMMU",
         "kits/SwitchCAR",
+        "kits/SwitchDMA",
+        "kits/SwitchMMIO",
         "kits/SwitchRefusal",
     ],
     late = [

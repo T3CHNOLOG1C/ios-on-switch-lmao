@@ -3,8 +3,13 @@
 // btree_node_phys_t). The sizes a container's metadata must have for its block count are newfs_apfs's and the
 // kernel's, measured on macOS 27 (fresh containers from 4 GB to 1 TB, and containers it shrank):
 //   internal pool blocks           = 3 x (chunks + chunk-info blocks)
-//   internal-pool free queue limit = ceil(internal pool blocks / 1127); the kernel refuses the container otherwise
+//   internal-pool free queue limit = queue_limit(ceil(internal pool blocks / 1136))
+//   main free queue limit          = queue_limit(min(512, ceil(blocks x m / (4 x 1136)))), m = 1 below 1 GiB, 2 below
+//                                    4 GiB, 4 from 4 GiB
+//   queue_limit(n)                 = 1 when n is 1, else at least 3 (a root over two leaves)
 //   nx_max_file_systems            = min(100, ceil(bytes / 512 MiB))
+// The kernel refuses a container whose free queue limits (sfq_tree_node_limit) are not exactly these for its size,
+// though fsck_apfs passes it (diskutil: "Container ERROR -69808", no volume).
 #include "apfs.h"
 
 #include <stddef.h>
@@ -28,7 +33,9 @@
 #define CPM_ENTRIES      256
 #define FQ_CHILDREN      256
 #define IP_BLOCKS_PER    3u
-#define FQ_IP_PER_NODE   1127u
+#define FQ_PER_NODE      1136u
+#define FQ_NODE_MAX      512u
+#define FQ_LIMIT         24
 #define MAX_FS_BYTES     (UINT64_C(512) << 20)
 
 struct work {
@@ -58,6 +65,8 @@ struct work {
     uint64_t areas_end;
     uint64_t main_queue_end;
     uint64_t ip_queue_end;
+    uint32_t main_queue_nodes;
+    uint32_t ip_queue_nodes;
     uint32_t bpc;
     uint32_t cpc;
     uint32_t cibs;
@@ -267,9 +276,10 @@ static int queue_node(const uint8_t *node, uint64_t lo, uint64_t hi, uint64_t *e
 // The largest end (paddr + length) of a free queue's entries, none of which may overlap [lo, hi). The queue is one
 // leaf, or a root index node over leaves once APFS splits it: many frees waiting for their checkpoint to retire.
 static int queue_end(const struct switch_apfs_io *io, struct work *w, uint32_t q, uint64_t lo, uint64_t hi,
-                     uint64_t *end)
+                     uint64_t *end, uint32_t *nodes)
 {
     *end = 0;
+    *nodes = 0;
     const uint8_t *fq = w->sm + SM_FQ + (size_t)q * SM_FQ_BYTES;
     if (!le64(fq)) {
         return 0;
@@ -282,6 +292,7 @@ static int queue_end(const struct switch_apfs_io *io, struct work *w, uint32_t q
     if (level != !(le16(w->scratch + 32) & 2) || queue_node(w->scratch, lo, hi, end, w->fq_children)) {
         return 1;
     }
+    *nodes = 1 + (level ? le32(w->scratch + 36) : 0);
     for (uint32_t i = 0; level && i < le32(w->scratch + 36); i++) {
         addr = ephemeral(w, w->fq_children[i]);
         if (!addr || io->read(io->context, addr, w->node) || !object_ok(w->node, 3) || le16(w->node + 34) ||
@@ -334,7 +345,8 @@ static int load(const struct switch_apfs_io *io, struct work *w)
         return 1;
     }
     w->areas_end = max64(w->areas_end, max64(ip_bm_base + le32(w->sm + 164), w->ip_base + w->ip_blocks));
-    return queue_end(io, w, 0, 0, 0, &w->ip_queue_end) || queue_end(io, w, 1, 0, 0, &w->main_queue_end);
+    return queue_end(io, w, 0, 0, 0, &w->ip_queue_end, &w->ip_queue_nodes) ||
+           queue_end(io, w, 1, 0, 0, &w->main_queue_end, &w->main_queue_nodes);
 }
 
 static uint64_t cib_addr(const struct work *w, uint32_t index)
@@ -351,6 +363,45 @@ static int read_cib(const struct switch_apfs_io *io, const struct work *w, uint3
 static uint64_t new_ip_blocks(const struct work *w, uint64_t chunks)
 {
     return IP_BLOCKS_PER * (chunks + div_up(chunks, w->cpc));
+}
+
+static uint16_t queue_limit(uint64_t nodes)
+{
+    return (uint16_t)(nodes <= 1 ? 1 : max64(nodes, 3));
+}
+
+uint16_t switch_apfs_pool_queue_limit(uint64_t pool_blocks)
+{
+    return queue_limit(div_up(pool_blocks, FQ_PER_NODE));
+}
+
+uint16_t switch_apfs_main_queue_limit(uint64_t blocks)
+{
+    uint64_t m = 4;
+    if (blocks < (UINT64_C(1) << 18)) {
+        m = 1;
+    } else if (blocks < (UINT64_C(1) << 20)) {
+        m = 2;
+    }
+    uint64_t n = div_up(blocks * m, UINT64_C(4) * FQ_PER_NODE);
+    return queue_limit(n < FQ_NODE_MAX ? n : FQ_NODE_MAX);
+}
+
+// The fewest blocks from `from` whose queue limits hold the queues as they are: the limits grow with the size.
+static uint64_t queues_fit(const struct work *w, uint64_t from)
+{
+    uint64_t lo = from;
+    uint64_t hi = w->blocks;
+    while (lo < hi) {
+        uint64_t mid = lo + (hi - lo) / 2;
+        if (switch_apfs_main_queue_limit(mid) >= w->main_queue_nodes &&
+            switch_apfs_pool_queue_limit(new_ip_blocks(w, div_up(mid, w->bpc))) >= w->ip_queue_nodes) {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    return lo;
 }
 
 // One past the last block the volumes or the container use, from the chunk bitmaps: the last chunk that has one
@@ -396,6 +447,7 @@ int switch_apfs_measure(const struct switch_apfs_io *io, void *work, struct swit
         chunks++;
     }
     layout->minimum = max64(max64(w->areas_end, w->main_queue_end), max64(used, (chunks - 1) * w->bpc + 1));
+    layout->minimum = queues_fit(w, layout->minimum);
     layout->blocks = w->blocks;
     layout->pool_base = w->ip_base;
     layout->pool_blocks = w->ip_blocks;
@@ -550,7 +602,8 @@ static void edit_spaceman(struct work *w, uint64_t blocks, uint32_t cibs, uint64
     memset(w->sm + w->addr_off + (size_t)8 * cibs, 0, (size_t)8 * (w->cibs - cibs));
     put32(dev + SM_DEV_BYTES + 32, w->addr_off + 8 * cibs);
     put64(w->sm + SM_IP_BLOCKS, new_ip);
-    put16(w->sm + SM_FQ + 24, (uint16_t)max64(1, div_up(new_ip, FQ_IP_PER_NODE)));
+    put16(w->sm + SM_FQ + FQ_LIMIT, switch_apfs_pool_queue_limit(new_ip));
+    put16(w->sm + SM_FQ + SM_FQ_BYTES + FQ_LIMIT, switch_apfs_main_queue_limit(blocks));
     seal(w->sm);
 }
 
@@ -605,8 +658,9 @@ int switch_apfs_fit(const struct switch_apfs_io *io, void *work, uint64_t blocks
     }
     uint64_t gone = cut_chunks(io, w, blocks, chunks);
     uint64_t released = gone == UINT64_MAX ? UINT64_MAX : release_pool(io, w, new_ip);
+    uint32_t nodes = 0;
     if (released == UINT64_MAX || !pool_ok(w, new_ip, cibs) ||
-        queue_end(io, w, 1, w->ip_base + new_ip, w->ip_base + w->ip_blocks, &end)) {
+        queue_end(io, w, 1, w->ip_base + new_ip, w->ip_base + w->ip_blocks, &end, &nodes)) {
         return 1;
     }
     edit_spaceman(w, blocks, cibs, w->free - gone + released, new_ip);

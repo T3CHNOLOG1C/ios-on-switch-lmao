@@ -133,6 +133,16 @@ void tgm_recover_init(struct nvkm_device *device)
 	func->intr_ctxsw_timeout = ctxsw_tick;
 }
 
+/* After the GPU's interrupts are off for a power-down (they alone queue the work): a tick's work still queued or running
+ * would read engine status from an unpowered GPU. Its switch is moot, every channel finished before the power-down. */
+void tgm_recover_suspend(void)
+{
+	if (!ctxsw.work)
+		return;
+	nvxnu_work_cancel_wait(ctxsw.work);
+	__atomic_store_n(&ctxsw.engm, 0, __ATOMIC_RELAXED);
+}
+
 void tgm_recover_arm(struct nvkm_device *device)
 {
 	nvkm_wr32(device, ENG_TIMEOUT, ENG_TIMEOUT_DETECTION | PTIMER_US(CTXSW_TIMEOUT_US));

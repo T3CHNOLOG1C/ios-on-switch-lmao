@@ -1304,7 +1304,7 @@ void Decoder::draw(const char *kind, uint32_t first, uint32_t count)
         const size_t slots = info ? info->cbufTypes.size() : 18;
         for (size_t s = 0; s < slots; s++) {
             const Bind &b = binds_[group][s];
-            const uint8_t type = info ? info->cbufTypes[s] : 0;
+            const uint8_t type = info ? info->cbufTypes[s] & 7 : 0;  // raw_pack.h PackCbufType
             if (!b.valid) {
                 if (info)
                     fprintf(out_, "    cb%zu INVALID\n", s);

@@ -202,6 +202,10 @@ struct Texture {
     // Depth32Float_Stencil8 (raw_zeta.h): block-linear zeta memory, bound with its own PTE kind; never sampled, copied or a
     // colour target
     bool zeta = false;
+
+    // Device::createView's: a header of its own over its parent's memory. Whatever else it was copied from the parent with
+    // (planes, stand-ins, images) stays the parent's, which outlives it: destroyTexture frees its header alone.
+    bool view = false;
 };
 
 struct Buffer {
@@ -238,7 +242,17 @@ struct Pipeline {
     std::vector<uint32_t> methods;         // the state's registers as ready push words (program offsets relocated)
     uint32_t push[32] = {}, pushMask = 0;  // root table [0x700, 0x780): the words m2v's push ranges write, and which
     uint8_t setSlot[2] = {};  // the constant buffer slot the vertex and the pixel program read set 0 at (0: none)
-    uint8_t writeBits = 0;    // colors its draws write: SET_CT_WRITE(i) with a channel on
+
+    // the uniform buffers of set 0 its programs read as constant buffers: the group (0 vertex, 4 pixel), the slot and the set's
+    // entry that names the buffer; false where a program reads one no entry names (its draws are refused)
+    struct UboCbuf {
+        uint8_t group, slot, entry;
+    };
+
+    UboCbuf ubos[16] = {};
+    uint8_t uboCount = 0;
+    bool ubosNamed = true;
+    uint8_t writeBits = 0;  // colors its draws write: SET_CT_WRITE(i) with a channel on
     // colors its fragment shader reads, and may write, as storage images inside the pixel interlock (metal2vulkan's storage
     // form of a fetch: the state turns the interlock on with SET_PIXEL_SHADER_INTERLOCK_CONTROL); the ROP writes none of them
     uint8_t storageBits = 0;

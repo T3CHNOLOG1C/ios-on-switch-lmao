@@ -17,6 +17,7 @@ host_test(
         "//drivers/NativeMetal:LimitsTable.h",
     ],
     cxx_std = "c++17",
+    deps = ["//drivers/NativeMetal/abi:metal_abi"],
 )
 
 host_test(

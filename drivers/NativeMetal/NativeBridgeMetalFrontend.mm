@@ -6980,8 +6980,8 @@ extern "C" id native_bridge_metal_open(const char *loader, const char *cache, ui
         base = [NSObject class];
 #endif
 #if TARGET_OS_IPHONE
-    // The target's base class ABI (iPadOS 17.7.11): the dynamic subclass adds no instance variables.
-    if (!base || class_getInstanceSize(base) != 536) {
+    // The dynamic subclass adds no instance variables to the selected IPSW kind's base class (MetalABI.h).
+    if (!base || class_getInstanceSize(base) != kMTLDeviceInstanceSize) {
         NBLOG(@"native-metal: unexpected _MTLDevice ABI");
         return nil;
     }

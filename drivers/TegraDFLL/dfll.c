@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
  * The TegraDFLL.h API: the sequences L4T's CPU frequency driver and clock framework run around the vendored DFLL
- * driver, on the shim's clock tree. Linux-side C (shim prelude); XNU only through dfllxnu.h and TegraI2C.
+ * driver, on the shim's clock tree. Linux-side C (shim prelude); XNU only through kits/SwitchLinux and TegraI2C.
  *
  * Enable follows the T210 cpufreq driver L4T runs on this SoC (CTCaer switch-l4t-kernel-nvidia linux-dev
  * drivers/cpufreq/tegra210-cpufreq.c enable_cpu_clk: clk_set_rate(dfll, rate of cpu_g), clk_set_parent(cpu_g, dfll)),
@@ -72,27 +72,12 @@ static int fail(char *why, size_t len, int err, const char *fmt, ...)
 
 static void lock(void)
 {
-	void *m = __atomic_load_n(&api_lock, __ATOMIC_ACQUIRE);
-
-	if (!m) {
-		void *fresh = dfllxnu_mutex_alloc();
-		void *expected = NULL;
-
-		if (!fresh)
-			panic("TegraDFLL: cannot allocate the API lock");
-		if (__atomic_compare_exchange_n(&api_lock, &expected, fresh, false,
-						__ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
-			m = fresh;
-		} else {
-			m = expected; /* lost the race: the other one is in use (this one leaks, once) */
-		}
-	}
-	dfllxnu_mutex_lock(m);
+	switch_linux_mutex_lock(switch_linux_mutex_of(&api_lock));
 }
 
 static void unlock(void)
 {
-	dfllxnu_mutex_unlock(api_lock);
+	switch_linux_mutex_unlock(api_lock);
 }
 
 static int apply_thermal(void)
@@ -185,7 +170,7 @@ static int to_pllx_locked(char *why, size_t len)
 			    "408 MHz",
 			    MAX77812_UV(st.kept_vout) / 1000, ret);
 	}
-	dfllxnu_msleep(VOUT_SLEW_MS);
+	msleep(VOUT_SLEW_MS);
 	if (!tdfll_platform_pllx_locked())
 		return fail(why, len, -EIO, "PLLX is not locked; the CPU stays on PLLP 408 MHz");
 	ret = clk_set_parent(st.cclk_g, st.pllx);
@@ -284,7 +269,7 @@ int tegra_dfll_cpu_enable(unsigned long rate_hz, char *why, size_t len)
 			fail(why, len, ret, "the DFLL refused %lu kHz (%d)", rate_hz / 1000, ret);
 	}
 	if (!ret) {
-		dfllxnu_msleep(ENABLE_SETTLE_MS);
+		msleep(ENABLE_SETTLE_MS);
 		ret = check_closed_loop(why, len);
 	}
 	if (ret) {

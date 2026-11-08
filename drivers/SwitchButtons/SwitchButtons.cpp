@@ -37,8 +37,7 @@
 #include "../SwitchPower/SwitchPower.h"
 #include "../SwitchSuspend/SwitchWake.h"
 #include "SwitchButtons.h"
-
-extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
+#include "../../kits/SwitchCAR/SwitchPMC.h"
 
 namespace {
 constexpr unsigned kPmicBus = 5;
@@ -56,7 +55,7 @@ enum : uint8_t {
 constexpr unsigned kTopOnOff = 1u << 1, kTopRtc = 1u << 3, kGlobalMask = 1u << 0, kEn0Falling = 1u << 2,
                    kEn0Rising = 1u << 3, kEn0Pressed = 1u << 2;
 constexpr uint32_t kPmicIntid = 118;  // GIC SPI 86
-constexpr vm_offset_t kPmcPA = 0x7000E400;
+constexpr uint32_t kPmcCntrl = 0;
 constexpr uint32_t kPmcIntrPolarity = 1u << 17;
 constexpr uint32_t kWatchdogMS = 10000;  // with as much leeway (switch_check_after_ms): no wakeup of its own
 constexpr unsigned kPmicBurst = 20;      // PMIC interrupts per second that mean the line is stuck
@@ -198,14 +197,8 @@ void SwitchButtons::free()
 // unmasked, global mask off.
 bool SwitchButtons::setUpPmic()
 {
-    auto *pmc = reinterpret_cast<volatile uint32_t *>(ml_io_map(kPmcPA, 0x1000));
-    if (!pmc)
-        panic("SwitchButtons: cannot map the PMC");
-    uint32_t control = pmc[0];
-    if (!(control & kPmcIntrPolarity)) {
-        pmc[0] = control | kPmcIntrPolarity;
-        control = pmc[0];
-    }
+    switch_pmc_rmw(kPmcCntrl, 0, kPmcIntrPolarity);
+    const uint32_t control = switch_pmc_read(kPmcCntrl);
     if (!(control & kPmcIntrPolarity)) {
         panic("SwitchButtons: PMC_CNTRL %#x: INTR_POLARITY (bit 17) does not set, so the MAX77620's active-low nIRQ "
               "would "

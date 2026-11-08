@@ -3,6 +3,7 @@
 # rawframe (raw C++ API), killcheck (a channel kill), facadeframe (RawMetal.mm over the frontend as its m2v fallback), blitframe (copies), orderframe (the
 # two drivers' order on the GPU, over the mock's asynchronous GPU) and cabench (CPU per frame).
 # usage: test/build.sh <host libnative_metal_bridge.a> <frontend dir (NativeBridgeMetalFrontend.{mm,h})> <tree> <outdir>
+#   the frontend's MetalABI.h: bazel build //drivers/NativeMetal/abi:header (or METAL_ABI=<its directory>)
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
 RAW=$HERE/..
@@ -10,6 +11,7 @@ BRIDGE=$1
 FRONT=$2
 TREE=$3
 OUT=$4
+METAL_ABI=${METAL_ABI:-$TREE/bazel-bin/drivers/NativeMetal/abi}
 mkdir -p "$OUT"
 # SWITCH_RAW_HARNESS_MARKS: raw_gpu.cpp marks each fetch barrier it leaves out and each draw it splits, for pack/eqcheck.py
 FLAGS=(-O2 -g -Wall -Wextra -std=c++17 -DSWITCH_RAW_HARNESS_MARKS)
@@ -21,7 +23,7 @@ xcrun clang++ "${FLAGS[@]}" -DNVDEC_TWOD -I "$TREE/drivers/TegraGM20B" -c "$RAW/
 xcrun clang++ "${FLAGS[@]}" -c "$RAW/fx/test/twod_sim.cpp" -o "$OUT/twod_sim.o"
 xcrun clang++ -dynamiclib "$OUT/mock_iokit.o" "$OUT/cap.o" "$OUT/nvdec.o" "$OUT/twod_sim.o" "$OUT/mme_fermi.o" "$OUT/mme_fermi_sim.o" -framework IOKit \
     -framework CoreFoundation -install_name @rpath/libmock_iokit.dylib -o "$OUT/libmock_iokit.dylib"
-OBJC=(-O2 -g -std=c++17 -fobjc-arc -Wno-deprecated-declarations -DSWITCH_RAW_HARNESS_MARKS -I "$FRONT" -I "$TREE/drivers/NativeMetal" -I "$TREE/drivers/TegraGM20B")
+OBJC=(-O2 -g -std=c++17 -fobjc-arc -Wno-deprecated-declarations -DSWITCH_RAW_HARNESS_MARKS -I "$FRONT" -I "$TREE/drivers/NativeMetal" -I "$METAL_ABI" -I "$TREE/drivers/TegraGM20B")
 # the runtime's completion of states the pack lacks (RawComplete.mm, RawProbe.mm; raw_completed.cpp beside raw_gpu.cpp); nvdec is
 # the mock's
 COMPLETION=("$RAW/runtime/raw_capture.cpp" "$RAW/runtime/raw_record.cpp" "$RAW/runtime/raw_cache.cpp" "$RAW/runtime/raw_metallib.cpp")
@@ -38,6 +40,9 @@ xcrun clang++ "${FLAGS[@]}" -I "$TREE/drivers/TegraGM20B" "$HERE/poolcheck.cpp" 
 # killcheck: a channel kill fails exactly the submissions its record names, and the next command buffer gets a new channel
 xcrun clang++ "${FLAGS[@]}" -I "$TREE/drivers/TegraGM20B" "$HERE/killcheck.cpp" "$RAW/runtime/raw_gpu.cpp" "$RAW/fx/fx_mip.cpp" \
     "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_alias.cpp" "$RAW/runtime/raw_pack.cpp" "$RAW/runtime/raw_ycbcr.cpp" "$RAW/runtime/raw_zeta.cpp" "${LIBS[@]}" -o "$OUT/killcheck"
+# faultcheck: what the raw device hands the GPU stays valid (build it with -fsanitize=address too)
+xcrun clang++ "${FLAGS[@]}" -I "$TREE/drivers/TegraGM20B" "$HERE/faultcheck.cpp" "$RAW/runtime/raw_gpu.cpp" "$RAW/fx/fx_mip.cpp" \
+    "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_alias.cpp" "$RAW/runtime/raw_pack.cpp" "$RAW/runtime/raw_ycbcr.cpp" "$RAW/runtime/raw_zeta.cpp" "${LIBS[@]}" -o "$OUT/faultcheck"
 # footprint: what the raw device costs a process (its BOs and malloc heap) at open and at its first state, texture and command buffer
 xcrun clang++ "${FLAGS[@]}" -I "$TREE/drivers/TegraGM20B" "$HERE/footprint.cpp" "$RAW/runtime/raw_gpu.cpp" "$RAW/fx/fx_mip.cpp" \
     "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_alias.cpp" "$RAW/runtime/raw_pack.cpp" "$RAW/runtime/raw_ycbcr.cpp" "$RAW/runtime/raw_zeta.cpp" "${LIBS[@]}" -o "$OUT/footprint"
@@ -55,7 +60,7 @@ xcrun clang++ "${FLAGS[@]}" "$HERE/cachecheck.cpp" "$RAW/runtime/raw_cache.cpp" 
 # completecheck: the runtime's own probe of every Core Animation state of a corpus, its records against the pack
 xcrun clang++ "${OBJC[@]}" -Wall -Wextra -x objective-c++ "$HERE/completecheck.mm" "$RAW/runtime/RawProbe.mm" "$FRONT/NativeBridgeMetalFrontend.mm" \
     -x c++ "$RAW/runtime/raw_pack.cpp" "${COMPLETION[@]}" -x none "$BRIDGE" "${LIBS[@]}" -o "$OUT/completecheck" 2>&1 | grep -v "duplicate libraries" || true
-echo "built $OUT/nvkframe $OUT/rawframe $OUT/facadeframe $OUT/poolcheck $OUT/killcheck $OUT/footprint $OUT/datacheck $OUT/recordcheck $OUT/cachecheck $OUT/completecheck"
+echo "built $OUT/nvkframe $OUT/rawframe $OUT/facadeframe $OUT/poolcheck $OUT/killcheck $OUT/faultcheck $OUT/footprint $OUT/datacheck $OUT/recordcheck $OUT/cachecheck $OUT/completecheck"
 xcrun clang++ "${OBJC[@]}" -Wall -Wextra -x objective-c++ "$HERE/blitframe.mm" "$RAW/runtime/RawMetal.mm" "$RAW/runtime/RawAlias.mm" "$RAW/runtime/RawComplete.mm" "$RAW/runtime/RawProbe.mm" "$FRONT/NativeBridgeMetalFrontend.mm" \
     -x c++ "$RAW/runtime/raw_gpu.cpp" "$RAW/fx/fx_mip.cpp" "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_alias.cpp" "$RAW/runtime/raw_pack.cpp" "$RAW/runtime/raw_ycbcr.cpp" "$RAW/runtime/raw_zeta.cpp" "$RAW/runtime/raw_completed.cpp" "${COMPLETION[@]}" "$TREE/kits/SwitchRefusal/SwitchRefusal.c" -x none "$BRIDGE" "${LIBS[@]}" \
     -o "$OUT/blitframe" 2>&1 | grep -v "duplicate libraries" || true

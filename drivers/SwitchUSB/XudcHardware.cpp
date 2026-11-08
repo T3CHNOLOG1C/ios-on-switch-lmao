@@ -1,16 +1,15 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // Tegra X1 XUSB device controller hardware layer; see XudcHardware.h.
 #include "XudcHardware.h"
+#include "../../kits/SwitchCAR/SwitchPMC.h"
 #include <IOKit/IOLib.h>
-
-extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 
 namespace xudc {
 namespace {
 // Physical bases: Tegra X1 TRM; hekate bdk/soc/t210.h. Page-aligned maps.
-constexpr uint64_t kCarPA = 0x60006000, kPmcPagePA = 0x7000E000, kFusePagePA = 0x7000F000, kMcPA = 0x70019000,
-                   kPadctlPA = 0x7009F000, kXudcPA = 0x700D0000;
-constexpr uint32_t kPmcOffset = 0x400, kFuseOffset = 0x800, kXudcBytes = 0xA000;
+constexpr uint64_t kCarPA = 0x60006000, kFusePagePA = 0x7000F000, kMcPA = 0x70019000, kPadctlPA = 0x7009F000,
+                   kXudcPA = 0x700D0000;
+constexpr uint32_t kFuseOffset = 0x800, kXudcBytes = 0xA000;
 
 enum : uint32_t {  // clock and reset controller (hekate bdk/soc/clock.h)
     RST_DEVICES_U = 0x00c,
@@ -174,95 +173,39 @@ inline void barrier()
 }
 }  // namespace
 
-void cacheFlush(const volatile void *p, size_t n)
-{
-    uintptr_t at = reinterpret_cast<uintptr_t>(p) & ~static_cast<uintptr_t>(63);
-    const uintptr_t end = reinterpret_cast<uintptr_t>(p) + n;
-    for (; at < end; at += 64)
-        __asm__ volatile("dc civac, %0" ::"r"(at) : "memory");
-    barrier();
-}
-
 bool DmaBuffer::allocate(uint32_t bytes)
 {
-    md = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task,
-                                                          static_cast<IOOptionBits>(kIODirectionInOut) |
-                                                              static_cast<IOOptionBits>(kIOMemoryPhysicallyContiguous),
-                                                          bytes, 0x00000000fffff000ULL);
-    const uint64_t physical = md ? md->getPhysicalSegment(0, nullptr, kIOMemoryMapperNone) : 0;
-    va = md ? static_cast<uint8_t *>(md->getBytesNoCopy()) : nullptr;
-    if (!va || !physical || physical + bytes > (1ULL << 32)) {
-        release();
+    if (!switch_dma_alloc(&buffer, bytes))
         return false;
-    }
-    pa = static_cast<uint32_t>(physical);
+    va = buffer.va;
+    pa = static_cast<uint32_t>(buffer.pa);
     size = bytes;
-    bzero(va, bytes);
-    cacheFlush(va, bytes);
     return true;
 }
 
 void DmaBuffer::release()
 {
-    if (md)
-        md->release();
-    md = nullptr;
+    switch_dma_free(&buffer);
     va = nullptr;
     pa = 0;
     size = 0;
 }
 
-uint32_t Hardware::pmc(uint32_t o)
-{
-    return r(pmcPage, kPmcOffset + o);
-}
-
-void Hardware::pmcWrite(uint32_t o, uint32_t v)
-{
-    w(pmcPage, kPmcOffset + o, v);
-}
-
-// Bounded register handshakes of the bring-up and endpoint commands (microseconds); never event waits.
-bool Hardware::waitBits(const volatile uint8_t *b, uint32_t o, uint32_t mask, uint32_t value, uint32_t us)
-{
-    for (uint32_t i = 0; i <= us; ++i) {
-        if ((r(b, o) & mask) == value)
-            return true;
-        IODelay(1);
-    }
-    return false;
-}
-
 bool Hardware::map()
 {
-    car = reinterpret_cast<volatile uint8_t *>(ml_io_map(kCarPA, 0x1000));
-    pmcPage = reinterpret_cast<volatile uint8_t *>(ml_io_map(kPmcPagePA, 0x1000));
-    fusePage = reinterpret_cast<volatile uint8_t *>(ml_io_map(kFusePagePA, 0x1000));
-    mc = reinterpret_cast<volatile uint8_t *>(ml_io_map(kMcPA, 0x1000));
-    padctl = reinterpret_cast<volatile uint8_t *>(ml_io_map(kPadctlPA, 0x1000));
-    xudc = reinterpret_cast<volatile uint8_t *>(ml_io_map(kXudcPA, kXudcBytes));
-    return (car != nullptr) && (pmcPage != nullptr) && (fusePage != nullptr) && (mc != nullptr) &&
-           (padctl != nullptr) && (xudc != nullptr);
+    car = switch_mmio_map(kCarPA, 0x1000);
+    fusePage = switch_mmio_map(kFusePagePA, 0x1000);
+    mc = switch_mmio_map(kMcPA, 0x1000);
+    padctl = switch_mmio_map(kPadctlPA, 0x1000);
+    xudc = switch_mmio_map(kXudcPA, kXudcBytes);
+    return (car != nullptr) && (fusePage != nullptr) && (mc != nullptr) && (padctl != nullptr) && (xudc != nullptr);
 }
 
-// Linux tegra_powergate_power_up order: module reset asserted, partition on, module clock on, clamps removed. The
-// caller releases the reset later. A partition already on (the boot chain's) is left as it is.
-bool Hardware::powerUp(uint32_t partition, uint32_t clockSet, uint32_t resetSet, uint32_t bit)
+// Linux tegra_powergate_power_up order, the reset left asserted for the caller to release. A partition already on (the
+// boot chain's) is left as it is.
+bool Hardware::powerUp(unsigned partition, unsigned id)
 {
-    if (pmc(PWRGATE_STATUS) & (1u << partition))
-        return true;
-    w(car, resetSet, bit);
-    if (!waitBits(pmcPage, kPmcOffset + PWRGATE_TOGGLE, TOGGLE_START, 0, 5000))
-        return false;
-    pmcWrite(PWRGATE_TOGGLE, partition | TOGGLE_START);
-    if (!waitBits(pmcPage, kPmcOffset + PWRGATE_STATUS, 1u << partition, 1u << partition, 5000))
-        return false;
-    IODelay(10);
-    w(car, clockSet, bit);
-    IODelay(10);
-    pmcWrite(REMOVE_CLAMPING, 1u << partition);
-    IODelay(10);
-    return true;
+    return switch_pmc_partition_is_on(partition) || switch_pmc_power_up_in_reset(partition, id, id);
 }
 
 // hekate _xusb_init_phy(): PLLU, UTMIPLL, OTG pad 0 calibration from fuses, bias pad tracking. Each PLL is started
@@ -270,76 +213,74 @@ bool Hardware::powerUp(uint32_t partition, uint32_t clockSet, uint32_t resetSet,
 // whichever controller owns the port.
 bool usb2PadInit(volatile uint8_t *car, volatile uint8_t *fusePage, volatile uint8_t *padctl)
 {
-    auto r = [](const volatile uint8_t *b, uint32_t o) {
-        return *reinterpret_cast<const volatile uint32_t *>(b + o);
-    };
-    const auto w = [](volatile uint8_t *b, uint32_t o, uint32_t v) {
-        *reinterpret_cast<volatile uint32_t *>(b + o) = v;
-    };
-    const auto waitBits = [&](volatile uint8_t *b, uint32_t o, uint32_t mask, uint32_t value, uint32_t us) {
-        for (uint32_t i = 0; i <= us; ++i) {
-            if ((r(b, o) & mask) == value)
-                return true;
-            IODelay(1);
-        }
-        return false;
-    };
-    const uint32_t pllu = r(car, PLLU_BASE);
+    const uint32_t pllu = switch_mmio_read32(car, PLLU_BASE);
     if (!(pllu & PLL_ENABLE) || !(pllu & PLL_LOCK)) {  // hekate clock_enable_pllu
-        w(car, PLLU_MISC, r(car, PLLU_MISC) | (1u << 29));
+        switch_mmio_write32(car, PLLU_MISC, switch_mmio_read32(car, PLLU_MISC) | (1u << 29));
         const uint32_t cfg = (pllu & 0xffe00000u) | (1u << 24) | (1u << 16) | (0x19u << 8) | 2;
-        w(car, PLLU_BASE, cfg);
-        w(car, PLLU_BASE, cfg | PLL_ENABLE);
-        if (!waitBits(car, PLLU_BASE, PLL_LOCK, PLL_LOCK, 1000))
+        switch_mmio_write32(car, PLLU_BASE, cfg);
+        switch_mmio_write32(car, PLLU_BASE, cfg | PLL_ENABLE);
+        if (!switch_mmio_wait32(car, PLLU_BASE, PLL_LOCK, PLL_LOCK, 1000))
             return false;
         IODelay(8);
     }
-    w(car, PLLU_BASE, r(car, PLLU_BASE) | 0x2e00000u);  // USB, HSIC, ICUSB and 48 MHz outputs
+    switch_mmio_write32(car, PLLU_BASE,
+                        switch_mmio_read32(car, PLLU_BASE) | 0x2e00000u);  // USB, HSIC, ICUSB and 48 MHz outputs
 
-    if (!(r(car, UTMIPLL_HW_PWRDN_CFG0) & UTMIPLL_LOCK)) {  // hekate clock_enable_utmipll: 38.4 MHz * 25 = 960 MHz
-        w(car, UTMIPLL_HW_PWRDN_CFG0, (r(car, UTMIPLL_HW_PWRDN_CFG0) & ~3u) | 1);  // software IDDQ control, IDDQ off
-        w(car, UTMIP_PLL_CFG0, (r(car, UTMIP_PLL_CFG0) & 0xff0000ffu) | (25u << 16) | (1u << 8));
-        w(car, UTMIP_PLL_CFG2, (r(car, UTMIP_PLL_CFG2) & 0xff00003fu) | (24u << 18));
-        w(car, UTMIP_PLL_CFG1, (r(car, UTMIP_PLL_CFG1) & 0x07ffa000u) | (1u << 15) | 375);
-        (void)waitBits(car, UTMIPLL_HW_PWRDN_CFG0, UTMIPLL_LOCK, UTMIPLL_LOCK, 1000);  // hekate does not insist either
+    if (!(switch_mmio_read32(car, UTMIPLL_HW_PWRDN_CFG0) &
+          UTMIPLL_LOCK)) {  // hekate clock_enable_utmipll: 38.4 MHz * 25 = 960 MHz
+        switch_mmio_write32(car, UTMIPLL_HW_PWRDN_CFG0,
+                            (switch_mmio_read32(car, UTMIPLL_HW_PWRDN_CFG0) & ~3u) |
+                                1);  // software IDDQ control, IDDQ off
+        switch_mmio_write32(car, UTMIP_PLL_CFG0,
+                            (switch_mmio_read32(car, UTMIP_PLL_CFG0) & 0xff0000ffu) | (25u << 16) | (1u << 8));
+        switch_mmio_write32(car, UTMIP_PLL_CFG2, (switch_mmio_read32(car, UTMIP_PLL_CFG2) & 0xff00003fu) | (24u << 18));
+        switch_mmio_write32(car, UTMIP_PLL_CFG1,
+                            (switch_mmio_read32(car, UTMIP_PLL_CFG1) & 0x07ffa000u) | (1u << 15) | 375);
+        (void)switch_mmio_wait32(car, UTMIPLL_HW_PWRDN_CFG0, UTMIPLL_LOCK, UTMIPLL_LOCK,
+                                 1000);  // hekate does not insist either
     }
-    w(car, UTMIP_PLL_CFG2, (r(car, UTMIP_PLL_CFG2) & 0xfeffffe8u) | 0x2000008u | 0x20 | 2);
+    switch_mmio_write32(car, UTMIP_PLL_CFG2,
+                        (switch_mmio_read32(car, UTMIP_PLL_CFG2) & 0xfeffffe8u) | 0x2000008u | 0x20 | 2);
     IODelay(2);
 
     // Pad calibration from fuses; the fuse block needs its clock for reads.
-    const bool fuseClock = (r(car, CLK_OUT_ENB_H) & H_FUSE) != 0u;
+    const bool fuseClock = (switch_mmio_read32(car, CLK_OUT_ENB_H) & H_FUSE) != 0u;
     if (!fuseClock) {
-        w(car, CLK_ENB_H_SET, H_FUSE);
+        switch_mmio_write32(car, CLK_ENB_H_SET, H_FUSE);
         IODelay(2);
     }
-    const uint32_t calib = r(fusePage, kFuseOffset + FUSE_USB_CALIB);
-    const uint32_t calibExt = r(fusePage, kFuseOffset + FUSE_USB_CALIB_EXT);
+    const uint32_t calib = switch_mmio_read32(fusePage, kFuseOffset + FUSE_USB_CALIB);
+    const uint32_t calibExt = switch_mmio_read32(fusePage, kFuseOffset + FUSE_USB_CALIB_EXT);
     if (!fuseClock)
-        w(car, CLK_ENB_H_CLR, H_FUSE);
-    w(padctl, OTG_PAD0_CTL_0, (r(padctl, OTG_PAD0_CTL_0) & 0xffffffc0u) | (calib & 0x3f));  // HS_CURR_LEVEL
-    w(padctl, OTG_PAD0_CTL_1,
-      (r(padctl, OTG_PAD0_CTL_1) & 0x83ffff87u) |             // TERM_RANGE_ADJ,
-          ((calib & 0x780) >> 4) | ((calibExt << 27) >> 1));  // RPD_CTRL
-    w(padctl, BATTERY_CHRG_OTGPAD0_CTL1, (r(padctl, BATTERY_CHRG_OTGPAD0_CTL1) & 0xfffffe3fu) | 0x80);  // VREG_LEV 1
+        switch_mmio_write32(car, CLK_ENB_H_CLR, H_FUSE);
+    switch_mmio_write32(padctl, OTG_PAD0_CTL_0,
+                        (switch_mmio_read32(padctl, OTG_PAD0_CTL_0) & 0xffffffc0u) | (calib & 0x3f));  // HS_CURR_LEVEL
+    switch_mmio_write32(padctl, OTG_PAD0_CTL_1,
+                        (switch_mmio_read32(padctl, OTG_PAD0_CTL_1) & 0x83ffff87u) |  // TERM_RANGE_ADJ,
+                            ((calib & 0x780) >> 4) | ((calibExt << 27) >> 1));        // RPD_CTRL
+    switch_mmio_write32(padctl, BATTERY_CHRG_OTGPAD0_CTL1,
+                        (switch_mmio_read32(padctl, BATTERY_CHRG_OTGPAD0_CTL1) & 0xfffffe3fu) | 0x80);  // VREG_LEV 1
 
-    w(padctl, OTG_PAD0_CTL_0, r(padctl, OTG_PAD0_CTL_0) & 0xdbffffffu);                        // PD, PD_ZI
-    w(padctl, OTG_PAD0_CTL_1, r(padctl, OTG_PAD0_CTL_1) & 0xfffffffbu);                        // PD_DR
-    w(padctl, BATTERY_CHRG_OTGPAD0_CTL0, r(padctl, BATTERY_CHRG_OTGPAD0_CTL0) & 0xfffffffeu);  // PD_CHG
-    w(padctl, BIAS_PAD_CTL_0, r(padctl, BIAS_PAD_CTL_0) & 0xfffff7ffu);                        // bias PD
-    (void)r(padctl, OTG_PAD0_CTL_1);
+    switch_mmio_write32(padctl, OTG_PAD0_CTL_0, switch_mmio_read32(padctl, OTG_PAD0_CTL_0) & 0xdbffffffu);  // PD, PD_ZI
+    switch_mmio_write32(padctl, OTG_PAD0_CTL_1, switch_mmio_read32(padctl, OTG_PAD0_CTL_1) & 0xfffffffbu);  // PD_DR
+    switch_mmio_write32(padctl, BATTERY_CHRG_OTGPAD0_CTL0,
+                        switch_mmio_read32(padctl, BATTERY_CHRG_OTGPAD0_CTL0) & 0xfffffffeu);               // PD_CHG
+    switch_mmio_write32(padctl, BIAS_PAD_CTL_0, switch_mmio_read32(padctl, BIAS_PAD_CTL_0) & 0xfffff7ffu);  // bias PD
+    (void)switch_mmio_read32(padctl, OTG_PAD0_CTL_1);
 
     // Bias pad tracking, two cycles, then tracking powered down again.
-    w(car, CLK_ENB_Y_SET, Y_USB2_TRK);
-    w(car, CLK_SOURCE_USB2_HSIC_TRK, (r(car, CLK_SOURCE_USB2_HSIC_TRK) & 0xffffff00u) | 6);
-    w(padctl, BIAS_PAD_CTL_1, 0x451e000);
-    w(padctl, BIAS_PAD_CTL_1, 0x051e000);
+    switch_mmio_write32(car, CLK_ENB_Y_SET, Y_USB2_TRK);
+    switch_mmio_write32(car, CLK_SOURCE_USB2_HSIC_TRK,
+                        (switch_mmio_read32(car, CLK_SOURCE_USB2_HSIC_TRK) & 0xffffff00u) | 6);
+    switch_mmio_write32(padctl, BIAS_PAD_CTL_1, 0x451e000);
+    switch_mmio_write32(padctl, BIAS_PAD_CTL_1, 0x051e000);
     IODelay(100);
-    w(padctl, BIAS_PAD_CTL_1, 0x451e000);
+    switch_mmio_write32(padctl, BIAS_PAD_CTL_1, 0x451e000);
     IODelay(3);
-    w(padctl, BIAS_PAD_CTL_1, 0x051e000);
+    switch_mmio_write32(padctl, BIAS_PAD_CTL_1, 0x051e000);
     IODelay(100);
-    w(padctl, BIAS_PAD_CTL_1, r(padctl, BIAS_PAD_CTL_1) | 0x4000000);
-    w(car, CLK_ENB_Y_CLR, Y_USB2_TRK);
+    switch_mmio_write32(padctl, BIAS_PAD_CTL_1, switch_mmio_read32(padctl, BIAS_PAD_CTL_1) | 0x4000000);
+    switch_mmio_write32(car, CLK_ENB_Y_CLR, Y_USB2_TRK);
     IODelay(30);
     return true;
 }
@@ -353,8 +294,9 @@ bool Hardware::initPhy()
 // with the PCIe controller (drivers/SwitchWLAN): their clocks are enabled and resets released, never asserted.
 bool Hardware::powerOn(char *why, size_t whySize)
 {
-    if (r(mc, MC_SMMU_XUSB_DEV_ASID) & 0x80000000u) {
-        snprintf(why, whySize, "SMMU translation is on for XUSB_DEV (ASID 0x%08x)", r(mc, MC_SMMU_XUSB_DEV_ASID));
+    if (switch_mmio_read32(mc, MC_SMMU_XUSB_DEV_ASID) & 0x80000000u) {
+        snprintf(why, whySize, "SMMU translation is on for XUSB_DEV (ASID 0x%08x)",
+                 switch_mmio_read32(mc, MC_SMMU_XUSB_DEV_ASID));
         return false;
     }
     if ((!control.va && !control.allocate(kControlBytes)) || (!events.va && !events.allocate(kEventBytes))) {
@@ -367,39 +309,43 @@ bool Hardware::powerOn(char *why, size_t whySize)
     rings[0].trbs = kRingTrbs;
 
     // The legacy USB2 device controller stays off; XUSB and its pad block on.
-    w(car, RST_DEV_L_SET, L_USBD);
-    w(car, CLK_ENB_L_CLR, L_USBD);
-    w(car, CLK_ENB_W_SET, W_XUSB);
-    w(car, RST_DEV_W_CLR, W_XUSB | W_XUSB_PADCTL);
+    switch_mmio_write32(car, RST_DEV_L_SET, L_USBD);
+    switch_mmio_write32(car, CLK_ENB_L_CLR, L_USBD);
+    switch_mmio_write32(car, CLK_ENB_W_SET, W_XUSB);
+    switch_mmio_write32(car, RST_DEV_W_CLR, W_XUSB | W_XUSB_PADCTL);
     IODelay(2);
-    if (!powerUp(PART_XUSBA, CLK_ENB_W_SET, RST_DEV_W_SET, W_XUSB_SS) ||
-        !powerUp(PART_XUSBB, CLK_ENB_U_SET, RST_DEV_U_SET, U_XUSB_DEV)) {
-        snprintf(why, whySize, "XUSB partitions did not power up (PMC PWRGATE_STATUS 0x%08x)", pmc(PWRGATE_STATUS));
+    if (!powerUp(PART_XUSBA, kClockXusbSs) || !powerUp(PART_XUSBB, kClockXusbDev)) {
+        snprintf(why, whySize, "XUSB partitions did not power up (PMC PWRGATE_STATUS 0x%08x)",
+                 switch_pmc_read(PWRGATE_STATUS));
         return false;
     }
 
     // OTG pad 0 and the bias pad belong to XUSB; port 0 is a device port.
-    w(padctl, USB2_PAD_MUX, (r(padctl, USB2_PAD_MUX) & ~(3u << 18 | 3u)) | 1u << 18 | 1u);
+    switch_mmio_write32(padctl, USB2_PAD_MUX,
+                        (switch_mmio_read32(padctl, USB2_PAD_MUX) & ~(3u << 18 | 3u)) | 1u << 18 | 1u);
     if (!initPhy()) {
-        snprintf(why, whySize, "PLLU did not lock (PLLU_BASE 0x%08x)", r(car, PLLU_BASE));
+        snprintf(why, whySize, "PLLU did not lock (PLLU_BASE 0x%08x)", switch_mmio_read32(car, PLLU_BASE));
         return false;
     }
-    w(padctl, USB2_PORT_CAP, (r(padctl, USB2_PORT_CAP) & ~3u) | 2);
-    w(padctl, SS_PORT_MAP, r(padctl, SS_PORT_MAP) & ~0xfu);
-    pmcWrite(USB_AO, pmc(USB_AO) & 0xfffffff3u);  // ID and VBUS wake detectors powered
+    switch_mmio_write32(padctl, USB2_PORT_CAP, (switch_mmio_read32(padctl, USB2_PORT_CAP) & ~3u) | 2);
+    switch_mmio_write32(padctl, SS_PORT_MAP, switch_mmio_read32(padctl, SS_PORT_MAP) & ~0xfu);
+    switch_pmc_write(USB_AO, switch_pmc_read(USB_AO) & 0xfffffff3u);  // ID and VBUS wake detectors powered
     IODelay(1);
 
     // Device core 102 MHz from PLLP, FS logic from FO 48 MHz, SS 120 MHz from HSIC 480.
-    w(car, PLLU_OUTA, r(car, PLLU_OUTA) | 1);
+    switch_mmio_write32(car, PLLU_OUTA, switch_mmio_read32(car, PLLU_OUTA) | 1);
     IODelay(2);
-    w(car, CLK_ENB_U_SET, U_XUSB_DEV);
-    w(car, CLK_SOURCE_XUSB_CORE_DEV, (r(car, CLK_SOURCE_XUSB_CORE_DEV) & 0x1fffff00u) | 1u << 29 | 6);
+    switch_mmio_write32(car, CLK_ENB_U_SET, U_XUSB_DEV);
+    switch_mmio_write32(car, CLK_SOURCE_XUSB_CORE_DEV,
+                        (switch_mmio_read32(car, CLK_SOURCE_XUSB_CORE_DEV) & 0x1fffff00u) | 1u << 29 | 6);
     IODelay(2);
-    w(car, CLK_SOURCE_XUSB_FS, (r(car, CLK_SOURCE_XUSB_FS) & 0x1fffffffu) | 2u << 29);
-    w(car, CLK_ENB_W_SET, W_XUSB_SS);
-    w(car, CLK_SOURCE_XUSB_SS, (r(car, CLK_SOURCE_XUSB_SS) & 0x1fffff00u) | 3u << 29 | 6);
-    w(car, RST_DEV_W_CLR, W_XUSB_SS);
-    w(car, RST_DEV_U_CLR, U_XUSB_DEV);
+    switch_mmio_write32(car, CLK_SOURCE_XUSB_FS,
+                        (switch_mmio_read32(car, CLK_SOURCE_XUSB_FS) & 0x1fffffffu) | 2u << 29);
+    switch_mmio_write32(car, CLK_ENB_W_SET, W_XUSB_SS);
+    switch_mmio_write32(car, CLK_SOURCE_XUSB_SS,
+                        (switch_mmio_read32(car, CLK_SOURCE_XUSB_SS) & 0x1fffff00u) | 3u << 29 | 6);
+    switch_mmio_write32(car, RST_DEV_W_CLR, W_XUSB_SS);
+    switch_mmio_write32(car, RST_DEV_U_CLR, U_XUSB_DEV);
     IODelay(2);
 
     // IPFS bridge, then the controller's PCI-style config space: BAR0 = its own base (Linux tegra_xudc_fpci_ipfs_init).
@@ -437,30 +383,32 @@ bool Hardware::powerOn(char *why, size_t whySize)
 void Hardware::connect()
 {
     xw(RT_IMOD, (kImodUs * 4) << 16 | (kImodUs * 4));
-    w(padctl, ELPG_PROGRAM_0, 0);
-    w(padctl, ELPG_PROGRAM_1, 0);
-    w(padctl, USB2_VBUS_ID,
-      (r(padctl, USB2_VBUS_ID) & ~(VBUS_ID_VBUS_OVR_MASK | VBUS_ID_SRC_MASK)) | VBUS_ID_VBUS_OVR_EN |
-          VBUS_ID_SRC_ID_OVR_EN);
+    switch_mmio_write32(padctl, ELPG_PROGRAM_0, 0);
+    switch_mmio_write32(padctl, ELPG_PROGRAM_1, 0);
+    switch_mmio_write32(padctl, USB2_VBUS_ID,
+                        (switch_mmio_read32(padctl, USB2_VBUS_ID) & ~(VBUS_ID_VBUS_OVR_MASK | VBUS_ID_SRC_MASK)) |
+                            VBUS_ID_VBUS_OVR_EN | VBUS_ID_SRC_ID_OVR_EN);
     xw(PORTHALT, xr(PORTHALT) & ~PORTHALT_HALT_LTSSM);
     xw(CTRL, xr(CTRL) | CTRL_ENABLE);
     xw(CFG_DEV_FE, (xr(CFG_DEV_FE) & ~FE_PORTREGSEL_MASK) | FE_PORTREGSEL_HSFS);
     xw(PORTSC, (xr(PORTSC) & ~(PORTSC_PLS_MASK | PORTSC_CHANGES)) | PORTSC_LWS | PORTSC_PLS_RXDETECT);
     xw(CFG_DEV_FE, xr(CFG_DEV_FE) & ~FE_PORTREGSEL_MASK);
-    w(padctl, USB2_VBUS_ID, (r(padctl, USB2_VBUS_ID) & ~VBUS_ID_OVR_MASK) | VBUS_ID_OVR_FLOAT | VBUS_ID_VBUS_ON);
+    switch_mmio_write32(padctl, USB2_VBUS_ID,
+                        (switch_mmio_read32(padctl, USB2_VBUS_ID) & ~VBUS_ID_OVR_MASK) | VBUS_ID_OVR_FLOAT |
+                            VBUS_ID_VBUS_ON);
 }
 
 // Device mode off and the VBUS override low: the pull-up goes away.
 void Hardware::disconnect()
 {
     xw(CTRL, xr(CTRL) & ~(CTRL_ENABLE | CTRL_RUN));
-    w(padctl, USB2_VBUS_ID, r(padctl, USB2_VBUS_ID) & ~VBUS_ID_VBUS_ON);
+    switch_mmio_write32(padctl, USB2_VBUS_ID, switch_mmio_read32(padctl, USB2_VBUS_ID) & ~VBUS_ID_VBUS_ON);
 }
 
 bool Hardware::nextEvent(Event &event)
 {
     volatile uint32_t *e = reinterpret_cast<volatile uint32_t *>(events.va) + static_cast<size_t>(eventIndex) * 4;
-    cacheFlush(e, 16);
+    switch_dcache_clean_invalidate(e, 16);
     const uint32_t d3 = e[3];
     if ((d3 & TRB_CYCLE) != eventCycle)
         return false;
@@ -475,11 +423,11 @@ bool Hardware::nextEvent(Event &event)
     return true;
 }
 
-// The CPU never writes the event ring: cacheFlush's clean of a dirty line would overwrite events written since.
+// The CPU never writes the event ring: the clean of a dirty line would overwrite events written since.
 bool Hardware::eventPending() const
 {
     volatile uint32_t *e = reinterpret_cast<volatile uint32_t *>(events.va) + static_cast<size_t>(eventIndex) * 4;
-    cacheFlush(e, 16);
+    switch_dcache_clean_invalidate(e, 16);
     return (e[3] & TRB_CYCLE) == eventCycle;
 }
 
@@ -523,21 +471,21 @@ void Hardware::resetEp0()
 {
     const Ring &ring = rings[0];
     volatile uint32_t *c = context(0);
-    cacheFlush(c, 64);
+    switch_dcache_clean_invalidate(c, 64);
     c[2] = ((ring.pa + ring.enqueue * 16) & ~0xfu) | ring.cycle;
     c[3] = 0;
     c[5] &= 0x00ffffffu;                      // rsvd, partial_td, splitxstate, seq_num
     c[11] &= ~0x7fu;                          // device address
     c[1] = (c[1] & 0x0000ffffu) | 64u << 16;  // max packet 64 below SuperSpeed
-    cacheFlush(c, 64);
+    switch_dcache_clean_invalidate(c, 64);
     xw(CTRL, xr(CTRL) & ~(0x7fu << 24));
     if (const uint32_t halted = xr(EP_HALT)) {  // Linux ep_unhalt_all
         xw(EP_HALT, 0);
-        if (waitBits(xudc, EP_STCHG, halted, halted, 1000))
+        if (switch_mmio_wait32(xudc, EP_STCHG, halted, halted, 1000))
             xw(EP_STCHG, halted);
     }
     xw(EP_RELOAD, 1u);
-    (void)waitBits(xudc, EP_RELOAD, 1u, 0, 1000);
+    (void)switch_mmio_wait32(xudc, EP_RELOAD, 1u, 0, 1000);
     toggleBit(EP_PAUSE, 0, false);
 }
 
@@ -615,7 +563,7 @@ void Hardware::resetRing(uint32_t dci)
     link[3] = trbType(TRB_LINK) | TRB_TOGGLE;
     ring.enqueue = 0;
     ring.cycle = 1;
-    cacheFlush(ring.trb, static_cast<size_t>(ring.trbs) * 16);
+    switch_dcache_clean_invalidate(ring.trb, static_cast<size_t>(ring.trbs) * 16);
 }
 
 // hekate xusb_ep_ctx_t / Linux tegra_xudc_ep_context_setup: state running, CErr/CEC 3, dequeue = ring start with
@@ -649,14 +597,14 @@ bool Hardware::initEndpoint(uint32_t dci, uint32_t type, uint32_t maxPacket, uin
     c[4] = average | esit << 16;
     c[6] = 3u << 18;
     c[11] = address;
-    cacheFlush(c, 64);
+    switch_dcache_clean_invalidate(c, 64);
     return true;
 }
 
 bool Hardware::reloadEndpoint(uint32_t dci)
 {
     xw(EP_RELOAD, 1u << dci);
-    if (!waitBits(xudc, EP_RELOAD, 1u << dci, 0, 1000))
+    if (!switch_mmio_wait32(xudc, EP_RELOAD, 1u << dci, 0, 1000))
         return false;
     xw(EP_PAUSE, xr(EP_PAUSE) & ~(1u << dci));
     xw(EP_HALT, xr(EP_HALT) & ~(1u << dci));
@@ -671,7 +619,7 @@ void Hardware::toggleBit(uint32_t reg, uint32_t dci, bool set)
     if (((value & bit) != 0u) == set)
         return;
     xw(reg, set ? value | bit : value & ~bit);
-    if (waitBits(xudc, EP_STCHG, bit, bit, 1000))
+    if (switch_mmio_wait32(xudc, EP_STCHG, bit, bit, 1000))
         xw(EP_STCHG, bit);
 }
 
@@ -693,11 +641,11 @@ bool Hardware::halted(uint32_t dci)
 void Hardware::disableEndpoint(uint32_t dci)
 {
     volatile uint32_t *c = context(dci);
-    cacheFlush(c, 64);
+    switch_dcache_clean_invalidate(c, 64);
     c[0] &= ~7u;
-    cacheFlush(c, 64);
+    switch_dcache_clean_invalidate(c, 64);
     xw(EP_RELOAD, 1u << dci);
-    (void)waitBits(xudc, EP_RELOAD, 1u << dci, 0, 1000);
+    (void)switch_mmio_wait32(xudc, EP_RELOAD, 1u << dci, 0, 1000);
 }
 
 // Linux __tegra_xudc_ep_set_halt(false): disable, reload, running with the sequence number and partial-TD state
@@ -705,14 +653,14 @@ void Hardware::disableEndpoint(uint32_t dci)
 void Hardware::resetSequence(uint32_t dci)
 {
     volatile uint32_t *c = context(dci);
-    cacheFlush(c, 64);
+    switch_dcache_clean_invalidate(c, 64);
     c[0] &= ~7u;
-    cacheFlush(c, 64);
+    switch_dcache_clean_invalidate(c, 64);
     (void)reloadEndpoint(dci);
-    cacheFlush(c, 64);
+    switch_dcache_clean_invalidate(c, 64);
     c[0] = (c[0] & ~7u) | 1;
     c[5] &= 0x00ffffffu;  // rsvd, partial_td, splitxstate, seq_num
-    cacheFlush(c, 64);
+    switch_dcache_clean_invalidate(c, 64);
     (void)reloadEndpoint(dci);
     toggleBit(EP_PAUSE, dci, false);
     toggleBit(EP_HALT, dci, false);
@@ -724,15 +672,15 @@ void Hardware::dropQueued(uint32_t dci)
 {
     const Ring &ring = rings[dci];
     toggleBit(EP_PAUSE, dci, true);
-    (void)waitBits(xudc, EP_THREAD_ACTIVE, 1u << dci, 0, 1000);
+    (void)switch_mmio_wait32(xudc, EP_THREAD_ACTIVE, 1u << dci, 0, 1000);
     volatile uint32_t *c = context(dci);
-    cacheFlush(c, 64);
+    switch_dcache_clean_invalidate(c, 64);
     c[2] = ((ring.pa + ring.enqueue * 16) & ~0xfu) | ring.cycle;
     c[3] = 0;
     c[5] &= 0xf8000000u;  // keep seq_num; clear edtla, rsvd, partial_td, splitxstate
-    cacheFlush(c, 64);
+    switch_dcache_clean_invalidate(c, 64);
     xw(EP_RELOAD, 1u << dci);
-    (void)waitBits(xudc, EP_RELOAD, 1u << dci, 0, 1000);
+    (void)switch_mmio_wait32(xudc, EP_RELOAD, 1u << dci, 0, 1000);
     toggleBit(EP_PAUSE, dci, false);
 }
 
@@ -753,11 +701,11 @@ uint32_t Hardware::pushData(uint32_t dci, uint64_t bufferPA, uint32_t length, ui
     t[1] = static_cast<uint32_t>(bufferPA >> 32);
     t[2] = (length & 0x1ffff) | (tdSize > 31 ? 31 : tdSize) << 17;
     t[3] = flags | ring.cycle;
-    cacheFlush(t, 16);
+    switch_dcache_clean_invalidate(t, 16);
     if (++ring.enqueue == ring.trbs - 1) {
         volatile uint32_t *link = ring.trb + static_cast<size_t>(ring.enqueue) * 4;
         link[3] = linkControl(link[3], flags, ring.cycle);
-        cacheFlush(link, 16);
+        switch_dcache_clean_invalidate(link, 16);
         ring.enqueue = 0;
         ring.cycle ^= 1;
     }
@@ -784,9 +732,9 @@ void Hardware::setAddress(uint32_t address)
 {
     xw(CTRL, (xr(CTRL) & ~(0x7fu << 24)) | (address & 0x7f) << 24);
     volatile uint32_t *c = context(0);
-    cacheFlush(c, 64);
+    switch_dcache_clean_invalidate(c, 64);
     c[11] = (c[11] & ~0x7fu) | (address & 0x7f);
-    cacheFlush(c, 64);
+    switch_dcache_clean_invalidate(c, 64);
 }
 
 void Hardware::run()

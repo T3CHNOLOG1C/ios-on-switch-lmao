@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * Switch: the Linux 4.9 kernel services the vendored L4T DFLL sources call, on XNU (through dfllxnu.h only).
+ * Switch: the Linux 4.9 kernel services the vendored L4T DFLL sources call, on XNU (through kits/SwitchLinux only).
  * Board specifics (which clocks, which regulator, the device tree node) live in platform.c.
  *
  * Concurrency: every clock-framework, OPP, of_*, pm_runtime, regulator and devm call here comes from the public API
@@ -39,39 +39,39 @@ int printk(const char *fmt, ...)
 	/* L4T messages mostly end in "\n", a few do not ("unexpected ref clk rate ..."): one line each either way */
 	if (n && line[n - 1] == '\n')
 		line[n - 1] = 0;
-	dfllxnu_log("TegraDFLL: %s\n", line);
+	switch_linux_log("TegraDFLL: %s\n", line);
 	return n;
 }
 
 /* devm_* memory is never released (see device.h) */
 void *kmalloc(size_t size, gfp_t flags)
 {
-	return dfllxnu_malloc(size);
+	return switch_linux_malloc(size, 1);
 }
 
 void *kzalloc(size_t size, gfp_t flags)
 {
-	return dfllxnu_malloc(size);
+	return switch_linux_malloc(size, 1);
 }
 
 void kfree(const void *p)
 {
-	dfllxnu_free((void *)(uintptr_t)p);
+	switch_linux_free(p);
 }
 
 void *devm_kzalloc(struct device *dev, size_t size, gfp_t flags)
 {
-	return dfllxnu_malloc(size);
+	return switch_linux_malloc(size, 1);
 }
 
 void *devm_kmalloc(struct device *dev, size_t size, gfp_t flags)
 {
-	return dfllxnu_malloc(size);
+	return switch_linux_malloc(size, 1);
 }
 
 void devm_kfree(struct device *dev, void *p)
 {
-	dfllxnu_free(p);
+	switch_linux_free(p);
 }
 
 /* pinctrl: only clk-dfll.c's PWM-to-PMIC path asks; the OLED drives its MAX77812 over I2C (no nvidia,pwm-to-pmic) */
@@ -90,29 +90,6 @@ int pinctrl_select_state(struct pinctrl *p, struct pinctrl_state *s)
 	return -ENODEV;
 }
 
-/* spinlocks: interrupts off + a test-and-set word */
-unsigned long tdfll_spin_lock_irqsave(spinlock_t *l)
-{
-	unsigned long flags = dfllxnu_irq_save();
-
-	while (__atomic_exchange_n(&l->slock, 1u, __ATOMIC_ACQUIRE)) {
-		while (__atomic_load_n(&l->slock, __ATOMIC_RELAXED))
-			__asm__ __volatile__("yield" ::: "memory");
-	}
-	return flags;
-}
-
-void tdfll_spin_unlock_irqrestore(spinlock_t *l, unsigned long flags)
-{
-	__atomic_store_n(&l->slock, 0u, __ATOMIC_RELEASE);
-	dfllxnu_irq_restore(flags);
-}
-
-unsigned long tdfll_jiffies(void)
-{
-	return (unsigned long)(dfllxnu_nanotime() / NSEC_PER_MSEC);
-}
-
 static unsigned int poll_timeouts;
 
 int tdfll_poll_timed_out(void)
@@ -128,7 +105,7 @@ unsigned int tdfll_poll_timeouts(void)
 
 static void *call_alloc(void (*fn)(void *), void *arg)
 {
-	void *call = dfllxnu_call_alloc(fn, arg);
+	void *call = switch_linux_call_alloc(fn, arg);
 
 	if (!call)
 		panic("TegraDFLL: cannot allocate a thread call for a DFLL timer");
@@ -152,14 +129,19 @@ int mod_timer(struct timer_list *timer, unsigned long expires)
 	unsigned long now = jiffies;
 
 	timer->expires = expires;
-	dfllxnu_call_arm(timer->tdfll_call,
-			 (u64)(expires > now ? expires - now : 0) * (u64)(NSEC_PER_SEC / HZ));
+	switch_linux_call_enter_after(timer->tdfll_call, (u64)(expires > now ? expires - now : 0) *
+								 (u64)(NSEC_PER_SEC / HZ));
 	return 0;
 }
 
 int del_timer(struct timer_list *timer)
 {
-	return timer->tdfll_call ? dfllxnu_call_cancel(timer->tdfll_call) : 0;
+	return timer->tdfll_call && switch_linux_call_cancel(timer->tdfll_call) ? 1 : 0;
+}
+
+int del_timer_sync(struct timer_list *timer)
+{
+	return timer->tdfll_call && switch_linux_call_cancel_wait(timer->tdfll_call) ? 1 : 0;
 }
 
 static void hrtimer_fire(void *arg)
@@ -179,12 +161,12 @@ void hrtimer_start(struct hrtimer *timer, ktime_t tim, const enum hrtimer_mode m
 {
 	if (mode == HRTIMER_MODE_ABS)
 		tim -= ktime_get();
-	dfllxnu_call_arm(timer->tdfll_call, tim > 0 ? (u64)tim : 0);
+	switch_linux_call_enter_after(timer->tdfll_call, tim > 0 ? (u64)tim : 0);
 }
 
 int hrtimer_cancel(struct hrtimer *timer)
 {
-	return timer->tdfll_call ? dfllxnu_call_cancel(timer->tdfll_call) : 0;
+	return timer->tdfll_call && switch_linux_call_cancel_wait(timer->tdfll_call) ? 1 : 0;
 }
 
 /* device tree: static nodes (see of.h) */
@@ -294,7 +276,7 @@ struct resource *platform_get_resource(struct platform_device *pdev, unsigned in
 
 void __iomem *devm_ioremap(struct device *dev, resource_size_t offset, resource_size_t size)
 {
-	return (void __iomem *)(uintptr_t)dfllxnu_ioremap(offset, size);
+	return (void __iomem *)(uintptr_t)switch_linux_ioremap(offset, size, 0);
 }
 
 void __iomem *devm_ioremap_resource(struct device *dev, struct resource *res)
@@ -603,7 +585,7 @@ struct clk *clk_register(struct device *dev, struct clk_hw *hw)
 
 	if (!init || !init->name || !init->ops)
 		return ERR_PTR(-EINVAL);
-	clk = dfllxnu_malloc(sizeof(*clk));
+	clk = switch_linux_malloc(sizeof(*clk), 1);
 	if (!clk)
 		return ERR_PTR(-ENOMEM);
 	clk->name = init->name;

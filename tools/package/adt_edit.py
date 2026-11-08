@@ -25,7 +25,7 @@ from loader_abi import (
     STAMPS_BYTES,
     STAMPS_PROPERTY,
 )
-from native_oled_adt import root_matching
+from native_oled_adt import property_bytes, root_matching
 from native_xnu_layout import parse_adt
 
 # USB 2.0 device mode on the USB-C port (drivers/SwitchUSB): the USB function set configd's USBDeviceConfiguration
@@ -120,12 +120,11 @@ def adt_parse(data: bytes, pos: int = 0) -> tuple[list, int]:
     return [props, nodes], pos
 
 
-def adt_serialize(node: list) -> bytes:
-    props, children = node
-    out = struct.pack('<II', len(props), len(children))
-    for name, word, value in props:
-        out += name.encode().ljust(32, b'\0') + struct.pack('<I', word) + value + bytes(-len(value) % 4)
-    return out + b''.join(adt_serialize(c) for c in children)
+def adt_serialize(tree: list) -> bytes:
+    props, children = tree
+    head = struct.pack('<II', len(props), len(children))
+    body = b''.join(property_bytes(name, value, word & 0x80000000) for name, word, value in props)
+    return head + body + b''.join(adt_serialize(c) for c in children)
 
 
 def put(node: list, name: str, value: bytes) -> None:

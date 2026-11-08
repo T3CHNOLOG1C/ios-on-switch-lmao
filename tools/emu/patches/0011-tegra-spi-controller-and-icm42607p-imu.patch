@@ -439,10 +439,10 @@ index 0000000..b0ce376
 +
 +type_init(icm42607p_register_types)
 diff --git a/hw/arm/tegra2/apb/spi/spi.c b/hw/arm/tegra2/apb/spi/spi.c
-index 1aa0e93..29dbb2b 100644
+index 1aa0e93..f888c13 100644
 --- a/hw/arm/tegra2/apb/spi/spi.c
 +++ b/hw/arm/tegra2/apb/spi/spi.c
-@@ -22,113 +22,284 @@
+@@ -22,113 +22,321 @@
  #include "tegra_common.h"
  
  #include "hw/sysbus.h"
@@ -458,13 +458,16 @@ index 1aa0e93..29dbb2b 100644
 -
 -#include "qemu/cutils.h"
  #include "qemu/log.h"
++#include "qemu/timer.h"
++#include "exec/address-spaces.h"
 +#include "migration/vmstate.h"
  
  #include "spi.h"
  
 +/* The T114+ SPI controller (spi-tegra114 programming model): PIO blocks of BIT_LENGTH+1-bit words through 64-entry
-+ * FIFOs, chip selects under software or hardware control, RDY and FIFO errors on one level interrupt. A block runs to
-+ * completion when PIO (or DMA) is set; the bus clock is not modelled. */
++ * FIFOs, chip selects under software or hardware control, RDY and FIFO errors on one level interrupt. A block's words
++ * are exchanged when PIO (or DMA) is set and RDY comes after the time the bus clock (CAR CLK_SOURCE_SBCx) needs to
++ * shift them: a block that ends at once would let a driver's next block finish inside its interrupt handler. */
 +
  #define TYPE_TEGRA_SPI "tegra.spi"
  #define TEGRA_SPI(obj) OBJECT_CHECK(tegra_spi, (obj), TYPE_TEGRA_SPI)
@@ -513,6 +516,9 @@ index 1aa0e93..29dbb2b 100644
 +#define SPI_RX_DATA_OFFSET  0x1c
 +#define SPI_TX_FIFO_OFFSET  0x108
 +#define SPI_RX_FIFO_OFFSET  0x188
++
++#define CAR_BASE            0x60006000
++#define PLLP_HZ             408000000ULL
  
  typedef struct tegra_spi_state {
      SysBusDevice parent_obj;
@@ -530,6 +536,9 @@ index 1aa0e93..29dbb2b 100644
 +    uint32_t tx_head, tx_len, rx_head, rx_len;
 +    uint32_t errors;
 +    int32_t selected;
++    uint32_t clock_source;
++    uint32_t block_words;
++    QEMUTimer *done;
  } tegra_spi;
  
  static const VMStateDescription vmstate_tegra_spi = {
@@ -550,6 +559,8 @@ index 1aa0e93..29dbb2b 100644
 +        VMSTATE_UINT32(rx_len, tegra_spi),
 +        VMSTATE_UINT32(errors, tegra_spi),
 +        VMSTATE_INT32(selected, tegra_spi),
++        VMSTATE_UINT32(block_words, tegra_spi),
++        VMSTATE_TIMER_PTR(done, tegra_spi),
          VMSTATE_END_OF_LIST()
      }
  };
@@ -572,7 +583,10 @@ index 1aa0e93..29dbb2b 100644
 +    if ((s->errors & FIFO_TX_OVF) && (unmasked & INTR_TX_OVF)) level = true;
 +    qemu_set_irq(s->irq, level);
 +}
-+
+ 
+-    // Convert val to SPI_INTR_MASK format.
+-    val = (val & 0xC0000000) | ((val & 0xF0) << 21);
+-    if (s->regs[SPI_TRANSFER_STATUS_OFFSET>>2] & BIT(30)) val |= BIT(29); // RDY
 +static uint32_t tegra_spi_fifo_status(tegra_spi *s)
 +{
 +    uint32_t value = s->errors;
@@ -586,14 +600,20 @@ index 1aa0e93..29dbb2b 100644
 +    value |= s->rx_len << 23;
 +    return value;
 +}
-+
+ 
+-    if (val & mask) {
+-        TRACE_IRQ_RAISE(s->iomem.addr, s->irq);
+-        qemu_log_mask(LOG_GUEST_ERROR, "tegra.spi: Raised IRQ.\n");
 +/* With CS_SW_HW the selected chip select follows CS_SS_VAL (1 = high, idle); without it the controller drives it low
 + * for a block only. */
 +static void tegra_spi_select(tegra_spi *s, int cs)
 +{
 +    if (s->selected == cs) {
 +        return;
-+    }
+     }
+-    else {
+-        TRACE_IRQ_LOWER(s->iomem.addr, s->irq);
+-        qemu_log_mask(LOG_GUEST_ERROR, "tegra.spi: Lowered IRQ.\n");
 +    if (s->selected >= 0) {
 +        qemu_set_irq(s->cs_lines[s->selected], 1);
 +    }
@@ -606,18 +626,32 @@ index 1aa0e93..29dbb2b 100644
 +static void tegra_spi_software_cs(tegra_spi *s)
 +{
 +    uint32_t cmd = REG(s, SPI_COMMAND_OFFSET);
- 
--    // Convert val to SPI_INTR_MASK format.
--    val = (val & 0xC0000000) | ((val & 0xF0) << 21);
--    if (s->regs[SPI_TRANSFER_STATUS_OFFSET>>2] & BIT(30)) val |= BIT(29); // RDY
++
 +    if (cmd & CMD1_CS_SW_HW) {
 +        tegra_spi_select(s, (cmd & CMD1_CS_SS_VAL) ? -1 : (int)CMD1_CS_SEL(cmd));
-+    }
-+}
+     }
+ }
  
--    if (val & mask) {
--        TRACE_IRQ_RAISE(s->iomem.addr, s->irq);
--        qemu_log_mask(LOG_GUEST_ERROR, "tegra.spi: Raised IRQ.\n");
+-static uint64_t tegra_spi_priv_read(void *opaque, hwaddr offset,
+-                                    unsigned size)
++/* CLK_SOURCE_SBCx: source 31:29 (0 = PLLP_OUT0), a 7.1 divider in 7:0: rate = 408 MHz * 2 / (divider + 2). */
++static int64_t tegra_spi_block_ns(tegra_spi *s, uint64_t bits)
++{
++    uint32_t source = s->clock_source ?
++        address_space_ldl_le(&address_space_memory, CAR_BASE + s->clock_source, MEMTXATTRS_UNSPECIFIED, NULL) : 0;
++    uint64_t hz = PLLP_HZ * 2 / ((source & 0xff) + 2);
++
++    if (source >> 29) {
++        qemu_log_mask(LOG_UNIMP, "tegra.spi: clock source %u is timed as PLLP\n", source >> 29);
++    }
++    return bits * NANOSECONDS_PER_SECOND / hz;
++}
++
++void tegra_spi_set_clock_source(void *dev, uint32_t car_offset)
++{
++    TEGRA_SPI(dev)->clock_source = car_offset;
++}
++
 +static void tegra_spi_run_block(tegra_spi *s)
 +{
 +    uint32_t cmd = REG(s, SPI_COMMAND_OFFSET);
@@ -653,24 +687,30 @@ index 1aa0e93..29dbb2b 100644
 +                s->errors |= FIFO_RX_OVF;
 +            }
 +        }
-     }
--    else {
--        TRACE_IRQ_LOWER(s->iomem.addr, s->irq);
--        qemu_log_mask(LOG_GUEST_ERROR, "tegra.spi: Lowered IRQ.\n");
++    }
 +    if (hardware_cs) {
 +        tegra_spi_select(s, -1);
-     }
-+    REG(s, SPI_TRANSFER_STATUS_OFFSET) =
-+        (REG(s, SPI_TRANSFER_STATUS_OFFSET) & ~TRANS_BLK_CNT) | TRANS_RDY | (words & TRANS_BLK_CNT);
-+    tegra_spi_update_irq(s);
- }
- 
--static uint64_t tegra_spi_priv_read(void *opaque, hwaddr offset,
--                                    unsigned size)
-+static uint64_t tegra_spi_priv_read(void *opaque, hwaddr offset, unsigned size)
++    }
++    s->block_words = words;
++    timer_mod(s->done, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + tegra_spi_block_ns(s, words * bits));
++}
++
++static void tegra_spi_block_done(void *opaque)
  {
      tegra_spi *s = opaque;
-     uint64_t ret = 0;
+-    uint64_t ret = 0;
+ 
+-    TRACE_READ(s->iomem.addr, offset, ret);
++    REG(s, SPI_TRANSFER_STATUS_OFFSET) =
++        (REG(s, SPI_TRANSFER_STATUS_OFFSET) & ~TRANS_BLK_CNT) | TRANS_RDY | (s->block_words & TRANS_BLK_CNT);
++    tegra_spi_update_irq(s);
++}
+ 
+-    if (offset+size <= sizeof(s->regs)) ret = s->regs[offset/sizeof(uint32_t)] & ((1ULL<<size*8)-1);
++static uint64_t tegra_spi_priv_read(void *opaque, hwaddr offset, unsigned size)
++{
++    tegra_spi *s = opaque;
++    uint64_t ret = 0;
  
 +    switch (offset) {
 +    case SPI_FIFO_STATUS_OFFSET:
@@ -693,10 +733,7 @@ index 1aa0e93..29dbb2b 100644
 +        }
 +        break;
 +    }
-     TRACE_READ(s->iomem.addr, offset, ret);
--
--    if (offset+size <= sizeof(s->regs)) ret = s->regs[offset/sizeof(uint32_t)] & ((1ULL<<size*8)-1);
--
++    TRACE_READ(s->iomem.addr, offset, ret);
      return ret;
  }
  
@@ -786,7 +823,7 @@ index 1aa0e93..29dbb2b 100644
      }
  }
  
-@@ -137,11 +308,18 @@ static void tegra_spi_priv_reset(DeviceState *dev)
+@@ -137,11 +345,20 @@ static void tegra_spi_priv_reset(DeviceState *dev)
      tegra_spi *s = TEGRA_SPI(dev);
  
      memset(s->regs, 0, sizeof(s->regs));
@@ -803,6 +840,8 @@ index 1aa0e93..29dbb2b 100644
 +    s->tx_head = s->tx_len = s->rx_head = s->rx_len = 0;
 +    s->errors = 0;
 +    s->selected = -1;
++    s->block_words = 0;
++    timer_del(s->done);
 +    for (int i = 0; i < SPI_CS_LINES; i++) {
 +        qemu_set_irq(s->cs_lines[i], 1);
 +    }
@@ -810,13 +849,25 @@ index 1aa0e93..29dbb2b 100644
  }
  
  static const MemoryRegionOps tegra_spi_mem_ops = {
-@@ -155,7 +333,8 @@ static void tegra_spi_priv_realize(DeviceState *dev, Error **errp)
+@@ -155,7 +372,9 @@ static void tegra_spi_priv_realize(DeviceState *dev, Error **errp)
      tegra_spi *s = TEGRA_SPI(dev);
  
      sysbus_init_irq(SYS_BUS_DEVICE(dev), &s->irq);
 -
 +    qdev_init_gpio_out_named(dev, s->cs_lines, "cs", SPI_CS_LINES);
 +    s->bus = ssi_create_bus(dev, "ssi");
++    s->done = timer_new_ns(QEMU_CLOCK_VIRTUAL, tegra_spi_block_done, s);
      memory_region_init_io(&s->iomem, OBJECT(dev), &tegra_spi_mem_ops, s,
                            TYPE_TEGRA_SPI, TEGRA_SPI1_SIZE);
      sysbus_init_mmio(SYS_BUS_DEVICE(dev), &s->iomem);
+diff --git a/hw/arm/tegra2/apb/spi/spi.h b/hw/arm/tegra2/apb/spi/spi.h
+index 365ce59..9bd7f65 100644
+--- a/hw/arm/tegra2/apb/spi/spi.h
++++ b/hw/arm/tegra2/apb/spi/spi.h
+@@ -34,4 +34,6 @@
+ #define SPI_SPARE_CTLR_OFFSET 0x190
+ #define SPI_SPARE_CTLR_RESET 0x0FFF0000
+ 
++void tegra_spi_set_clock_source(void *dev, uint32_t car_offset);
++
+ #endif // TEGRA_SPI_H

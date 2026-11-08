@@ -38,7 +38,6 @@
 #include "SwitchWake.h"
 
 // NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
-extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 
 // The SoC's hooks (strong: the kernel link takes no undefined weak references; every one below is in a linked
 // driver). The devices' are in SwitchSleepDevices.cpp.
@@ -175,7 +174,7 @@ class SwitchSuspend : public IOService {
 
     uint32_t rd(uint32_t o) const
     {
-        return *reinterpret_cast<volatile uint32_t *>(pmc + o);
+        return switch_mmio_read32(pmc, o);
     }
 
     uint64_t rtcMS() const
@@ -194,7 +193,7 @@ class SwitchSuspend : public IOService {
 
     void wr(uint32_t o, uint32_t v)
     {
-        *reinterpret_cast<volatile uint32_t *>(pmc + o) = v;
+        switch_mmio_write32(pmc, o, v);
     }
 
     const char *checkPmc(char *why, size_t size);
@@ -215,17 +214,14 @@ OSDefineMetaClassAndStructors(SwitchSuspend, IOService)
     // turns off. In reset it reads nothing: the wake line then has no time asleep.
     bool SwitchSuspend::rtcClockOn(bool log)
 {
-    const auto reg = [this](uint32_t o) {
-        return reinterpret_cast<volatile uint32_t *>(car + o);
-    };
-    if (*reg(CAR_RST_DEVICES_L) & CAR_L_RTC) {
+    if (switch_mmio_read32(car, CAR_RST_DEVICES_L) & CAR_L_RTC) {
         if (log)
             IOLog("SwitchSuspend: the Tegra RTC is held in reset; no time asleep in the wake lines\n");
         return false;
     }
-    if (!(*reg(CAR_CLK_OUT_ENB_L) & CAR_L_RTC)) {
-        *reg(CAR_CLK_ENB_L_SET) = CAR_L_RTC;
-        (void)*reg(CAR_CLK_OUT_ENB_L);
+    if (!(switch_mmio_read32(car, CAR_CLK_OUT_ENB_L) & CAR_L_RTC)) {
+        switch_mmio_write32(car, CAR_CLK_ENB_L_SET, CAR_L_RTC);
+        (void)switch_mmio_read32(car, CAR_CLK_OUT_ENB_L);
         IODelay(2);
     }
     return true;
@@ -239,7 +235,7 @@ void SwitchSuspend::journalWatchdog()
     if (!tmr)
         return;
     const auto reg = [this](uint32_t o) {
-        return *reinterpret_cast<volatile uint32_t *>(tmr + o);
+        return switch_mmio_read32(tmr, o);
     };
     const uint32_t count = reg(TMR5_PCR) & TMR_COUNT_MASK;
     IODelay(10);
@@ -297,10 +293,10 @@ bool SwitchSuspend::start(IOService *provider)
 {
     if (!IOService::start(provider))
         return false;
-    pmc = reinterpret_cast<volatile uint8_t *>(ml_io_map(kPmcPagePA, 0x1000));
-    apb = reinterpret_cast<volatile uint8_t *>(ml_io_map(kApbMiscPA, 0x4000));
-    car = reinterpret_cast<volatile uint8_t *>(ml_io_map(kCarPA, 0x1000));
-    tmr = reinterpret_cast<volatile uint8_t *>(ml_io_map(kTmrPA, 0x1000));
+    pmc = switch_mmio_map(kPmcPagePA, 0x1000);
+    apb = switch_mmio_map(kApbMiscPA, 0x4000);
+    car = switch_mmio_map(kCarPA, 0x1000);
+    tmr = switch_mmio_map(kTmrPA, 0x1000);
     setName("SwitchSuspend");
 #if DEVELOPMENT || DEBUG
     rtcUsable = (pmc != nullptr) && (car != nullptr) && rtcClockOn(true);  // the wake line's time asleep
@@ -422,7 +418,7 @@ void SwitchSuspend::sleepDevices()
         switch_sleep_mark(SWITCH_STEP_SLEEP_BPMP);
         const uint64_t at = mach_absolute_time();
         const int err = tegra_bpmp_sc7_suspend(line, sizeof(line));
-        switch_power_journal("SwitchSuspend: sleep bpmp: %llu us: %s%s", switch_sleep_ns_since(at) / 1000, line,
+        switch_power_journal("SwitchSuspend: sleep bpmp: %llu us: %s%s", switch_ns_since(at) / 1000, line,
                              err ? " (SC7 may not be entered)" : "");
 #if !(DEVELOPMENT || DEBUG)
         if (err)
@@ -431,7 +427,7 @@ void SwitchSuspend::sleepDevices()
 #endif
     }
     switch_sleep_storage();
-    const uint64_t us = switch_sleep_ns_since(start) / 1000;
+    const uint64_t us = switch_ns_since(start) / 1000;
     switch_power_journal("SwitchSuspend: sleep i2c (last; devices took %llu.%03llu ms)", us / 1000, us % 1000);
     switch_sleep_mark(SWITCH_STEP_SLEEP_I2C);
     tegra_i2c_suspend();
@@ -444,13 +440,13 @@ void SwitchSuspend::quiesce()
     const uint64_t start = mach_absolute_time();
     tegra_gpio_suspend();
     for (uint32_t i = 0; i < kPadWords; ++i)
-        pad[i] = *reinterpret_cast<volatile uint32_t *>(apb + kPadFirst + 4 * static_cast<size_t>(i));
+        pad[i] = switch_mmio_read32(apb, kPadFirst + 4 * i);
     for (uint32_t i = 0; i < kMuxWords; ++i)
-        mux[i] = *reinterpret_cast<volatile uint32_t *>(apb + kMuxFirst + 4 * static_cast<size_t>(i));
+        mux[i] = switch_mmio_read32(apb, kMuxFirst + 4 * i);
     arm_gic_suspend();
-    usecConfig = tmr ? *reinterpret_cast<volatile uint32_t *>(tmr + TIMERUS_USEC_CFG) : 0;
+    usecConfig = tmr ? switch_mmio_read32(tmr, TIMERUS_USEC_CFG) : 0;
     rtcBeforeMS = rtcUsable ? rtcMS() : 0;
-    quiesceNS = switch_sleep_ns_since(start);  // journaled at wake: nothing here may take a lock
+    quiesceNS = switch_ns_since(start);  // journaled at wake: nothing here may take a lock
     // What ATF's SYSTEM_SUSPEND and the PMC will act on (debug kernels; the power trail keeps it through a warm reset).
     switch_power_trail("bpmp channels %#010x", tegra_bpmp_semaphore());
     switch_power_trail("pmc msk %08x %08x st %08x %08x", rd(PMC_WAKE_MASK), rd(PMC_WAKE2_MASK), rd(PMC_WAKE_STATUS),
@@ -465,13 +461,13 @@ void SwitchSuspend::activate()
     rtcAfterMS = rtcUsable && rtcClockOn(false) ? rtcMS() : rtcBeforeMS;
     // The microsecond timer's divider (the SoC watchdog counts in its ticks), as Linux tegra210_timer.c restores it.
     if (tmr && usecConfig) {
-        usecAfter = *reinterpret_cast<volatile uint32_t *>(tmr + TIMERUS_USEC_CFG);
-        *reinterpret_cast<volatile uint32_t *>(tmr + TIMERUS_USEC_CFG) = usecConfig;
+        usecAfter = switch_mmio_read32(tmr, TIMERUS_USEC_CFG);
+        switch_mmio_write32(tmr, TIMERUS_USEC_CFG, usecConfig);
     }
     for (uint32_t i = 0; i < kMuxWords; ++i)
-        *reinterpret_cast<volatile uint32_t *>(apb + kMuxFirst + 4 * static_cast<size_t>(i)) = mux[i];
+        switch_mmio_write32(apb, kMuxFirst + 4 * i, mux[i]);
     for (uint32_t i = 0; i < kPadWords; ++i)
-        *reinterpret_cast<volatile uint32_t *>(apb + kPadFirst + 4 * static_cast<size_t>(i)) = pad[i];
+        switch_mmio_write32(apb, kPadFirst + 4 * i, pad[i]);
     __asm__ volatile("dsb sy" ::: "memory");
     tegra_gpio_resume();
     // The pads held their levels in deep power-down through SC7; released as Linux tegra_pmc_resume does, once the
@@ -482,14 +478,14 @@ void SwitchSuspend::activate()
     arm_gic_resume();
     wakeStatus = rd(PMC_WAKE_STATUS) | rd(PMC_SW_WAKE_STATUS);
     wake2Status = rd(PMC_WAKE2_STATUS) | rd(PMC_SW_WAKE2_STATUS);
-    activateNS = switch_sleep_ns_since(start);
+    activateNS = switch_ns_since(start);
 }
 
 void SwitchSuspend::wakeDevices()
 {
     const uint64_t start = mach_absolute_time();
     // The time between the last sleep step and the first wake step: SC7 and the firmware's warm boot, by this clock.
-    const uint64_t asleepMS = suspendedAt ? switch_sleep_ns_since(suspendedAt) / 1000000 : 0;
+    const uint64_t asleepMS = suspendedAt ? switch_ns_since(suspendedAt) / 1000000 : 0;
     switch_sleep_trail(SWITCH_STEP_WAKE);
     switch_power_trail_watch(kActionWatchSeconds, "wake action");
 #if DEVELOPMENT || DEBUG
@@ -499,7 +495,7 @@ void SwitchSuspend::wakeDevices()
         switch_sleep_trail(SWITCH_STEP_WAKE_I2C);
         const uint64_t at = mach_absolute_time();
         tegra_i2c_resume();
-        switch_power_journal("SwitchSuspend: wake i2c: %llu us", switch_sleep_ns_since(at) / 1000);
+        switch_power_journal("SwitchSuspend: wake i2c: %llu us", switch_ns_since(at) / 1000);
     }
     switch_battery_gauge gaugeAfter = {};
 #if DEVELOPMENT || DEBUG
@@ -528,21 +524,21 @@ void SwitchSuspend::wakeDevices()
         switch_sleep_mark(SWITCH_STEP_WAKE_BPMP);
         const uint64_t at = mach_absolute_time();
         (void)tegra_bpmp_sc7_resume(line, sizeof(line));
-        switch_power_journal("SwitchSuspend: wake bpmp: %llu us: %s", switch_sleep_ns_since(at) / 1000, line);
+        switch_power_journal("SwitchSuspend: wake bpmp: %llu us: %s", switch_ns_since(at) / 1000, line);
     }
     bool alarm = false;
     {
         switch_sleep_mark(SWITCH_STEP_WAKE_RTC);
         const uint64_t at = mach_absolute_time();
         alarm = switch_rtc_resume() == 1;
-        switch_power_journal("SwitchSuspend: wake rtc: %llu us%s", switch_sleep_ns_since(at) / 1000,
+        switch_power_journal("SwitchSuspend: wake rtc: %llu us%s", switch_ns_since(at) / 1000,
                              alarm ? " (ALARM1)" : "");
     }
     {
         switch_sleep_mark(SWITCH_STEP_WAKE_SMMU);
         const uint64_t at = mach_absolute_time();
         const int lost = tegra_smmu_resume();  // before any translated client (host1x engines, display) runs
-        switch_power_journal("SwitchSuspend: wake smmu: %llu us%s", switch_sleep_ns_since(at) / 1000,
+        switch_power_journal("SwitchSuspend: wake smmu: %llu us%s", switch_ns_since(at) / 1000,
                              lost ? " (a swgroup was not restored)" : "");
     }
     switch_wake_devices();
@@ -568,7 +564,7 @@ void SwitchSuspend::wakeDevices()
         if (wakeHoldEnd)
             thread_call_enter_delayed(wakeHoldEnd, deadline);
     }
-    const uint64_t us = switch_sleep_ns_since(start) / 1000;
+    const uint64_t us = switch_ns_since(start) / 1000;
     switch_power_event("SwitchSuspend: wake %u: %s (PMC WAKE_STATUS %#x WAKE2_STATUS %#x), devices %llu.%03llu ms",
                        sleeps, reason, wakeStatus, wake2Status, us / 1000, us % 1000);
     switch_sleep_mark(SWITCH_STEP_AWAKE);

@@ -159,8 +159,7 @@
 #include "SwitchSocTherm.h"
 #include "SwitchThermalLimits.h"
 #include <os/log.h>
-
-extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
+#include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
 
 extern "C" int tegra_gm20b_bringup_busy(void);  // drivers/TegraGM20B/TegraGM20B.cpp
 // NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
@@ -340,16 +339,6 @@ constexpr Profile kProfiles[] = {
      {0, 0, 3900, 2900, 0, 0, 1000, 0, 0, 0},
      {0, 0, 51, 51, 76, 128, 255, 255, 255, 255}},
 };
-
-inline uint32_t rd(const volatile uint8_t *base, uint32_t offset)
-{
-    return *reinterpret_cast<const volatile uint32_t *>(base + offset);
-}
-
-inline void wr(volatile uint8_t *base, uint32_t offset, uint32_t value)
-{
-    *reinterpret_cast<volatile uint32_t *>(base + offset) = value;
-}
 
 int skin(const int32_t coefficient[2], int milliC)
 {
@@ -537,18 +526,18 @@ static void storeReading(bool good, int soc, int pcb)
 
 bool SwitchThermal::mapRegisters()
 {
-    car = reinterpret_cast<volatile uint8_t *>(ml_io_map(kCarPA, 0x1000));
-    gpio = reinterpret_cast<volatile uint8_t *>(ml_io_map(kGpioPA, 0x1000));
-    pinmux = reinterpret_cast<volatile uint8_t *>(ml_io_map(kPinmuxPA, 0x1000));
-    pwm = reinterpret_cast<volatile uint8_t *>(ml_io_map(kPwmPA, 0x100));
-    pmc = reinterpret_cast<volatile uint8_t *>(ml_io_map(kPmcPA, 0x100));
+    car = switch_mmio_map(kCarPA, 0x1000);
+    gpio = switch_mmio_map(kGpioPA, 0x1000);
+    pinmux = switch_mmio_map(kPinmuxPA, 0x1000);
+    pwm = switch_mmio_map(kPwmPA, 0x100);
+    pmc = switch_mmio_map(kPmcPA, 0x100);
     return (car != nullptr) && (gpio != nullptr) && (pinmux != nullptr) && (pwm != nullptr) && (pmc != nullptr);
 }
 
 void SwitchThermal::gpioMasked(uint32_t port, uint32_t reg, unsigned pin, bool value)
 {
-    wr(gpio, port + reg, (1u << (pin + 8)) | ((value ? 1u : 0u) << pin));
-    (void)rd(gpio, port + reg);
+    switch_mmio_write32(gpio, port + reg, (1u << (pin + 8)) | ((value ? 1u : 0u) << pin));
+    (void)switch_mmio_read32(gpio, port + reg);
 }
 
 // hekate fan_set_duty() first-call setup plus regulator_5v_enable(), T210B01 branch.
@@ -556,32 +545,32 @@ void SwitchThermal::fanPowerOn()
 {
     // The PWM block must be clocked and out of reset before its registers are touched. Left alone
     // if something already runs it (hekate's Nyx enables it and keeps it on after its fan stops).
-    if (!(rd(car, CLK_OUT_ENB_L) & kPwmClock) || (rd(car, RST_DEVICES_L) & kPwmClock)) {
-        wr(car, RST_DEV_L_SET, kPwmClock);
-        wr(car, CLK_ENB_L_CLR, kPwmClock);
-        wr(car, CLK_SOURCE_PWM, kPwmSource);
-        wr(car, CLK_ENB_L_SET, kPwmClock);
+    if (!(switch_mmio_read32(car, CLK_OUT_ENB_L) & kPwmClock) || (switch_mmio_read32(car, RST_DEVICES_L) & kPwmClock)) {
+        switch_mmio_write32(car, RST_DEV_L_SET, kPwmClock);
+        switch_mmio_write32(car, CLK_ENB_L_CLR, kPwmClock);
+        switch_mmio_write32(car, CLK_SOURCE_PWM, kPwmSource);
+        switch_mmio_write32(car, CLK_ENB_L_SET, kPwmClock);
         IODelay(2);
-        wr(car, RST_DEV_L_CLR, kPwmClock);
-        (void)rd(car, RST_DEVICES_L);
+        switch_mmio_write32(car, RST_DEV_L_CLR, kPwmClock);
+        (void)switch_mmio_read32(car, RST_DEVICES_L);
     }
-    wr(pwm, PWM_CSR_1, kPwmEnable | (256u << 16));  // stopped until the pin is switched over
+    switch_mmio_write32(pwm, PWM_CSR_1, kPwmEnable | (256u << 16));  // stopped until the pin is switched over
 
-    wr(pinmux, PINMUX_SATA_LED_ACTIVE, 1);
+    switch_mmio_write32(pinmux, PINMUX_SATA_LED_ACTIVE, 1);
     gpioMasked(kPortA, MSK_CNF, kPinPA5, true);
     gpioMasked(kPortA, MSK_OUT, kPinPA5, true);
     gpioMasked(kPortA, MSK_OE, kPinPA5, true);
-    if (rd(pmc, NO_IOPOWER) & kPmcGpio) {
-        wr(pmc, NO_IOPOWER, rd(pmc, NO_IOPOWER) & ~kPmcGpio);
-        (void)rd(pmc, NO_IOPOWER);
+    if (switch_mmio_read32(pmc, NO_IOPOWER) & kPmcGpio) {
+        switch_mmio_write32(pmc, NO_IOPOWER, switch_mmio_read32(pmc, NO_IOPOWER) & ~kPmcGpio);
+        (void)switch_mmio_read32(pmc, NO_IOPOWER);
     }
-    if (rd(pmc, PWR_DET_VAL) & kPmcGpio) {
-        wr(pmc, PWR_DET_VAL, rd(pmc, PWR_DET_VAL) & ~kPmcGpio);
-        (void)rd(pmc, PWR_DET_VAL);
+    if (switch_mmio_read32(pmc, PWR_DET_VAL) & kPmcGpio) {
+        switch_mmio_write32(pmc, PWR_DET_VAL, switch_mmio_read32(pmc, PWR_DET_VAL) & ~kPmcGpio);
+        (void)switch_mmio_read32(pmc, PWR_DET_VAL);
     }
 
-    wr(pinmux, PINMUX_LCD_GPIO2, 1);
-    (void)rd(pinmux, PINMUX_LCD_GPIO2);
+    switch_mmio_write32(pinmux, PINMUX_LCD_GPIO2, 1);
+    (void)switch_mmio_read32(pinmux, PINMUX_LCD_GPIO2);
     gpioMasked(kPortV, MSK_CNF, kPinPV4, false);
 }
 
@@ -592,8 +581,8 @@ void SwitchThermal::setDrive(unsigned value)
     if (value == drive)
         return;
     drive = value;
-    wr(pwm, PWM_CSR_1, kPwmEnable | ((kFullDrive - value) << 16));
-    (void)rd(pwm, PWM_CSR_1);
+    switch_mmio_write32(pwm, PWM_CSR_1, kPwmEnable | ((kFullDrive - value) << 16));
+    (void)switch_mmio_read32(pwm, PWM_CSR_1);
 }
 
 void SwitchThermal::publish(const char *key, int64_t value)
@@ -819,11 +808,11 @@ bool SwitchThermal::preparePerf()
 {
     using namespace switchclk;
     const Cpu cpu = readCpu(car);
-    const uint32_t policy = rd(car, CCLKG_BURST_POLICY);
-    const uint32_t divider = rd(car, SUPER_CCLKG_DIVIDER);
-    const uint32_t pllp = rd(car, PLLP_BASE);
-    const uint32_t outb = rd(car, PLLP_OUTB);
-    const uint32_t enbY = rd(car, CLK_OUT_ENB_Y);
+    const uint32_t policy = switch_mmio_read32(car, CCLKG_BURST_POLICY);
+    const uint32_t divider = switch_mmio_read32(car, SUPER_CCLKG_DIVIDER);
+    const uint32_t pllp = switch_mmio_read32(car, PLLP_BASE);
+    const uint32_t outb = switch_mmio_read32(car, PLLP_OUTB);
+    const uint32_t enbY = switch_mmio_read32(car, CLK_OUT_ENB_Y);
     const char *refusal = nullptr;
     int err = 0;
     snprintf(clockState, sizeof(clockState),
@@ -831,21 +820,21 @@ bool SwitchThermal::preparePerf()
              "%#x, PLLP_OUTB %#x (OUT4 %s, %u kHz), CLK_OUT_ENB_Y %#x (PLLP_OUT_CPU %s), RST_DEVICES_Y bit 31 %u",
              policy, policy >> 28, (policy >> 4) & 0xf, divider, pllp, outb,
              (outb & kOut4Running) == kOut4Running ? "on" : "off", kPllpKHz * 2 / ((outb >> 24) + 2), enbY,
-             enbY & kPllpOutCpu ? "on" : "off", (rd(car, RST_DEVICES_Y) >> 31) & 1);
+             enbY & kPllpOutCpu ? "on" : "off", (switch_mmio_read32(car, RST_DEVICES_Y) >> 31) & 1);
     trace("step 0: %s", clockState);
     if (!fuse)
-        fuse = reinterpret_cast<volatile uint8_t *>(ml_io_map(kFusePA, 0x400));
+        fuse = switch_mmio_map(kFusePA, 0x400);
     if (!apbMisc)
-        apbMisc = reinterpret_cast<volatile uint8_t *>(ml_io_map(kApbMiscPA, 0x100));
+        apbMisc = switch_mmio_map(kApbMiscPA, 0x100);
     if (!fuse || !apbMisc) {
         refusal = "FUSE/APB_MISC mapping failed";
     } else {
-        wr(car, CLK_ENB_H_SET, kFuseClock);
-        wr(car, MISC_CLK_ENB, rd(car, MISC_CLK_ENB) | kFuseVisible);
-        (void)rd(car, MISC_CLK_ENB);
-        const uint32_t hidrev = rd(apbMisc, APB_MISC_HIDREV);
-        const uint32_t sku = rd(fuse, FUSE_CACHE + FUSE_SKU_INFO) & 0xff;
-        cpuSpeedo = static_cast<int>(rd(fuse, FUSE_CACHE + FUSE_CPU_SPEEDO_0));
+        switch_mmio_write32(car, CLK_ENB_H_SET, kFuseClock);
+        switch_mmio_write32(car, MISC_CLK_ENB, switch_mmio_read32(car, MISC_CLK_ENB) | kFuseVisible);
+        (void)switch_mmio_read32(car, MISC_CLK_ENB);
+        const uint32_t hidrev = switch_mmio_read32(apbMisc, APB_MISC_HIDREV);
+        const uint32_t sku = switch_mmio_read32(fuse, FUSE_CACHE + FUSE_SKU_INFO) & 0xff;
+        cpuSpeedo = static_cast<int>(switch_mmio_read32(fuse, FUSE_CACHE + FUSE_CPU_SPEEDO_0));
         cpuSpeedoId = sku == 0x87 ? 3 : 0;
         cpuProcess = cpuSpeedo < static_cast<int>(kB01ProcessSpeedo) ? 0 : 1;
         // An ordered refusal chain: each read runs only once every check before it has passed.
@@ -963,14 +952,14 @@ bool SwitchThermal::raiseCpu(int soc)
         const unsigned found = readCpu(car).kHz;
         pllxLost = false;
         // Every relock parks the cluster on PLLP_OUT4, which preparePerf found running at boot.
-        if ((rd(car, PLLP_OUTB) & kOut4Running) != kOut4Running) {
-            wr(car, PLLP_OUTB, keptOutb);
-            (void)rd(car, PLLP_OUTB);
+        if ((switch_mmio_read32(car, PLLP_OUTB) & kOut4Running) != kOut4Running) {
+            switch_mmio_write32(car, PLLP_OUTB, keptOutb);
+            (void)switch_mmio_read32(car, PLLP_OUTB);
             IODelay(2);
         }
-        if ((rd(car, PLLP_OUTB) & kOut4Running) != kOut4Running) {
+        if ((switch_mmio_read32(car, PLLP_OUTB) & kOut4Running) != kOut4Running) {
             IOLog("SwitchPerf: after sleep, PLLP_OUT4 is off (PLLP_OUTB %#x); the CPU stays at %u kHz for this boot\n",
-                  rd(car, PLLP_OUTB), found);
+                  switch_mmio_read32(car, PLLP_OUTB), found);
             dfllMode = governed = false;
             perfSettled = true;
             return false;
@@ -978,7 +967,7 @@ bool SwitchThermal::raiseCpu(int soc)
         // The DFLL enable starts from PLLX at the boot rate (the PLL ladder relocks in its own first step).
         if (dfllMode && !runCpuFromPllx(keptPllx, kStepRelock)) {
             IOLog("SwitchPerf: after sleep, PLLX did not relock (CPU at %u kHz, CCLKG %#x); PLL mode for this boot\n",
-                  found, rd(car, CCLKG_BURST_POLICY));
+                  found, switch_mmio_read32(car, CCLKG_BURST_POLICY));
             dfllMode = governed = false;
         } else if (dfllMode) {
             perfRelocked = true;
@@ -1033,7 +1022,7 @@ bool SwitchThermal::raiseCpu(int soc)
         }
         if (failed && *failed) {
             IOLog("SwitchPerf: CPU raise stopped at step %u: %s (CCLKG %#x, CCLK %#x)\n", step, failed,
-                  rd(car, CCLKG_BURST_POLICY), rd(car, CCLK_BURST_POLICY));
+                  switch_mmio_read32(car, CCLKG_BURST_POLICY), switch_mmio_read32(car, CCLK_BURST_POLICY));
         }
     }
     if (failed) {
@@ -1588,62 +1577,64 @@ void SwitchThermal::restoreCpu(const char *why, bool forGood, bool keepDfll)
 bool SwitchThermal::runCpuFromPllx(uint32_t pllxBase, unsigned step)
 {
     using namespace switchclk;
-    const uint32_t parked = (keptPolicy & ~0xf0u) | (kSourcePllpOut4 << 4);             // the RUN source only
-    const uint32_t gateClose = rd(car, CLK_OUT_ENB_Y) & kPllpOutCpu ? 0 : kPllpOutCpu;  // only if it was shut
-    trace("step %u: PLLP_OUT_CPU gate on (CLK_OUT_ENB_Y %#x)", step, rd(car, CLK_OUT_ENB_Y));
+    const uint32_t parked = (keptPolicy & ~0xf0u) | (kSourcePllpOut4 << 4);  // the RUN source only
+    const uint32_t gateClose =
+        switch_mmio_read32(car, CLK_OUT_ENB_Y) & kPllpOutCpu ? 0 : kPllpOutCpu;  // only if it was shut
+    trace("step %u: PLLP_OUT_CPU gate on (CLK_OUT_ENB_Y %#x)", step, switch_mmio_read32(car, CLK_OUT_ENB_Y));
     // clk-periph-gate.c clk_periph_enable: set, 2 us, then out of reset if it is in reset (none on hardware so far).
-    wr(car, CLK_ENB_Y_SET, kPllpOutCpu);
-    (void)rd(car, CLK_OUT_ENB_Y);
+    switch_mmio_write32(car, CLK_ENB_Y_SET, kPllpOutCpu);
+    (void)switch_mmio_read32(car, CLK_OUT_ENB_Y);
     IODelay(2);
-    if (rd(car, RST_DEVICES_Y) & kPllpOutCpu) {
+    if (switch_mmio_read32(car, RST_DEVICES_Y) & kPllpOutCpu) {
         IODelay(5);
-        wr(car, RST_DEV_Y_CLR, kPllpOutCpu);
-        (void)rd(car, RST_DEVICES_Y);
+        switch_mmio_write32(car, RST_DEV_Y_CLR, kPllpOutCpu);
+        (void)switch_mmio_read32(car, RST_DEVICES_Y);
         IODelay(2);
     }
-    if (!(rd(car, CLK_OUT_ENB_Y) & kPllpOutCpu) || (rd(car, RST_DEVICES_Y) & kPllpOutCpu)) {
+    if (!(switch_mmio_read32(car, CLK_OUT_ENB_Y) & kPllpOutCpu) ||
+        (switch_mmio_read32(car, RST_DEVICES_Y) & kPllpOutCpu)) {
         if (gateClose)
-            wr(car, CLK_ENB_Y_CLR, gateClose);
+            switch_mmio_write32(car, CLK_ENB_Y_CLR, gateClose);
         return false;
     }
     trace("step %u: cluster mux to PLLP_OUT4 (CCLKG %#x)", step, parked);
-    wr(car, CCLKG_BURST_POLICY, parked);
+    switch_mmio_write32(car, CCLKG_BURST_POLICY, parked);
     IODelay(2);  // clk-super.c clk_super_set_parent: udelay(2) after the mux write
-    if (rd(car, CCLKG_BURST_POLICY) != parked || rd(car, CCLK_BURST_POLICY) != parked) {
-        wr(car, CCLKG_BURST_POLICY, keptPolicy);
-        (void)rd(car, CCLKG_BURST_POLICY);
+    if (switch_mmio_read32(car, CCLKG_BURST_POLICY) != parked || switch_mmio_read32(car, CCLK_BURST_POLICY) != parked) {
+        switch_mmio_write32(car, CCLKG_BURST_POLICY, keptPolicy);
+        (void)switch_mmio_read32(car, CCLKG_BURST_POLICY);
         IODelay(2);
         if (gateClose)
-            wr(car, CLK_ENB_Y_CLR, gateClose);
+            switch_mmio_write32(car, CLK_ENB_Y_CLR, gateClose);
         return false;
     }
     const uint32_t stopped = pllxBase & ~(kPllEnable | kPllBypass | kPllLock);
     trace("step %u: PLLX off, dividers %#x", step, stopped);
-    wr(car, PLLX_BASE, rd(car, PLLX_BASE) & ~kPllEnable);
-    wr(car, PLLX_BASE, stopped);
-    wr(car, PLLX_MISC, rd(car, PLLX_MISC) | kPllxLockEnable);
-    if (rd(car, PLLX_MISC3) & kPllxIddq) {
+    switch_mmio_write32(car, PLLX_BASE, switch_mmio_read32(car, PLLX_BASE) & ~kPllEnable);
+    switch_mmio_write32(car, PLLX_BASE, stopped);
+    switch_mmio_write32(car, PLLX_MISC, switch_mmio_read32(car, PLLX_MISC) | kPllxLockEnable);
+    if (switch_mmio_read32(car, PLLX_MISC3) & kPllxIddq) {
         // clk-pll.c _clk_pll_enable: out of IDDQ, 5 us, before the enable (hekate already leaves it out).
-        wr(car, PLLX_MISC3, rd(car, PLLX_MISC3) & ~kPllxIddq);
-        (void)rd(car, PLLX_MISC3);
+        switch_mmio_write32(car, PLLX_MISC3, switch_mmio_read32(car, PLLX_MISC3) & ~kPllxIddq);
+        (void)switch_mmio_read32(car, PLLX_MISC3);
         IODelay(5);
     }
     trace("step %u: PLLX on", step);
-    wr(car, PLLX_BASE, stopped | kPllEnable);
-    (void)rd(car, PLLX_BASE);
+    switch_mmio_write32(car, PLLX_BASE, stopped | kPllEnable);
+    (void)switch_mmio_read32(car, PLLX_BASE);
     IOSleep(1);
-    const uint32_t locked = rd(car, PLLX_BASE);
+    const uint32_t locked = switch_mmio_read32(car, PLLX_BASE);
     if (!(locked & kPllLock)) {
         panic("SwitchPerf: PLLX did not lock at step %u (PLLX_BASE %#x, PLLX_MISC %#x); the CPU is on PLLP_OUT4 at 408 "
               "MHz",
-              step, locked, rd(car, PLLX_MISC));
+              step, locked, switch_mmio_read32(car, PLLX_MISC));
     }
     trace("step %u: PLLX locked (%#x), cluster mux back to PLLX, then PLLP_OUT_CPU gate off", step, locked);
-    wr(car, CCLKG_BURST_POLICY, keptPolicy);
-    (void)rd(car, CCLKG_BURST_POLICY);
+    switch_mmio_write32(car, CCLKG_BURST_POLICY, keptPolicy);
+    (void)switch_mmio_read32(car, CCLKG_BURST_POLICY);
     IODelay(2);
-    if (gateClose)
-        wr(car, CLK_ENB_Y_CLR, gateClose);  // the clock framework closes the old parent's chain after it
+    if (gateClose)  // the clock framework closes the old parent's chain after it
+        switch_mmio_write32(car, CLK_ENB_Y_CLR, gateClose);
     return true;
 }
 
