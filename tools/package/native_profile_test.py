@@ -75,7 +75,8 @@ class NativeProfileTest(unittest.TestCase):
     def test_the_loader_decodes_the_largest_window_into_its_copy_tables(self):
         copy_h = checkout_file('boot/loader/copy.h').read_text()
         self.assertEqual(
-            int(re.search(r'#define LOADER_WINDOW_BYTES_MAX UINT64_C\((0x[0-9a-f]+)\)', copy_h).group(1), 16), WINDOW_BYTES_MAX
+            int(re.search(r'#define LOADER_WINDOW_BYTES_MAX UINT64_C\((0x[0-9a-f]+)\)', copy_h).group(1), 16),
+            WINDOW_BYTES_MAX,
         )
         self.assertLessEqual(WINDOW_BASE + WINDOW_BYTES_MAX, 0xC0000000)
         self.assertLessEqual(WINDOW_BYTES_MAX, WINDOW_SIZE - 0x200000)
