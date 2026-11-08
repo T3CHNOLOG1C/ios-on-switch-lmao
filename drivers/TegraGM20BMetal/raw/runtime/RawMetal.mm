@@ -2240,9 +2240,7 @@ static void forwardCall(RMEncoder *e, SEL selector, const void *argument)
         [_cb takeReason:WhyCall why:@"an index buffer not made by this device"];
         hit(_cb, PredCallBufForeign, 0xffff, 0);
     } else if ((indexType != MTLIndexTypeUInt16 && indexType != MTLIndexTypeUInt32) ||
-               offset % (indexType == MTLIndexTypeUInt16 ? 2 : 4) ||
-               offset + uint64_t(count) * (indexType == MTLIndexTypeUInt16 ? 2 : 4) >
-                   ((RMBuffer *)buffer)->_raw.length) {
+               !((RMBuffer *)buffer)->_raw.cpu) {
         [_cb takeReason:WhyEncode why:@"an indexed draw the raw path does not take"];
         hit(_cb, PredEncIndexedRange, offset, indexType == MTLIndexTypeUInt16 ? 2 : 4);
     }

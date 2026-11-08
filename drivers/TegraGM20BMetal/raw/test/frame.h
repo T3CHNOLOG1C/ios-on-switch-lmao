@@ -436,11 +436,18 @@ inline bool indexedDraw(bool blur, uint32_t drawIndex)
     return getenv("FRAME_INDEXED") && !blur && drawIndex % 3 == 1;
 }
 
+// FRAME_INDEX_PAST: every other indexed draw from the 64 KiB index buffer's tail, its last two positions past the buffer's end
+// (Metal fetches index 0 there), every fourth of those from an offset one byte past the index size's multiple (rounded down)
 inline Indexed indexed(uint32_t drawIndex, uint8_t *buffer, uint32_t &at)
 {
-    if (at + 64 > 65536)
-        at = 0;
+    constexpr uint32_t kBytes = 65536;
     static const uint16_t quad[6] = {0, 1, 2, 2, 1, 3};
+    if (getenv("FRAME_INDEX_PAST") && drawIndex % 2 == 0) {
+        memcpy(buffer + kBytes - 8, quad, 8);
+        return Indexed{6, kBytes - 8 + (drawIndex % 8 == 0 ? 1u : 0u)};
+    }
+    if (at + 64 > kBytes - 8)
+        at = 0;
     memcpy(buffer + at, quad, sizeof quad);
     Indexed x{6, at};
     if (getenv("FRAME_INDEXED_FORMS")) {
