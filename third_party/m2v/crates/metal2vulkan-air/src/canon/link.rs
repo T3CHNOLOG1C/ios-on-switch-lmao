@@ -14,13 +14,17 @@
 //! a struct `%struct.T.153` in one module and `%struct.T` in another), and any other identified
 //! struct is the module's first struct of the same body.
 //!
+//! A linked function's own function constants are bound in its import: each value it was
+//! specialized with becomes the initializer of the constant's imported global, as the entry's own
+//! constants are bound, and SCCP folds its loads and definedness queries alike.
+//!
 //! Nothing here refuses: a call to a stub may be dead once constants are bound, and Metal links
 //! what the specialized function calls. Each stub that is not resolved keeps a [`Stub`] state,
 //! and the post-check refuses a call to it that survives SCCP: `NeedsInput(LinkedFunction)` when
 //! no linked function has its name, and otherwise the reason the named function cannot resolve
 //! it (another function type, a function that is not visible, two linked functions of that name,
-//! another data layout, or a module feature linking does not implement yet: function constants,
-//! a static initializer, a linkage signature, or a global it only declares and does not import).
+//! another data layout, or a module feature linking does not implement yet: a function constant it
+//! was not given a value for, a static initializer, a linkage signature, or a global it only declares and does not import).
 //!
 //! When the entry takes a visible-function table, every function the pipeline can place in one (a
 //! [`LinkedName`] with a table word) is imported the same way, after the stubs, as a [`Candidate`]
@@ -55,6 +59,7 @@ use crate::ir::{Arena, Callee, Const, ConstId, ConstTable, DataLayout, FuncId, F
 use crate::ir::{GlobalId, Idx, InstKind, Linkage, Module, ModuleParts, Section, Symbols};
 use crate::ir::{TypeId, TypeTable, Visibility};
 
+use super::fc;
 use super::renumber::{bodies, inst_refs, isomorphism, Bodies, Renumber, Syms};
 use super::rewrite::{filled, invariant, scoped};
 use super::ConstValue;
@@ -180,9 +185,18 @@ pub(super) struct Stubs {
     refused: BTreeMap<Item, Error>,
     /// Why an install name was not loaded, when one was not (`DynamicLinks::unloaded`).
     unloaded: Option<Error>,
+    /// The imported globals of the linked functions' bound function constants, with their
+    /// indices in their own modules.
+    bound: Vec<(GlobalId, u32)>,
 }
 
 impl Stubs {
+    /// The imported global and index of each function constant a linked function was
+    /// specialized with: each is supplied.
+    pub fn bound_constants(&self) -> &[(GlobalId, u32)] {
+        &self.bound
+    }
+
     /// The state of `f`, if it is a stub declaration.
     pub fn get(&self, f: FuncId) -> Option<&Stub> {
         self.of.get(&f)
@@ -775,6 +789,8 @@ struct Plan {
     root: Item,
     keep_g: Vec<bool>,
     keep_f: Vec<bool>,
+    /// A linked function's function constants with their values, by source global and index.
+    bind: Vec<(GlobalId, u32, ConstValue)>,
 }
 
 /// Decide the import of `f` from `l` (whose dynamic-library imports are `imports`): `Ok(Err(refusal))`
@@ -793,19 +809,29 @@ fn plan(
     if l.abi.linkage_signature.is_some() {
         return Ok(Err(not_implemented(name, "air.signature")));
     }
-    if !l.abi.function_constants.is_empty() {
-        return Ok(Err(not_implemented(name, "air.function_constants")));
-    }
     let constants = match &f.constants {
         Ok(c) => c,
         Err(e) => return Ok(Err(e.clone())),
     };
-    if let Some(&index) = constants.keys().next() {
-        // The module declares no constant (the check above), so no index is declared.
-        return Ok(Err(Error::InvalidRequest(
-            RequestError::FunctionConstantIndex { index },
-        )));
+    // An undefined constant's taint is the entry's to track (SCCP refuses its surviving uses by the
+    // entry's indices), which an import does not carry.
+    if l.abi
+        .function_constants
+        .iter()
+        .any(|d| !constants.contains_key(&d.index))
+    {
+        return Ok(Err(not_implemented(name, "air.function_constants")));
     }
+    let bind = match fc::check(&l.module, &l.abi, constants, m) {
+        Ok((pending, _)) => pending,
+        Err(e @ (Error::Budget(_) | Error::Cancelled | Error::Internal(_))) => return Err(e),
+        Err(e) => return Ok(Err(e)),
+    };
+    m.charge(bind.len() * std::mem::size_of::<(GlobalId, u32, ConstValue)>())?;
+    let bind: Vec<_> = bind
+        .iter()
+        .map(|p| (p.global, p.index, p.value.clone()))
+        .collect();
     if l.module.data_layout() != layout {
         return Ok(Err(link_problem(name, LinkProblem::DataLayout)));
     }
@@ -824,7 +850,7 @@ fn plan(
     if l.module.func(func).is_none_or(|f| f.body.is_none()) {
         return Ok(Err(link_problem(name, LinkProblem::NotVisible)));
     }
-    reach(l, Item::Func(func), imports, m, held)
+    Ok(reach(l, Item::Func(func), imports, m, held)?.map(|plan| Plan { bind, ..plan }))
 }
 
 /// Whether `l` defines a static initializer, which linking does not run.
@@ -946,7 +972,43 @@ fn reach(
         root,
         keep_g,
         keep_f,
+        bind: Vec::new(),
     }))
+}
+
+/// Make each value a linked function was specialized with (`bind`, by source global) the
+/// initializer of its constant's imported global (`gmap`, by source index), which is then an
+/// ordinary constant global, and note the global in `stubs` as a supplied constant.
+fn bind_constants(
+    bind: &[(GlobalId, u32, ConstValue)],
+    gmap: &[Option<GlobalId>],
+    (globals, tables): (&mut Arena<GlobalId, Global>, &mut Tables),
+    stubs: &mut Stubs,
+    m: &mut Meter,
+) -> Result<(), Error> {
+    if bind.is_empty() {
+        return Ok(());
+    }
+    let mut pending = Vec::new();
+    m.reserve(&mut pending, bind.len())?;
+    for (g, index, value) in bind {
+        let Some(Some(d)) = gmap.get(g.index()) else {
+            continue;
+        };
+        let ty = globals
+            .get(*d)
+            .map(|g| g.value_ty)
+            .ok_or_else(|| invariant("a bound constant out of range"))?;
+        pending.push(fc::Pending {
+            index: *index,
+            global: *d,
+            ty,
+            value,
+        });
+        m.charge(std::mem::size_of::<(GlobalId, u32)>())?;
+        stubs.bound.push((*d, *index));
+    }
+    fc::bind(&tables.types, &mut tables.consts, globals, &pending, m)
 }
 
 /// Where an import puts one item it keeps.
@@ -1151,7 +1213,7 @@ fn bring(
             pairs.push((src, dst));
         }
     }
-    let (t, gmap, fmap, imported_samplers) = import(
+    let (mut t, gmap, fmap, imported_samplers) = import(
         (code, plan, &pairs),
         &places,
         tables,
@@ -1159,6 +1221,7 @@ fn bring(
         m,
         held,
     )?;
+    bind_constants(&plan.bind, &gmap, (globals, &mut t), stubs, m)?;
     if !imported_samplers.is_empty() {
         let origin = match (library, table) {
             (Some(_), _) => SamplerOrigin::Library,

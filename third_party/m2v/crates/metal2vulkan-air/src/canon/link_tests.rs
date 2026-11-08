@@ -456,6 +456,80 @@ fn linked_module_features_not_implemented_are_refused_at_the_call() {
     }
 }
 
+/// A linked module whose visible function `name` is `i32 (i32 x)`: `x * k`, `k` its uint
+/// function constant of index 1 (RenderBox\'s `displacementMap_v1` reads `RB::shaderVariant` so).
+fn constant_callee(name: &str) -> LinkedModule {
+    let mut m = ModuleBuilder::new();
+    let i32t = m.int(32);
+    let fty = m.fn_ty(i32t, &[i32t]);
+    let undef = m.constant(i32t, Const::Undef);
+    let k_name = m.sym("k");
+    let k = m.global(Global {
+        name: k_name,
+        value_ty: i32t,
+        space: AddrSpace::Constant,
+        constant: true,
+        init: Some(undef),
+        externally_initialized: true,
+        visibility: Default::default(),
+        unnamed_addr: Default::default(),
+        linkage: Linkage::Internal,
+        align: None,
+        section: Some(Section::FcInitializer),
+    });
+    let k_addr = m.global_addr(k);
+    let mut f = m.define(name, fty);
+    let value = f.push(
+        i32t,
+        InstKind::Load {
+            ptr: k_addr,
+            align: Align::from_bytes(4),
+            volatile: false,
+            atomic: None,
+            range: None,
+        },
+    );
+    let product = f.bin(BinOp::Mul, arg(0), value);
+    f.ret(Some(product));
+    let func = f.finish();
+    let module = m.finish().unwrap();
+    let mut abi = abi();
+    abi.visible_functions = vec![visible(func, name)];
+    abi.function_constants = vec![FunctionConstantDecl {
+        index: 1,
+        global: k,
+        ty: i32t,
+        flag: None,
+        data_type: None,
+        name: DiagName::new("k"),
+        type_name: DiagName::new("uint"),
+    }];
+    linked(name, module, abi)
+}
+
+/// A linked function specialized with a value for its own function constant links with that value
+/// folded in; without one it is not implemented yet (the constant\'s taint is not carried).
+#[test]
+fn a_linked_function_s_own_constant_is_bound_to_its_value() {
+    let mut valued = constant_callee("f");
+    valued.functions[0].constants.as_mut().unwrap().insert(
+        1,
+        ConstValue {
+            ty: DataType::UInt,
+            bytes: 2u32.to_le_bytes().into(),
+        },
+    );
+    let e = link(&[valued]).unwrap_or_else(|e| panic!("{e}"));
+    let t = text(&e);
+    assert!(!t.contains("call "), "{t}");
+    assert!(!t.contains("load "), "{t}");
+    assert!(t.contains("mul i32 %a1, i32 2"), "{t}");
+    match link(&[constant_callee("f")]) {
+        Err(Error::Unsupported(u)) => assert_eq!(u.feature, Feature::Linking, "{u}"),
+        other => panic!("{other:?}"),
+    }
+}
+
 /// A call to a declaration no reference names is still a function to link from a dynamic
 /// library, whatever is linked.
 #[test]
