@@ -164,6 +164,20 @@ static MTLRenderPipelineDescriptor *twinDescriptor(MTLRenderPipelineDescriptor *
     return t;
 }
 
+// A state the pack lacks whose record this process or an earlier boot made (RawComplete.h made()): raw from its first draw, and
+// its twin made lazily like a pack state's
+static raw::Pipeline *madeBefore(RMPipeline *p, MTLRenderPipelineDescriptor *d)
+{
+    if (!p->_completable || !gRM->completion)
+        return nullptr;
+    raw::Completion::Ask a;
+    a.descriptor = twinDescriptor(d);
+    a.key = p->_key;
+    a.caTransform = p->_caTransform;
+    a.own = !p->_packable;
+    return gRM->completion->made(std::move(a));
+}
+
 - (RMPipeline *)pipelineFor:(MTLRenderPipelineDescriptor *)d twin:(id<MTLRenderPipelineState>)twin
 {
     RMPipeline *p = [RMPipeline new];
@@ -182,6 +196,8 @@ static MTLRenderPipelineDescriptor *twinDescriptor(MTLRenderPipelineDescriptor *
         p->_raw =
             gRM->raw->pipeline(raw::Pack::fnv(p->_key.data(), p->_key.size()), raw::PackForm::Default, p->_caTransform);
     }
+    if (!p->_raw)
+        p->_raw = madeBefore(p, d);
     if (!p->_raw) {
         const char *label = d.label.UTF8String ?: "-";
         SWITCH_REFUSE_DETAIL("raw", "state.unpacked", raw::Pack::fnv(label, strlen(label)),
@@ -195,8 +211,9 @@ static MTLRenderPipelineDescriptor *twinDescriptor(MTLRenderPipelineDescriptor *
     return p;
 }
 
-// A state the pack lacks, of any library's functions, once its twin exists: the runtime makes its record off this thread
-// (RawComplete.h) and the raw path draws it from then on; m2v until then
+// A state the pack lacks, of any library's functions, once its twin exists: the runtime makes its record at its creation, as
+// Metal makes a state (RawComplete.h), and the raw path draws it from its first draw. A probe that could not run is asked again
+// off this thread; m2v draws the state until then.
 static void completeLater(RMPipeline *p, MTLRenderPipelineDescriptor *d)
 {
     if (p->_raw || !p->_completable || !p->_twin || !gRM->completion)
@@ -207,6 +224,9 @@ static void completeLater(RMPipeline *p, MTLRenderPipelineDescriptor *d)
     a.key = p->_key;
     a.caTransform = p->_caTransform;
     a.own = !p->_packable;
+    bool retry = false;
+    if ((p->_raw = gRM->completion->makeNow(a, &retry)) || !retry)
+        return;
     p->_asked = true;
     __weak RMPipeline *weak = p;
     gRM->completion->ask(std::move(a), [weak](raw::Pipeline *pl) {

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// The record cache's and compile table's checks (runtime/raw_cache.h), over any records: raw/test/cachecheck's, a bucket's real
+// The record cache's and compile table's checks (runtime/raw_cache.h, raw_compiler.h), over any records: raw/test/cachecheck's, a bucket's real
 // ones, and //drivers/TegraGM20BMetal/test:raw_cache_test's made up ones.
 //  - every record and a refusal come back from an entry as they went in, and an entry of another key, stack or AIR, a truncated
 //    one and one with a byte changed come back as none;
@@ -22,7 +22,7 @@
 #include <thread>
 #include <utility>
 #include <vector>
-#include "../runtime/raw_cache.h"
+#include "../runtime/raw_compiler.h"
 
 namespace cachechecks {
 
