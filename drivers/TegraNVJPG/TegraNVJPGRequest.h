@@ -88,7 +88,7 @@ typedef struct {
     uint64_t protection;  // IOSurface protection options (nonzero: protected content)
 } TegraNVJPGSurface;
 
-// What the self-test proved (TegraNVJPGTraits, in a form plain C can take).
+// What the engine decodes right (TegraNVJPGTraits, in a form plain C can take).
 typedef struct {
     uint32_t formats, chroma, scales, clipped, greyRgb;
 } TegraNVJPGAbility;
