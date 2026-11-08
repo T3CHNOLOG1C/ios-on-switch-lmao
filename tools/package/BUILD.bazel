@@ -81,7 +81,13 @@ py_binary(
         ":loader_abi",
         ":native_oled_adt",
         ":native_xnu_layout",
+        ":trust_lib",
     ],
+)
+
+py_library(
+    name = "trust_lib",
+    srcs = ["trust.py"],
 )
 
 py_binary(
@@ -144,6 +150,7 @@ py_test(
     deps = [
         ":kernel_window",
         ":loader_abi",
+        ":native_xnu_layout",
     ],
 )
 

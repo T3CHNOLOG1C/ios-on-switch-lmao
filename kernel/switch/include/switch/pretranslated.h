@@ -11,7 +11,6 @@
 #include <stdint.h>
 
 #include "../../../../kits/SwitchPretranslated/switch_pretranslated.h"
-#include <sys/fsctl.h>
 #include <sys/ioccom.h>
 
 struct fileglob;
@@ -26,7 +25,7 @@ extern bool switch_pretranslated_on;
 
 void switch_pretranslated_capture(void);
 void switch_pretranslated_redirect(struct nameidata *ndp);
-bool switch_pretranslated_auth_fs(struct vnode *vp, const void *data);
+bool switch_pretranslated_authentic(struct vnode *vp);
 int switch_pretranslated_mmap_check(struct fileglob *fg, int flags, int prot, int maxprot);
 int switch_pretranslated_refuse(enum switch_pt_op op, struct vnode *v0, struct vnode *v1, struct vnode *v2,
                                 struct vnode *v3, uint32_t intent);
@@ -36,13 +35,6 @@ static inline void switch_pretranslated_lookup(struct nameidata *ndp)
     if (__improbable(__atomic_load_n(&switch_pretranslated_on, __ATOMIC_RELAXED))) {
         switch_pretranslated_redirect(ndp);
     }
-}
-
-/* VNOP_IOCTL: FSIOC_AUTH_FS succeeds for the tree's files (switch_pretranslated_auth_fs), without asking Data. */
-static inline bool switch_pretranslated_authenticated(struct vnode *vp, unsigned long command, const void *data)
-{
-    return __improbable(command == FSIOC_AUTH_FS) && __atomic_load_n(&switch_pretranslated_on, __ATOMIC_RELAXED) &&
-           switch_pretranslated_auth_fs(vp, data);
 }
 
 /* EPERM when op would change the pretranslated tree (vnodes in the order switch_pt_denied names them), else 0. */
@@ -74,9 +66,9 @@ static inline void switch_pretranslated_lookup(struct nameidata *ndp)
     (void)ndp;
 }
 
-static inline bool switch_pretranslated_authenticated(struct vnode *vp, unsigned long command, const void *data)
+static inline bool switch_pretranslated_authentic(struct vnode *vp)
 {
-    (void)vp, (void)command, (void)data;
+    (void)vp;
     return false;
 }
 

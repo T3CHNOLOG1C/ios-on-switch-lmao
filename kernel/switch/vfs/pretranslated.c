@@ -31,11 +31,11 @@
 #include <sys/ubc_internal.h>
 #include <kern/clock.h>
 #include <kern/kalloc.h>
-#include <libkern/amfi/amfi.h>
 #include <mach/machine.h>
 #include <os/atomic_private.h>
 #include <pexpert/device_tree.h>
 
+#include <switch/auth_fs.h>
 #include <switch/pretranslated.h>
 
 #define SWITCH_PT_TREE   "Switch/pretranslated"
@@ -384,11 +384,8 @@ int switch_pretranslated_refuse(enum switch_pt_op op, vnode_t v0, vnode_t v1, vn
 
 static bool switch_pt_cdhash_pinned(const uint8_t *cdhash)
 {
-    TrustCacheQueryToken_t token;
     uint8_t uuid[kUUIDSize];
-    return query_trust_cache(kTCQueryTypeAll, cdhash, &token) == KERN_SUCCESS &&
-           amfi->TrustCache.queryGetUUID(&token, uuid).error == kTCReturnSuccess &&
-           memcmp(uuid, switch_pt.trust, sizeof(uuid)) == 0;
+    return switch_trust_module_uuid(cdhash, uuid) && memcmp(uuid, switch_pt.trust, sizeof(uuid)) == 0;
 }
 
 static bool switch_pt_signed_as(vnode_t vp, const uint8_t *cdhash)
@@ -402,9 +399,14 @@ static bool switch_pt_signed_as(vnode_t vp, const uint8_t *cdhash)
     return found;
 }
 
-static bool switch_pt_authentic(vnode_t vp)
+/*
+ * The System files the tree stands in for are on the sealed System volume; their Data copies are authenticated by
+ * their trust module instead (auth_fs.c). Decided from the vnode alone, never from the path it was found by.
+ */
+bool switch_pretranslated_authentic(vnode_t vp)
 {
-    if (vp == NULLVP || vp->v_mount != switch_pt.data || !vnode_isreg(vp)) {
+    if (!os_atomic_load(&switch_pretranslated_on, acquire) || vp == NULLVP || vp->v_mount != switch_pt.data ||
+        !vnode_isreg(vp)) {
         return false;
     }
     struct vnode_attr va;
@@ -437,18 +439,6 @@ static bool switch_pt_authentic(vnode_t vp)
                facts.cdhash_matches);
     }
     return authentic;
-}
-
-/*
- * FSIOC_AUTH_FS ("is this file on an authenticated volume") is AMFI's on-authorized-authapfs-volume fact, which the
- * launch constraints accept in place of on-system-volume. The System files the tree stands in for are on the sealed
- * System volume; their Data copies are authenticated by their trust module instead, like a cryptex's files by its
- * manifest. Decided from the vnode alone, never from the path it was found by. An authvp must be a file of the tree.
- */
-bool switch_pretranslated_auth_fs(vnode_t vp, const void *data)
-{
-    const fsioc_auth_fs_t *request = data;
-    return request && switch_pt_authentic(vp) && (request->authvp == NULLVP || switch_pt_authentic(request->authvp));
 }
 
 int switch_pretranslated_mmap_check(struct fileglob *fg, int flags, int prot, int maxprot)
