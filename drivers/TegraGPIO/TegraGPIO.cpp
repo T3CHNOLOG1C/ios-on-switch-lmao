@@ -21,8 +21,7 @@
 #include <libkern/c++/OSSymbol.h>
 #include "TegraGPIO.h"
 #include "../ArmGIC/SwitchInterrupts.h"
-
-extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
+#include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
 
 namespace {
 constexpr vm_offset_t kGpioPA = 0x6000D000, kPinmuxPA = 0x70003000, kCarPA = 0x60006000;
@@ -136,7 +135,7 @@ class TegraGPIO : public IOInterruptController {
 
         volatile uint8_t *gpio = nullptr,
                          *pinmux = nullptr;
-    volatile uint32_t *car = nullptr;  // sleep resume only (mapped at start: resume runs with interrupts off)
+    volatile uint8_t *car = nullptr;  // sleep resume only (mapped at start: resume runs with interrupts off)
     IOWorkLoop *loop = nullptr;
     IOFilterInterruptEventSource *banks[kBanks] = {};
     IOLock *nubLock = nullptr;
@@ -156,12 +155,12 @@ class TegraGPIO : public IOInterruptController {
 
     uint32_t rd(uint32_t o) const
     {
-        return *reinterpret_cast<volatile uint32_t *>(gpio + o);
+        return switch_mmio_read32(gpio, o);
     }
 
     void wr(uint32_t o, uint32_t v)
     {
-        *reinterpret_cast<volatile uint32_t *>(gpio + o) = v;
+        switch_mmio_write32(gpio, o, v);
     }
 
     void maskWrite(unsigned pin, uint32_t reg, bool on)
@@ -225,9 +224,9 @@ bool TegraGPIO::start(IOService *provider)
 {
     if (!IOInterruptController::start(provider))
         return false;
-    gpio = reinterpret_cast<volatile uint8_t *>(ml_io_map(kGpioPA, 0x1000));
-    pinmux = reinterpret_cast<volatile uint8_t *>(ml_io_map(kPinmuxPA, 0x1000));
-    car = reinterpret_cast<volatile uint32_t *>(ml_io_map(kCarPA, 0x1000));
+    gpio = switch_mmio_map(kGpioPA, 0x1000);
+    pinmux = switch_mmio_map(kPinmuxPA, 0x1000);
+    car = switch_mmio_map(kCarPA, 0x1000);
     nubLock = IOLockAlloc();
     portLock = IOSimpleLockAlloc();
     vectors = IONewZero(IOInterruptVector, TEGRA_GPIO_COUNT);
@@ -359,8 +358,7 @@ void TegraGPIO::configurePin(unsigned pin, uint8_t trigger)
     for (const PinMux &mux : kPinMux) {
         if (mux.gpio != pin)
             continue;
-        volatile uint32_t *reg = reinterpret_cast<volatile uint32_t *>(pinmux + mux.offset);
-        *reg = (*reg & ~PULL_MASK) | mux.pull | TRISTATE | INPUT;
+        switch_mmio_rmw32(pinmux, mux.offset, PULL_MASK, mux.pull | TRISTATE | INPUT);
     }
     maskWrite(pin, MSK_INT_ENB, false);
     const IOInterruptState state = IOSimpleLockLockDisableInterrupt(portLock);
@@ -475,9 +473,9 @@ void TegraGPIO::suspend()
 
 void TegraGPIO::resume()
 {
-    car[kCarClkEnbLSet / 4] = kCarGpio;
-    car[kCarRstDevLClr / 4] = kCarGpio;
-    (void)car[kCarRstDevicesL / 4];
+    switch_mmio_write32(car, kCarClkEnbLSet, kCarGpio);
+    switch_mmio_write32(car, kCarRstDevLClr, kCarGpio);
+    (void)switch_mmio_read32(car, kCarRstDevicesL);
     for (unsigned port = 0; port < kBanks * 4; ++port) {
         const unsigned pin = port * 8;
         wr(portReg(pin, INT_ENB), 0);
@@ -514,7 +512,7 @@ void TegraGPIO::setOutput(unsigned pin, bool high)
 {
     for (const OutputMux &mux : kOutputMux) {
         if (mux.gpio == pin)
-            *reinterpret_cast<volatile uint32_t *>(pinmux + mux.offset) = mux.value;
+            switch_mmio_write32(pinmux, mux.offset, mux.value);
     }
     maskWrite(pin, MSK_OUT, high);
     maskWrite(pin, MSK_OE, true);
