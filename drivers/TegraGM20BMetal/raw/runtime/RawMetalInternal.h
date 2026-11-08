@@ -74,6 +74,8 @@ struct Stats {
 #if SWITCH_FRAME_TIMELINE
     // the m2v replay's parts (noteReplay)
     std::atomic<uint64_t> replaySlotUs{0}, replayTwinUs{0}, replayCommitUs{0}, replayMaxUs{0};
+    // the draws it replayed, and the twins it made: textures, buffers, mip chains (rmMipTwin), anything else
+    std::atomic<uint64_t> replayDraws{0}, twinTextures{0}, twinBuffers{0}, twinMips{0}, twinOthers{0}, twinTextureUs{0};
 #endif
 };
 

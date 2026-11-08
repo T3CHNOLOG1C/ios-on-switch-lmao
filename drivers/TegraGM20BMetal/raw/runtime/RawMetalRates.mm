@@ -83,7 +83,7 @@ size_t raw_metal_rates(char *out, size_t size)
     const uint64_t aborts = s.aborted.load() - gRates.aborted, segs = s.splitM2v.load() - gRates.splitM2v,
                    m2vs = f + segs ? f + segs : 1;
     const raw::Compiler::Stats made = gRM->completion ? gRM->completion->stats() : raw::Compiler::Stats();
-    char diag[768];
+    char diag[1024];
     snprintf(diag, sizeof diag,
              " sp=%llu/%llu abortenc=%.0fus/a replay=%.0fus/m rclean=%.0fKB/m rt128=%llu(pitch %u va&255 %u) "
              "rtmix=%llu lvl=%llu "
@@ -103,10 +103,13 @@ size_t raw_metal_rates(char *out, size_t size)
     {
         const size_t used = strlen(diag);
         snprintf(diag + used, sizeof diag - used,
-                 " rsplit=%.0f/%.0f/%.0fus/m rmax=%lluus fb=%llu/%llu/%llu/%llu(%s) clr=%llu/%llu"
-                 " so=%llu/%llu/%llu/%lluus",
+                 " rsplit=%.0f/%.0f/%.0fus/m rmax=%lluus rdraw=%.1f/m tw=t%llu/%lluus/b%llu/m%llu/o%llu"
+                 " fb=%llu/%llu/%llu/%llu(%s) clr=%llu/%llu so=%llu/%llu/%llu/%lluus",
                  (s.replaySlotUs.exchange(0) / double(m2vs)), (s.replayTwinUs.exchange(0) / double(m2vs)),
                  (s.replayCommitUs.exchange(0) / double(m2vs)), (unsigned long long)s.replayMaxUs.exchange(0),
+                 s.replayDraws.exchange(0) / double(m2vs), (unsigned long long)s.twinTextures.exchange(0),
+                 (unsigned long long)s.twinTextureUs.exchange(0), (unsigned long long)s.twinBuffers.exchange(0),
+                 (unsigned long long)s.twinMips.exchange(0), (unsigned long long)s.twinOthers.exchange(0),
                  (unsigned long long)k.fetchBarriers.exchange(0), (unsigned long long)k.fetchBarriersElided.exchange(0),
                  (unsigned long long)k.fetchBarriersAnyColor.exchange(0),
                  (unsigned long long)k.fetchBarriersInterlocked.exchange(0),

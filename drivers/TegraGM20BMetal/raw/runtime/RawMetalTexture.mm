@@ -117,6 +117,20 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
     return twin;
 }
 
+// Answered here, not by the twin (a residency set's allocatedSize sums its allocations'): the memory this texture owns. A view and
+// a texture over a buffer own none; a twin-only texture's is its twin's.
+- (NSUInteger)allocatedSize
+{
+    if (_kind == RMTextureView || _kind == RMTextureBuffer || _raw.memoryless)
+        return 0;
+    if (_surface)
+        return IOSurfaceGetAllocSize(_surface);
+    if (_raw.span.valid())
+        return NSUInteger(_raw.span.bytes);
+    id twin = _twin;
+    return twin ? [(id<MTLTexture>)twin allocatedSize] : 0;
+}
+
 // A mipmapped texture's m2v texture of every level (made on first need)
 - (id)rmMipTwin
 {
@@ -124,6 +138,9 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
         if (_mipTwin)
             return _mipTwin;
     }
+#if SWITCH_FRAME_TIMELINE
+    gRM->stats.twinMips++;
+#endif
     return twinPublish(self, _mipTwin, [gRM->fallback newTextureWithDescriptor:_descriptor]);
 }
 
