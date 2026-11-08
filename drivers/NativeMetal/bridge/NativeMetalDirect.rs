@@ -4,13 +4,11 @@
 //! buffer or capture. Only the translator's public API is used; the runtime device lends its compile device and its Vulkan
 //! device, on which the variants' layouts are made for NVK's stage compile.
 
-use crate::objects::{
-    NmbDevice, NmbRenderPipelineDescriptor, e, get, guard, raw, render_descriptor,
-};
+use crate::objects::{NmbDevice, NmbRenderPipelineDescriptor, e, get, guard, raw, render_descriptor};
 use ash::vk as avk;
 use metal2vulkan::Budget;
 use metal2vulkan::bind::{
-    BindState, BindingPlan, BoundBuffer, BoundSampler, BoundTexture, DrawCall, DrawCommands, ImageSource,
+    BindState, BindingPlan, BoundBuffer, BoundSampler, BoundTexture, DrawCall, DrawCommands, ImageSource, NeutralResource,
     SamplerDescriptor, SamplerSource, StageTable, TextureFacts, WriteSource,
 };
 use metal2vulkan::cache::VariantKey;
@@ -68,6 +66,7 @@ pub struct NmbDirectWrite {
     pub slot: u32,
     pub sampler: u32,
     pub range: u64,
+    pub view_type: i32,
 }
 
 #[repr(C)]
@@ -223,6 +222,13 @@ fn slot_parts(slot: &SlotRef) -> (u32, u32) {
     (stage_number(slot.stage), slot.index)
 }
 
+fn neutral_view(neutral: &NeutralResource) -> i32 {
+    match neutral {
+        NeutralResource::Image { view_type, .. } => avk::ImageViewType::from(*view_type).as_raw(),
+        _ => -1,
+    }
+}
+
 fn write_of(w: &metal2vulkan::bind::DescriptorWrite, commands: &DrawCommands) -> NmbDirectWrite {
     let mut out = NmbDirectWrite {
         set: w.set,
@@ -234,6 +240,7 @@ fn write_of(w: &metal2vulkan::bind::DescriptorWrite, commands: &DrawCommands) ->
         slot: 0,
         sampler: 0,
         range: 0,
+        view_type: -1,
     };
     let sampler_of = |s: &SamplerSource| match s {
         SamplerSource::Slot { slot, .. } => slot.index,
@@ -254,9 +261,10 @@ fn write_of(w: &metal2vulkan::bind::DescriptorWrite, commands: &DrawCommands) ->
                 .find(|r| r.set == w.set && r.binding == w.binding)
                 .map_or(0, |r| r.range.range);
         }
-        WriteSource::Texture { slot, .. } => {
+        WriteSource::Texture { slot, view } => {
             out.source = NmbDirectSource::Texture;
             (out.stage, out.slot) = slot_parts(slot);
+            out.view_type = avk::ImageViewType::from(view.view_type).as_raw();
         }
         WriteSource::Sampler { slot, .. } => {
             out.source = NmbDirectSource::Sampler;
@@ -266,8 +274,14 @@ fn write_of(w: &metal2vulkan::bind::DescriptorWrite, commands: &DrawCommands) ->
         WriteSource::CombinedImageSampler { image, sampler } => {
             out.source = NmbDirectSource::Combined;
             match image {
-                ImageSource::Texture { slot, .. } => (out.stage, out.slot) = slot_parts(slot),
-                _ => out.slot = NMB_DIRECT_NEUTRAL,
+                ImageSource::Texture { slot, view } => {
+                    (out.stage, out.slot) = slot_parts(slot);
+                    out.view_type = avk::ImageViewType::from(view.view_type).as_raw();
+                }
+                ImageSource::Neutral(neutral) => {
+                    out.slot = NMB_DIRECT_NEUTRAL;
+                    out.view_type = neutral_view(neutral);
+                }
             }
             out.sampler = sampler_of(sampler);
         }
@@ -279,7 +293,10 @@ fn write_of(w: &metal2vulkan::bind::DescriptorWrite, commands: &DrawCommands) ->
             out.source = NmbDirectSource::StorageAttachment;
             out.slot = *color_index;
         }
-        WriteSource::Neutral(_) => out.source = NmbDirectSource::Neutral,
+        WriteSource::Neutral(neutral) => {
+            out.source = NmbDirectSource::Neutral;
+            out.view_type = neutral_view(neutral);
+        }
         _ => {}
     }
     out

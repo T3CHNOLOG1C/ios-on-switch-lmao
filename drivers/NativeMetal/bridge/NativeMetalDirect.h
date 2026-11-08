@@ -45,6 +45,7 @@ typedef struct NmbDirectWrite {
         slot;          // a buffer's or texture's Metal stage (1 vertex, 2 fragment) and index; an attachment's color
     uint32_t sampler;  // a sampler's slot, NMB_DIRECT_IMMUTABLE (the layout's constexpr sampler) or NMB_DIRECT_NEUTRAL
     uint64_t range;    // a buffer's bound range
+    int32_t viewType;  // an image\'s VkImageViewType (a neutral\'s too), -1 for no image
 } NmbDirectWrite;
 
 // One probe draw on the variant its bind state settles on

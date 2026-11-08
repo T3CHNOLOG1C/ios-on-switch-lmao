@@ -62,6 +62,7 @@ using BufferDescriptorSize = uint32_t (*)(void *device, int32_t type, uint64_t r
 // VK_PIPELINE_CREATE_2_LIBRARY_BIT_KHR: m2v's states are made of pipeline libraries
 constexpr uint64_t kLibraryBit = 0x800;
 constexpr uint32_t kRootPush = 0x700;
+constexpr int32_t kViewType3D = 2;  // VK_IMAGE_VIEW_TYPE_3D
 constexpr uint32_t kTagged = 16;  // probe.mm's fragment textures and samplers
 
 enum DescriptorType : int32_t {
@@ -224,6 +225,11 @@ bool layout(const DirectNvk &nvk, void *device, const NmbDirectDraw &d, std::vec
             if (attachment) {
                 e.tex = Tex::Fetch;
                 e.texSlot = uint8_t(w.slot);
+            } else if (w.viewType == kViewType3D) {
+                // m2v binds its own 3D view where the probe's 2D texture meets a texture3d argument; the pack holds no
+                // Metal index for one (raw_pack.h EntryTexture3d)
+                e.tex = Tex::Texture3D;
+                e.texSlot = kNoSlot;
             } else if ((w.source == NmbDirectTexture || w.source == NmbDirectCombined) && w.stage == 2 &&
                        w.slot < kTagged) {
                 e.tex = Tex::Slot;
