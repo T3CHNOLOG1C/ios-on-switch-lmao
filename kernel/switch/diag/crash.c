@@ -36,8 +36,8 @@ void switch_diag_user_crash(task_t task, const char *name, int pid, int signal, 
         return;
     }
     const arm_saved_state64_t *regs = const_saved_state64(state);
-    printf("SwitchCrash: pc 0x%llx lr 0x%llx sp 0x%llx fp 0x%llx far 0x%llx esr 0x%x cpsr 0x%x slide 0x%x\n",
-           regs->pc, regs->lr, regs->sp, regs->fp, regs->far, (uint32_t)regs->esr, regs->cpsr,
+    printf("SwitchCrash: pc 0x%llx lr 0x%llx sp 0x%llx fp 0x%llx far 0x%llx esr 0x%x cpsr 0x%x slide 0x%x\n", regs->pc,
+           regs->lr, regs->sp, regs->fp, regs->far, (uint32_t)regs->esr, regs->cpsr,
            task->shared_region ? task->shared_region->sr_slide : 0);
     for (unsigned int i = 0; i < 29; i += 8) {
         line.at = 0;
