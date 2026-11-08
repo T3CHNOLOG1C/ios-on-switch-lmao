@@ -103,30 +103,46 @@ void spin_unlock(spinlock_t *s)
 	nvxnu_spin_unlock(s->lck);
 }
 
+#define RWLOCK_WRITER 0x80000000u
+
 void rwlock_init(rwlock_t *l)
 {
-	l->lck = NULL;
-	lazy(&l->lck, nvxnu_rw_alloc, rw_release);
+	__atomic_store_n(&l->state, 0, __ATOMIC_RELAXED);
 }
 
 void read_lock(rwlock_t *l)
 {
-	nvxnu_rw_lock_shared(lazy(&l->lck, nvxnu_rw_alloc, rw_release));
+	nvxnu_preempt_disable();
+	unsigned int seen = __atomic_load_n(&l->state, __ATOMIC_RELAXED);
+	while ((seen & RWLOCK_WRITER) ||
+	       !__atomic_compare_exchange_n(&l->state, &seen, seen + 1, true, __ATOMIC_ACQUIRE,
+					    __ATOMIC_RELAXED)) {
+		cpu_relax();
+		seen = __atomic_load_n(&l->state, __ATOMIC_RELAXED);
+	}
 }
 
 void read_unlock(rwlock_t *l)
 {
-	nvxnu_rw_unlock_shared(l->lck);
+	__atomic_sub_fetch(&l->state, 1, __ATOMIC_RELEASE);
+	nvxnu_preempt_enable();
 }
 
 void write_lock(rwlock_t *l)
 {
-	nvxnu_rw_lock_exclusive(lazy(&l->lck, nvxnu_rw_alloc, rw_release));
+	nvxnu_preempt_disable();
+	unsigned int idle = 0;
+	while (!__atomic_compare_exchange_n(&l->state, &idle, RWLOCK_WRITER, true, __ATOMIC_ACQUIRE,
+					    __ATOMIC_RELAXED)) {
+		cpu_relax();
+		idle = 0;
+	}
 }
 
 void write_unlock(rwlock_t *l)
 {
-	nvxnu_rw_unlock_exclusive(l->lck);
+	__atomic_store_n(&l->state, 0, __ATOMIC_RELEASE);
+	nvxnu_preempt_enable();
 }
 
 void init_rwsem(struct rw_semaphore *s)

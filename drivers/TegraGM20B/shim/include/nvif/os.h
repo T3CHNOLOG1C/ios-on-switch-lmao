@@ -757,8 +757,10 @@ void spin_unlock(spinlock_t *s);
 		(void)(s);    \
 	} while (0)
 
+/* Linux's rwlock_t spins with preemption off: nvkm takes one with interrupts off inside nvkm_intr's spinlock
+ * (nvkm_event_ntfy), where a sleeping lck_rw is not allowed (xnu-12377 asserts it). Readers may nest. */
 typedef struct {
-	void *lck;
+	unsigned int state; /* the reader count, or RWLOCK_WRITER */
 } rwlock_t;
 
 void rwlock_init(rwlock_t *l);

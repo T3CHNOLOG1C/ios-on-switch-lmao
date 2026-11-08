@@ -167,7 +167,7 @@ constexpr uint32_t kAdmaTableBytes = kAdmaDescriptors * sizeof(SwitchAdmaDescrip
 // command()'s step beyond the SDMA ones: the ADMA engine stopped on an error (ADMA error interrupt): the host's DMA,
 // not the card or the bus.
 constexpr int kStepAdmaError = 11;
-const char kRootUUID[] = "04769D26-2CA0-4825-B443-E2E5F88300F2";
+const char kRootUUID[] = SWITCH_OS_VOLUME_UUID;
 const uint8_t kApfsType[16] = {0xef, 0x57, 0x34, 0x7c, 0x00, 0x00, 0xaa, 0x11,
                                0xaa, 0x11, 0x00, 0x30, 0x65, 0x43, 0xec, 0xac};
 // The GPT name install-ios.bin gives the partition, UTF-16LE in the entry's 72-byte name field.

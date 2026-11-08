@@ -17,6 +17,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import uuid
 from pathlib import Path
 
 if __package__ in (None, ''):
@@ -72,7 +73,8 @@ def make_cryptex(args: argparse.Namespace, log: host.Log) -> None:
     entries = delta.load(Path(args.delta) / f'{args.role}.manifest.json')
     out = Path(args.out)
     disks.sweep(out.parent, log)
-    cryptex.rebuild(cryptex.Job(args.image, entries, out, args.apfs_tool, args.role), log)
+    volume_uuid = uuid.UUID(json.loads(Path(args.pins).read_text())['volumes'][args.role + '_uuid'])
+    cryptex.rebuild(cryptex.Job(args.image, entries, out, args.apfs_tool, args.role, volume_uuid), log)
     Path(args.sha256).write_text(cards.sha256_file(out) + '\n')
 
 
@@ -92,6 +94,7 @@ def arguments(argv: list[str] | None) -> argparse.Namespace:
     c.add_argument('--image', required=True)
     c.add_argument('--delta', required=True)
     c.add_argument('--role', required=True, choices=('app_cryptex', 'system_cryptex'))
+    c.add_argument('--pins', required=True, help="the IPSW's pins (the cryptex's volume UUID)")
     c.add_argument('--apfs-tool', required=True)
     c.add_argument('--out', required=True)
     c.add_argument('--sha256', required=True)

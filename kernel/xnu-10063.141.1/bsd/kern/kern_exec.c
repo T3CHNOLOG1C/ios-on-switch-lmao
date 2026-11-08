@@ -8458,9 +8458,9 @@ native_switch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
 		{"com.apple.UIKit", SWITCH_PLIST("<key>UIPreferredContentSizeCategoryName</key>"
 		    "<string>UICTContentSizeCategoryXXL</string>"), kSetupOnce, kSetupUnitScale}, /* the user's Text Size then sticks */
 		/* Seeded once: DataMigrator keeps its results and its hang-reboot count in this domain. */
-		{"com.apple.migration", SWITCH_PLIST("<key>LastSystemVersion</key><string>21H461</string>"
+		{"com.apple.migration", SWITCH_PLIST("<key>LastSystemVersion</key><string>" SWITCH_IPSW_BUILD "</string>"
 		    "<key>DMUserDataDisposition</key><dict><key>SyntheticDidUpgrade</key><false/>"
-		    "<key>buildVersion</key><string>21H461</string></dict>"), kSetupOnce},
+		    "<key>buildVersion</key><string>" SWITCH_IPSW_BUILD "</string></dict>"), kSetupOnce},
 	};
 #undef SWITCH_SPRINGBOARD
 #undef SWITCH_PLIST

@@ -188,6 +188,8 @@ int tgm_chan_order(struct tgm_chan *chan, uint32_t flags, uint32_t seqno, uint32
  * self-test passed, or under client fault isolation for a client's channel: an error on a kernel channel panics
  * (nvkm's report in the panic string). */
 uint32_t tgm_chan_error(struct tgm_chan *chan);
+/* For error 1: the GPU VA its MMU fault report names (0: none named). */
+uint64_t tgm_chan_fault_va(struct tgm_chan *chan);
 /* Panic naming `who` and the channel's state (fence, GPFIFO GET/PUT, PGRAPH/engine/PBDMA status, MC error registers):
  * work submitted on it did not complete and nvkm reported no error. */
 void tgm_chan_hung(struct tgm_chan *chan, const char *who, uint32_t seqno, uint64_t waited_ns)

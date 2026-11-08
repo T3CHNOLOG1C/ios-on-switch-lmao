@@ -18,7 +18,8 @@
 // import, block-linear when that import writes it, is the surface's only import and its shape tiles, its rows then tiled in
 // place (TegraGM20BLayout.h); pitch for good otherwise.
 // mock_iokit_kill_next(error): the next Exec on a 3D channel (a queue's, not NVK's upload channel) is accepted, then its
-// channel dies as the kext kills one (method 11's error): what it had in flight never runs, its kill record
+// channel dies as the kext kills one (method 11's error, and with mock_iokit_kill_next_at the fault VA GetStatus reports
+// for an MMU fault): what it had in flight never runs, its kill record
 // (TegraGM20BAbiFence) names those seqnos, its fence passes them, and Exec, WaitFence and Order on it answer
 // kIOReturnNotResponding until the client makes a new channel (MOCK_NO_KILL_RECORD=1: no record, as a kext without
 // TegraGM20BInfoKillRecord).
@@ -61,11 +62,13 @@ struct bo {
 static struct bo bos[kMaxBo];
 static atomic_uint nbo = 1;
 static uint32_t submitted[16];
-static uint32_t *fence;   /* the fence page, a TegraGM20BAbiFence per channel at slot*16 */
-static uint32_t dead[16]; /* method 11's error of a killed channel */
+static uint32_t *fence;      /* the fence page, a TegraGM20BAbiFence per channel at slot*16 */
+static uint32_t dead[16];    /* method 11's error of a killed channel */
+static uint64_t dead_va[16]; /* and its fault VA */
 static uint32_t engines[16];
 static uint8_t live[16]; /* slots in use: a connection gets its lowest free one, its seqnos continuing (the kext's) */
 static uint32_t kill_next;
+static uint64_t kill_next_va;
 static atomic_ulong calls[16];
 static atomic_ulong import_maps;    /* VmBind map ops onto imported pages */
 static atomic_ulong kind_maps[256]; /* VmBind map ops by PTE kind */
@@ -521,6 +524,7 @@ static kern_return_t mock_call(mach_port_t c, uint32_t sel, const void *in, size
             nchannels = ch;
         chan_conn[ch & 15] = c;
         dead[ch & 15] = 0;
+        dead_va[ch & 15] = 0;
         fence[(ch & 15) * 4 + 1] = fence[(ch & 15) * 4 + 2] = fence[(ch & 15) * 4 + 3] = 0;
         pthread_mutex_unlock(&gpu_lock);
         struct TegraGM20BAbiChannelCreateReply r = {.channel = ch, .fence_token = kFenceToken, .fence_offset = ch * 16};
@@ -551,7 +555,9 @@ static kern_return_t mock_call(mach_port_t c, uint32_t sel, const void *in, size
         struct TegraGM20BAbiExecReply r = {.seqno = j.seqno};
         if (kill_next && (engines[ch] & TegraGM20BEngine3D)) {
             kill_channel(ch, kill_next);
+            dead_va[ch] = kill_next_va;
             kill_next = 0;
+            kill_next_va = 0;
             pthread_mutex_unlock(&gpu_lock);
             memcpy(out, &r, sizeof(r));
             return KERN_SUCCESS;
@@ -681,7 +687,8 @@ static kern_return_t mock_call(mach_port_t c, uint32_t sel, const void *in, size
         const struct TegraGM20BAbiChannel *ch = in;
         struct TegraGM20BAbiStatus s = {.completed = fence[(ch->channel & 15) * 4],
                                         .submitted = submitted[ch->channel & 15],
-                                        .error = dead[ch->channel & 15]};
+                                        .error = dead[ch->channel & 15],
+                                        .fault_va = dead_va[ch->channel & 15]};
         memcpy(out, &s, sizeof(s));
         return KERN_SUCCESS;
     }
@@ -731,6 +738,14 @@ void mock_iokit_kill_next(uint32_t error)
 {
     pthread_mutex_lock(&gpu_lock);
     kill_next = error;
+    pthread_mutex_unlock(&gpu_lock);
+}
+
+void mock_iokit_kill_next_at(uint32_t error, uint64_t fault_va)
+{
+    pthread_mutex_lock(&gpu_lock);
+    kill_next = error;
+    kill_next_va = fault_va;
     pthread_mutex_unlock(&gpu_lock);
 }
 

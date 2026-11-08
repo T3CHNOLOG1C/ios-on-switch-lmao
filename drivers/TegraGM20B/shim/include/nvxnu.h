@@ -55,6 +55,8 @@ void nvxnu_spin_lock(void *s);
 void nvxnu_spin_unlock(void *s);
 unsigned long nvxnu_irq_save(void);
 void nvxnu_irq_restore(unsigned long flags);
+void nvxnu_preempt_disable(void);
+void nvxnu_preempt_enable(void);
 void *nvxnu_rw_alloc(void);
 void nvxnu_rw_lock_shared(void *rw);
 void nvxnu_rw_unlock_shared(void *rw);

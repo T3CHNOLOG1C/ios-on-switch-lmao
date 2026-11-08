@@ -70,8 +70,7 @@ int ml_get_max_cpu_number(void);
 }
 
 namespace {
-const char *const paths[SWITCH_CRYPTEX_COUNT] = {"/private/preboot/Switch-Staging/044-76034-038.dmg",
-                                                 "/private/preboot/Switch-Staging/044-75188-038.dmg"};
+const char *const paths[SWITCH_CRYPTEX_COUNT] = {SWITCH_SYSTEM_CRYPTEX_IMAGE, SWITCH_APP_CRYPTEX_IMAGE};
 const char *const uuids[SWITCH_CRYPTEX_COUNT] = {SWITCH_SYSTEM_CRYPTEX_UUID, SWITCH_APP_CRYPTEX_UUID};
 // Fixed development identifier consumed by the owner boot-manifest code.
 const uint8_t systemIdentifier[48] = {0x13, 0x14, 0x8b, 0xb4, 0x2c, 0x8c, 0xe4, 0xb5, 0x6d, 0x83, 0x5d, 0x89,

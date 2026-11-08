@@ -28,6 +28,7 @@ install_spec(
     cryptex_cpp = "//drivers/NativeSwitchBlock:SwitchCryptex.cpp",
     cryptex_h = "//drivers/NativeSwitchBlock:SwitchCryptex.h",
     raw_mount = "//diagnostics/switch:SwitchRawMount.h",
+    volumes_h = "//kernel:ipsw_volumes_header",
 )
 
 ipsw_pins(name = "ipsw")
@@ -245,6 +246,7 @@ image_inputs(
     apfs_tool = ":image_apfs_tool",
     delta = ":delta_" + role,
     image = image,
+    pins = ":ipsw_pins",
     role = role,
     tags = ["manual"],
 ) for role, image in [

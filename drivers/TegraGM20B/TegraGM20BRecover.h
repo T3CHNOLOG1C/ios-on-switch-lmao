@@ -74,3 +74,39 @@ static inline enum tgm_hang tgm_hang_blame(const struct tgm_hang_candidate *c, i
 		return TGM_HANG_STUCK;
 	return TGM_HANG_PROGRESSING;
 }
+
+/* The faulting VA of nvkm's MMU fault report ("fault %02x [%s] at %016llx engine ... on channel %d [...]",
+ * gf100_fifo_mmu_fault_recover) among a pass's reports (" | " apart): the one naming hardware channel chid, else one naming
+ * no channel nvkm knew (-1). 0: neither. */
+static inline uint64_t tgm_fault_va(const char *reports, int chid)
+{
+	uint64_t unnamed = 0;
+	const char *p = reports;
+
+	for (;;) {
+		const char *end = __builtin_strstr(p, " | ");
+		const char *fault = __builtin_strstr(p, "fault ");
+		const char *at = __builtin_strstr(p, "] at ");
+		const char *on = __builtin_strstr(p, "on channel ");
+		uint64_t va = 0;
+		int chan = 0;
+
+		if (fault && at && on && fault < at && at < on && (!end || on < end)) {
+			for (at += 5; (*at >= '0' && *at <= '9') || (*at >= 'a' && *at <= 'f');
+			     at++)
+				va = va << 4 | (uint64_t)(*at <= '9' ? *at - '0' : *at - 'a' + 10);
+			on += 11;
+			if (*on == '-') {
+				unnamed = unnamed ? unnamed : va;
+			} else {
+				for (; *on >= '0' && *on <= '9'; on++)
+					chan = chan * 10 + (*on - '0');
+				if (chan == chid)
+					return va;
+			}
+		}
+		if (!end)
+			return unnamed;
+		p = end + 3;
+	}
+}

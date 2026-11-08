@@ -15,6 +15,7 @@ import stat
 import sys
 import tempfile
 import unittest
+import uuid
 from pathlib import Path
 
 from tools.install import cryptex, delta, disks, host, owners
@@ -99,7 +100,8 @@ class Rebuild(unittest.TestCase):
         self.make_source()
         replacements = self.make_delta()
         entries = delta.load(self.delta / 'm.json')
-        cryptex.rebuild(cryptex.Job(str(self.source), entries, self.out, APFS_TOOL, 'stand-in'), LOG)
+        volume_uuid = uuid.UUID('ADB8FD34-DA7E-4538-9AAF-4F05EBB09057')
+        cryptex.rebuild(cryptex.Job(str(self.source), entries, self.out, APFS_TOOL, 'stand-in', volume_uuid), LOG)
         self.assertFalse(disks.partial(self.out).exists())
         self.assertTrue(all(e['source'].is_file() for e in entries), 'the delta is a Bazel input: never consumed')
         self.assertGreater(self.out.stat().st_size, 0)
@@ -107,6 +109,7 @@ class Rebuild(unittest.TestCase):
             info = host.disk_info(image.volumes[0]) or {}
             self.assertEqual(info.get('VolumeName'), 'StandIn')
             self.assertTrue(info.get('Sealed'))
+            self.assertEqual(info.get('VolumeUUID'), str(volume_uuid).upper())
             with disks.mounted(image.volumes[0], LOG, owners=True, read_only=True) as root:
                 for path, data in replacements.items():
                     self.assertEqual((root / path.lstrip('/')).read_bytes(), data)

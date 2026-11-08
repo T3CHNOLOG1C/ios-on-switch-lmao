@@ -32,7 +32,7 @@ refuses it unless this window's constants.json (everything the loader compiles i
 
 load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
 load("//ipsw:defs.bzl", "PretranslatedPinsInfo")
-load("//ipsw:ipsw.bzl", "ios_version", "kernel_virt_base")
+load("//ipsw:ipsw.bzl", "ios_version", "jetsam_properties_product", "kernel_virt_base", "os_volume_uuid")
 
 # Xcode's tools: macOS only, never on a remote executor (Xcode cannot be shipped there); the results may be cached
 # remotely (the key includes @xcode//:identity).
@@ -205,6 +205,8 @@ def _boot_package_impl(ctx):
     args.add("--overlay-plan", plan)
     args.add("--bt-patch", ctx.file.bt_patch)
     args.add("--portrait-header", ctx.file.portrait_header)
+    args.add("--root-volume-uuid", os_volume_uuid(ctx.attr._kind[BuildSettingInfo].value))
+    args.add("--jetsam-properties-product", jetsam_properties_product(ctx.attr._kind[BuildSettingInfo].value))
     if smp:
         args.add("--smp")
 
@@ -265,6 +267,7 @@ def _boot_package_impl(ctx):
     args.add("--blocks", shards[0].dirname)
     args.add("--kind", ctx.attr._kind[BuildSettingInfo].value)
     args.add("--virt-base", kernel_virt_base(ctx.attr._kind[BuildSettingInfo].value))
+    args.add("--root-volume-uuid", os_volume_uuid(ctx.attr._kind[BuildSettingInfo].value))
     if manifest_hash:
         args.add("--boot-manifest-hash")
     _run(ctx, ctx.executable._window, [args], [kernel, adt, bundle, ctx.file.data_seed, boot_args], [window_plan] + shards, "KernelLayout", "Laying out the kernel window")

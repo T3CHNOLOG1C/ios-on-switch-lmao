@@ -48,6 +48,7 @@ py_test(
     deps = [
         "//tools/package:boot_config",
         "//tools/package:loader_abi",
+        "//tools/package:native_oled_adt",
         "//tools/package:native_xnu_layout",
         "@rules_python//python/runfiles",
     ],
