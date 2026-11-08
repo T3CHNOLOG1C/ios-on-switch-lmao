@@ -324,8 +324,7 @@ id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool pa
             break;
         }
         case OpSignalEvent:
-            if (!part)  // a split command buffer's: made as it completes, after every segment (finish)
-                [m encodeSignalEvent:(__bridge id<MTLEvent>)c.obj value:c.c];
+            [m encodeSignalEvent:(__bridge id<MTLEvent>)c.obj value:c.c];
             break;
         case OpWaitEvent:
             // a value raw work submitted before signals: the BeforeTask acquire orders this command buffer after it on the

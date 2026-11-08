@@ -108,7 +108,7 @@ void finish(RMCommandBuffer *cb, NSError *error)
     gRM->stats.finished.fetch_add(1, std::memory_order_relaxed);
     unhold(cb);
     forEachWritten(cb, 0, cb->_tape.size(), markDirty);
-    if (!cb->_m2v)
+    if (!cb->_signalsOnM2v)
         for (const Cmd &c : cb->_tape)
             if (c.op == OpSignalEvent)
                 [(id<MTLSharedEvent>)(__bridge id)c.obj setSignaledValue:c.c];

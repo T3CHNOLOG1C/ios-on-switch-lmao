@@ -142,7 +142,7 @@ static bool submitLocked(RMCommandBuffer *cb)
     // one line per reason kind (no string per command buffer: the predicates' own lines carry the values)
     SWITCH_REFUSE_DETAIL("raw", "cb.m2v", cb->_reason, "command buffer on m2v (%s): %s [first predicate %s]",
                          kReasonNames[cb->_reason], cb->_why.UTF8String ?: "-", kPredNames[cb->_pred0]);
-    cb->_m2v = true;
+    cb->_m2v = cb->_signalsOnM2v = true;
     const uint64_t replayBegan = nowUs();
 #if SWITCH_FRAME_TIMELINE
     cb->_frame.mark(switch_frame::ReplayStart);
@@ -231,8 +231,9 @@ static bool submitLocked(RMCommandBuffer *cb)
 // encoders of one driver), else none (it goes whole, as its reason says). m2v replays only the encoders it must: a replayed draw
 // costs m2v's encode (~0.28 ms each on the device, 11-06), so a whole frame for one refused pass cost tens of ms.
 // Its shared event waits before its first encoder are the first segment's (its range starts at 0: an m2v one encodes them, a raw
-// one is submitted once they are covered, eventsReady/waitEvents); its signals after its last encoder are made as it completes,
-// after every segment (finish). A wait or signal between encoders keeps it whole.
+// one is submitted once they are covered, eventsReady/waitEvents), and its signals after its last encoder the last segment's (an
+// m2v one encodes them, on m2v's timeline as a whole replay would; a raw one's are made as the command buffer completes, finish).
+// A wait or signal between encoders keeps it whole.
 static void planSegments(RMCommandBuffer *cb)
 {
     cb->_segs.clear();
@@ -379,8 +380,10 @@ static bool submitSegments(RMCommandBuffer *cb)
             r.rawSinceM2v = false;
             r.m2vSinceRaw = true;
             countDriver(2);
-            if (last)
+            if (last) {
+                cb->_signalsOnM2v = true;
                 noteSignals(cb, r.m2vSignals);
+            }
             __block bool counted = false;
             {
                 std::lock_guard<std::mutex> l(r.m2vLock);

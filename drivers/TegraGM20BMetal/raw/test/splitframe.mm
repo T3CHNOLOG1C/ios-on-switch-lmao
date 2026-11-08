@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Command buffers the facade submits in segments (planSegments): each one copies a pattern down a chain of raw buffers through a
 // blit encoder that only m2v takes (a copy through an m2v buffer of its own, call.bufcopy), between raw copies, so its data
-// crosses raw -> m2v -> raw inside one command buffer (SPLITFRAME_ORDER=m2v-raw: m2v -> raw; raw: all of it raw). Committed
+// crosses raw -> m2v -> raw inside one command buffer (SPLITFRAME_ORDER: the encoders' drivers, as m2v-raw or m2v-raw-m2v; raw:
+// three raw ones). Committed
 // back to back from SPLITFRAME_THREADS threads (Core Animation's render thread and the others that commit), each waiting until
 // scheduled as Core Animation's render thread does, with scheduled and completed handlers that ask the raw objects for their m2v
 // twins (Core Animation's handlers touch the textures of the frame). Over the mock's GPU (MOCK_GPU_US; 0 races the completion
@@ -49,7 +50,17 @@ int main(int argc, char **argv)
         const unsigned count = argc > 4 ? unsigned(atoi(argv[4])) : 24;
         const unsigned threads = getenv("SPLITFRAME_THREADS") ? unsigned(atoi(getenv("SPLITFRAME_THREADS"))) : 2;
         const char *order = getenv("SPLITFRAME_ORDER") ? getenv("SPLITFRAME_ORDER") : "raw-m2v-raw";
-        const bool m2vFirst = !strcmp(order, "m2v-raw"), rawOnly = !strcmp(order, "raw");
+        // each encoder of a command buffer, by driver: a raw copy, or one through an m2v buffer (true)
+        std::vector<bool> stages;
+        if (!strcmp(order, "raw"))
+            stages.assign(3, false);
+        else
+            for (NSString *s in [@(order) componentsSeparatedByString:@"-"])
+                stages.push_back([s isEqualToString:@"m2v"]);
+        if (stages.size() > 3) {
+            fprintf(stderr, "splitframe: at most three encoders (%s)\n", order);
+            return 2;
+        }
         const bool events = getenv("SPLITFRAME_EVENTS") != nullptr;
         setenv("NMB_DEVICE_BASE_NSOBJECT", "1", 1);
         setenv("NVDEC_WRITETHROUGH", "1", 0);
@@ -144,26 +155,19 @@ int main(int argc, char **argv)
                         id<MTLCommandBuffer> cb = [q commandBuffer];
                         if (events)
                             [cb encodeWaitForEvent:signals[t] value:k + 1];
-                        id<MTLBlitCommandEncoder> e;
-                        id<MTLBuffer> into = c.a[k];
-                        if (!m2vFirst) {
-                            e = [cb blitCommandEncoder];
-                            [e copyFromBuffer:c.links[k] sourceOffset:0 toBuffer:into destinationOffset:0 size:bytes];
+                        const id<MTLBuffer> between[2] = {c.a[k], c.b[k]};
+                        for (size_t i = 0; i < stages.size(); i++) {
+                            id<MTLBuffer> from = i ? between[i - 1] : c.links[k],
+                                          to = i + 1 < stages.size() ? between[i] : c.links[k + 1];
+                            id<MTLBlitCommandEncoder> e = [cb blitCommandEncoder];
+                            if (stages[i]) {
+                                [e copyFromBuffer:from sourceOffset:0 toBuffer:own destinationOffset:0 size:bytes];
+                                [e copyFromBuffer:own sourceOffset:0 toBuffer:to destinationOffset:0 size:bytes];
+                            } else {
+                                [e copyFromBuffer:from sourceOffset:0 toBuffer:to destinationOffset:0 size:bytes];
+                            }
                             [e endEncoding];
-                        } else {
-                            into = c.links[k];
                         }
-                        e = [cb blitCommandEncoder];
-                        if (rawOnly) {
-                            [e copyFromBuffer:into sourceOffset:0 toBuffer:c.b[k] destinationOffset:0 size:bytes];
-                        } else {
-                            [e copyFromBuffer:into sourceOffset:0 toBuffer:own destinationOffset:0 size:bytes];
-                            [e copyFromBuffer:own sourceOffset:0 toBuffer:c.b[k] destinationOffset:0 size:bytes];
-                        }
-                        [e endEncoding];
-                        e = [cb blitCommandEncoder];
-                        [e copyFromBuffer:c.b[k] sourceOffset:0 toBuffer:c.links[k + 1] destinationOffset:0 size:bytes];
-                        [e endEncoding];
                         if (events)
                             [cb encodeSignalEvent:signals[t] value:k + 2];
                         id<MTLTexture> seen = [dev newTextureWithDescriptor:td];

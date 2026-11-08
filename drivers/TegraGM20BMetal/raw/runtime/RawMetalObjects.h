@@ -276,6 +276,8 @@ struct RMSegment {
     NSError *_error;
     RMQueue *_queue;
     bool _committed, _scheduledDone, _completedDone, _m2v;
+    // its event signals are in m2v work (replayed whole, or in its last segment): finish() makes none
+    bool _signalsOnM2v;
     bool
         _partial;  // the kernel refused its raw submission after part of it ran (raw::CommandBuffer::partial): never replayed
     // scheduled() and finish() ran (their handlers taken): a handler added after goes at once, and scheduled() runs once (a
