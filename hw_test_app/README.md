@@ -41,6 +41,12 @@ scenes, which build Core Animation's own pipeline states from QuartzCore's libra
 comparison names the first wrong pixel, both values, the bounding box, an 8x8 hex map of the wrong area and any streak
 columns, and saves got, want and diff PNGs under `Documents/gpu/<id>/`.
 
+`gpu.ca.sweep` checks the raw path against m2v directly. It draws one Core Animation state of each class in the raw
+pack's corpus (`ca_states.log`, cut from `precompile/corpus.log` at build time) on both devices and compares the bytes.
+Every state's verdict goes to `Documents/gpu/gpu.ca.sweep/states.txt`, with PNGs or raw bytes of the ones that differ.
+States of the other iOS version's QuartzCore count as skipped. Set `HWTEST_SWEEP_ALL=1` in the app's environment to draw
+every corpus state instead of one per class.
+
 `bazel test //hw_test_app:gpu_test` runs every scene on the Mac's GPU against the same references. Run it after
 changing a scene or a reference, so a failure on the Switch can't come from a wrong reference. It's tagged manual
 because CI's runners may have no usable GPU.

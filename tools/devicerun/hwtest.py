@@ -27,6 +27,7 @@ TESTS: dict[str, bool] = {
         [
             'gpu.ca.first_tiled_surface',
             'gpu.ca.blur_chain',
+            'gpu.ca.draw_then_copy',
             'gpu.upload.glyph_atlas',
             'gpu.upload.replace_region',
             'gpu.upload.blit_buffer',
@@ -43,6 +44,7 @@ TESTS: dict[str, bool] = {
             'gpu.blur.mps',
             'gpu.blur.coreimage',
             'gpu.compute.half_alu',
+            'gpu.ca.sweep',
             'metal.device',
             'metal.compute',
             'metal.render.color',

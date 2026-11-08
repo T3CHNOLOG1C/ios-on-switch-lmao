@@ -23,7 +23,7 @@
 #                     classes (the runtime's, never a record's), ahead of every program of the pack or a record
 #   mkpack_owned_test raw/pack/mkpack.py: no blob or baseline register is one the raw path owns
 #   raw_tiled_cache_test  raw/runtime/raw_tiled_cache.h: with the kernel's tiled-cache bit, deko3d's configuration then the
-#                     enable at context init and one flush per command buffer; nothing without it
+#                     enable at context init and one flush per pass and per command buffer; nothing without it
 #   raw_comp_test     raw/runtime/raw_comp.h: the compressible kinds the raw path binds are the kernel kind table's (nouveau
 #                     gm200_mmu_kind) and demote as it says; the boot ZBC values read alike by Metal and NV format
 #   stage_test        stage-tegra-gm20b-metal.py on a directory standing in for the Data volume
