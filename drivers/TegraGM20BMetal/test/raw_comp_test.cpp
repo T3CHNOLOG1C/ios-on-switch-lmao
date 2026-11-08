@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 // raw/runtime/raw_comp.h on the host: the compressible kinds the raw path binds are ones the kernel's kind table
-// (nouveau gm200_mmu_kind, which gm20b uses) takes as compressible and demotes as raw_comp.h says, and the boot ZBC
-// table's values read the same through the raw path's Metal formats and through nvdec's NV formats (pack/nvdec_comp.h).
+// (nouveau gm200_mmu_kind, which gm20b uses) takes as compressible and demotes as raw_comp.h says, the boot ZBC
+// table's values read the same through the raw path's Metal formats and through nvdec's NV formats (pack/nvdec_comp.h),
+// only the backings the copy engine never touches compress, and a refused want is asked for again as the kernel's answer
+// allows.
 #include <gtest/gtest.h>
 
 #include <cstdint>
@@ -81,6 +83,83 @@ TEST(RawComp, MemoryIsWholeComptagLines)
     EXPECT_EQ(raw::compBytes(1), 0x20000u);
     EXPECT_EQ(raw::compBytes(0x20000), 0x20000u);
     EXPECT_EQ(raw::compBytes(1280u * 720u * 8u), 0x720000u);
+}
+
+TEST(RawComp, OnlyZetaAndMemorylessColourBackingsCompress)
+{
+    constexpr uint32_t memoryless = 9;
+    EXPECT_EQ(raw::backingKind(true, true, true, 8, 1, 0, memoryless), 0xceu);
+    EXPECT_EQ(raw::backingKind(true, true, false, 8, 1, memoryless, memoryless), 0xe9u);
+    EXPECT_EQ(raw::backingKind(true, true, false, 4, 1, memoryless + 7, memoryless), 0xdbu);
+    for (uint32_t shadow = 1; shadow < memoryless; shadow++)  // the copy engine fills and drains a shadow
+        EXPECT_EQ(raw::backingKind(true, true, false, 4, 1, shadow, memoryless), 0u) << shadow;
+    EXPECT_EQ(raw::backingKind(true, false, false, 4, 1, memoryless, memoryless), 0u);  // pitch
+    EXPECT_EQ(raw::backingKind(false, true, true, 8, 1, 0, memoryless), 0u);            // compression off
+    EXPECT_EQ(raw::backingKind(true, true, false, 2, 1, memoryless, memoryless), 0u);   // no compressible kind
+    EXPECT_EQ(raw::backingKind(true, true, false, 4, 4, memoryless, memoryless), 0u);   // multisampled
+    EXPECT_EQ(raw::backingKind(true, true, true, 8, 2, 0, memoryless), 0u);
+}
+
+TEST(RawComp, ShortagesPassAndContractRefusalsDoNot)
+{
+    EXPECT_FALSE(raw::compLasting(kIOReturnNoMemory));     // the pool's tiers or no free chunk
+    EXPECT_FALSE(raw::compLasting(kIOReturnNoResources));  // no comptags left
+    EXPECT_FALSE(raw::compLasting(kIOReturnNoSpace));      // no GPU VA
+    EXPECT_TRUE(raw::compLasting(kIOReturnBadArgument));
+    EXPECT_TRUE(raw::compLasting(kIOReturnUnsupported));
+}
+
+TEST(RawComp, RetriesBackOffToTenSecondsOfFrames)
+{
+    EXPECT_EQ(raw::compRetryAfter(1), 30u);
+    EXPECT_EQ(raw::compRetryAfter(2), 60u);
+    EXPECT_EQ(raw::compRetryAfter(5), 480u);
+    EXPECT_EQ(raw::compRetryAfter(6), 600u);
+    EXPECT_EQ(raw::compRetryAfter(1000), 600u);
+}
+
+TEST(RawComp, ARefusedWantIsAskedAgainOnceDue)
+{
+    raw::CompQueue q;
+    const raw::CompWant w{0x720000, 0xe9}, other{0x20000, 0xce};
+    EXPECT_FALSE(q.asked(w, 0));
+    q.wanted.push_back(w);
+    EXPECT_TRUE(q.asked(w, 0));
+    q.wanted.clear();
+    EXPECT_TRUE(q.refuse(w, 100, false));  // its first refusal is the one logged
+    EXPECT_TRUE(q.asked(w, 129));
+    EXPECT_FALSE(q.asked(w, 130));
+    EXPECT_FALSE(q.asked(other, 100));
+    EXPECT_FALSE(q.refuse(w, 130, false));
+    EXPECT_TRUE(q.asked(w, 189));
+    EXPECT_FALSE(q.asked(w, 190));
+    q.made(w);
+    EXPECT_FALSE(q.asked(w, 0));
+    EXPECT_TRUE(q.refuse(w, 200, false));  // a refusal after it was made is a first one again
+}
+
+TEST(RawComp, FreedMemoryMakesShortagesDueAndNothingElse)
+{
+    raw::CompQueue q;
+    const raw::CompWant shortOf{0x720000, 0xe9}, refused{0x20000, 0xdb};
+    for (uint64_t at = 0; at < 10; at++)
+        q.refuse(shortOf, at, false);
+    q.refuse(refused, 0, true);
+    EXPECT_TRUE(q.asked(shortOf, 100));
+    q.freed(100);
+    EXPECT_FALSE(q.asked(shortOf, 100));
+    EXPECT_TRUE(q.asked(refused, 1000000));  // a lasting refusal is never asked again
+}
+
+TEST(RawComp, AReadyBufferAnswersItsWant)
+{
+    raw::CompQueue q;
+    raw::CompBo b;
+    b.bo.bytes = 0x20000;
+    b.kind = 0xce;
+    q.ready.push_back(b);
+    EXPECT_TRUE(q.asked({0x20000, 0xce}, 0));
+    EXPECT_FALSE(q.asked({0x20000, 0xe9}, 0));
 }
 
 }  // namespace

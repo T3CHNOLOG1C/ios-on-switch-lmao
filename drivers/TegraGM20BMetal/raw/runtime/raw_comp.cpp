@@ -47,19 +47,9 @@ bool backingLayout(const Texture &m, Texture &t, fx::MipChain &c, uint64_t &byte
 
 }  // namespace
 
-bool CompQueue::asked(const CompWant &w) const
+int Kernel::allocCompressible(uint64_t bytes, Bo &bo)
 {
-    auto has = [&](const std::vector<CompWant> &v) {
-        return std::find(v.begin(), v.end(), w) != v.end();
-    };
-    return has(wanted) || has(failed) || std::any_of(ready.begin(), ready.end(), [&](const CompBo &b) {
-               return b.bo.bytes == w.bytes && b.kind == w.kind;
-           });
-}
-
-int Kernel::allocContiguous(uint64_t bytes, uint32_t alignLog2, Bo &bo)
-{
-    TegraGM20BAbiBoAlloc a = {bytes, alignLog2, TegraGM20BBoContiguous};
+    TegraGM20BAbiBoAlloc a = {bytes, kCompAlignLog2, TegraGM20BBoCompressible};
     TegraGM20BAbiBoAllocReply r = {};
     bo = {};
     const int kr = call(TegraGM20BMethodBoAlloc, &a, sizeof a, &r, sizeof r);
@@ -71,33 +61,29 @@ int Kernel::allocContiguous(uint64_t bytes, uint32_t alignLog2, Bo &bo)
     return kr;
 }
 
-bool Kernel::bindCompressed(Bo &bo, uint32_t kind, bool &noLines)
+int Kernel::bindCompressed(Bo &bo, uint32_t kind)
 {
-    noLines = false;
     const uint64_t va = allocVa(bo.bytes, kCompGranule);
     if (!va)
-        return false;
+        return kIOReturnNoSpace;
     TegraGM20BAbiVmBind b = {};
     b.count = 1;
     b.ops[0] = {TegraGM20BBindMap, kind, bo.handle, 0, va, bo.bytes};
     const size_t in = offsetof(TegraGM20BAbiVmBind, ops) + sizeof(b.ops[0]);
     if (const int kr = call(TegraGM20BMethodVmBind, &b, in, nullptr, 0); kr != KERN_SUCCESS) {
         freeVa(va, bo.bytes);
-        noLines = kr == kIOReturnNoResources;
-        return false;
+        return kr;
     }
     bo.va = bo.vaBase = va;
-    return true;
+    return KERN_SUCCESS;
 }
 
 uint32_t Device::compKind(const Texture &m, uint32_t tag, bool blockLinear) const
 {
-    if (!(k_.info().flags & TegraGM20BInfoCompression) || !blockLinear || m.samples > 1)
+    if (m.zeta && m.format != kZetaFormat)  // ZF32_X24S8_2CSZV is D32S8's layout alone
         return 0;
-    if (m.zeta)
-        return m.format == kZetaFormat ? kCompKindZeta : 0;
-    // shadows (tags below kMemorylessTag) are filled and drained by the copy engine: uncompressed
-    return tag >= kMemorylessTag ? compressedKind(m.bpp, false) : 0;
+    return backingKind((k_.info().flags & TegraGM20BInfoCompression) != 0, blockLinear, m.zeta, m.bpp, m.samples, tag,
+                       kMemorylessTag);
 }
 
 Device::Backing *Device::compBacking(const Texture &m, uint32_t tag, uint32_t kind)
@@ -115,7 +101,7 @@ Device::Backing *Device::compBacking(const Texture &m, uint32_t tag, uint32_t ki
     };
     auto it = ready();
     if (it == comp_.ready.end()) {
-        if (!comp_.asked(want)) {
+        if (!comp_.asked(want, commitCount_)) {
             comp_.wanted.push_back(want);
             if (!compThread_.joinable())
                 compThread_ = std::thread([this] {
@@ -168,14 +154,14 @@ void Device::compMake(std::unique_lock<std::mutex> &l)
         Bo bo;
         l.unlock();
         const auto start = std::chrono::steady_clock::now();
-        const int kr = k_.allocContiguous(w.bytes, kCompAlignLog2, bo);
+        int kr = k_.allocCompressible(w.bytes, bo);
         const bool made = kr == KERN_SUCCESS;
         const auto us =
             std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count();
         l.lock();
         comp_.wanted.erase(std::find(comp_.wanted.begin(), comp_.wanted.end(), w));
-        bool noLines = false;
-        if (made && k_.bindCompressed(bo, w.kind, noLines)) {
+        if (made && (kr = k_.bindCompressed(bo, w.kind)) == KERN_SUCCESS) {
+            comp_.made(w);
             comp_.ready.push_back({bo, w.kind, commitCount_});
             os_log_debug(compLog(), "raw: compressed memory %llu KiB kind 0x%x made in %lld us",
                          (unsigned long long)(w.bytes >> 10), w.kind, (long long)us);
@@ -183,16 +169,18 @@ void Device::compMake(std::unique_lock<std::mutex> &l)
         }
         if (made)
             k_.free(bo);
-        comp_.failed.push_back(w);
         stats.compFailed++;
-        os_log_error(compLog(),
-                     "raw: compressed memory %llu KiB kind 0x%x not made (%{public}s, 0x%x): those backings stay "
-                     "uncompressed",
-                     (unsigned long long)(w.bytes >> 10), w.kind,
-                     !made     ? "contiguous BoAlloc"
-                     : noLines ? "no comptags left"
-                               : "compressed VmBind",
-                     unsigned(kr));
+        const bool lasting = compLasting(kr);
+        if (comp_.refuse(w, commitCount_, lasting))
+            os_log_error(compLog(),
+                         "raw: compressed memory %llu KiB kind 0x%x not made (%{public}s, 0x%x): those backings stay "
+                         "uncompressed%{public}s",
+                         (unsigned long long)(w.bytes >> 10), w.kind,
+                         !made                        ? "compressible BoAlloc"
+                         : kr == kIOReturnNoResources ? "no comptags left"
+                         : kr == kIOReturnNoSpace     ? "no GPU VA"
+                                                      : "compressed VmBind",
+                         unsigned(kr), lasting ? "" : " until it is made (asked again later)");
     }
 }
 
@@ -210,6 +198,7 @@ void Device::compFree(Backing &b)
         freeTic_.push_back(b.texture.tic);
     }
     k_.free(b.comp);
+    comp_.freed(commitCount_);
 }
 
 void Device::compTrim()
@@ -218,6 +207,7 @@ void Device::compTrim()
         if (commitCount_ - it->madeAt > 600) {
             k_.free(it->bo);
             it = comp_.ready.erase(it);
+            comp_.freed(commitCount_);
             continue;
         }
         ++it;

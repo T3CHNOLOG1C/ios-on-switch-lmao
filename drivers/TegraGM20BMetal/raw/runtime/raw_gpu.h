@@ -1181,8 +1181,9 @@ private:
     // Compressed backings (raw_comp.cpp), lock_ held: the compressible kind a backing of this shape takes (0: none or
     // compression off); a backing on compressed memory made off this thread, or nullptr after asking compThread_ for some
     CompQueue comp_;
-    // made off the render thread on a thread of its own, started at the first ask: the kernel's contiguous search can take
-    // over 100 ms, and no other thread (the pool's grower included, which a render thread may wait for) waits behind it
+    // made off the render thread on a thread of its own, started at the first ask: the kernel zeroes the pages a free left
+    // dirty and clears the comptags at the bind, which takes milliseconds for a full-screen target, and no other thread (the
+    // pool's grower included, which a render thread may wait for) waits behind it
     std::thread compThread_;
     std::condition_variable compWake_;
     uint32_t compKind(const Texture &m, uint32_t tag, bool blockLinear) const;
