@@ -22,7 +22,7 @@
 extern "C" {
 #endif
 
-// CTR_EL0.DminLine on the Cortex-A57.
+// CTR_EL0.DminLine on the Cortex-A57, a constant because EL0 cannot read CTR_EL0 (XNU leaves SCTLR_EL1.UCT clear).
 #define SWITCH_DCACHE_LINE 64u
 
 #ifndef SWITCH_DCACHE_OP
