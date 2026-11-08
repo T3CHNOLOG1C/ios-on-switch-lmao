@@ -57,6 +57,21 @@ static uint64_t threadNs()
            1000;
 }
 
+// FRAME_RATES=1: the rates lines after every frame (that frame's counters): RATESF (raw facade) and M2VF (m2v). Called once
+// before the first frame with -1, for m2v's baseline (its first call only takes one).
+static void framesRates(int f)
+{
+    if (!getenv("FRAME_RATES"))
+        return;
+    char rates[4096];
+#ifdef RAW_FACADE
+    if (f >= 0 && raw_metal_rates(rates, sizeof rates))
+        printf("RATESF %d %s\n", f, rates);
+#endif
+    if (native_bridge_metal_rates(rates, sizeof rates) && f >= 0)
+        printf("M2VF %d %s\n", f, rates);
+}
+
 using state_desc::descriptor;
 
 int main(int argc, char **argv)
@@ -412,6 +427,7 @@ int main(int argc, char **argv)
         // a decoder's next frame), so the raw path converts its image again then and only then (RMTexture _imageSeed)
         const unsigned ycbcrWrite = getenv("FRAME_YCBCR_WRITE") ? unsigned(atoi(getenv("FRAME_YCBCR_WRITE"))) : 0;
         const int settle = getenv("FRAME_COMPLETE_SETTLE") ? atoi(getenv("FRAME_COMPLETE_SETTLE")) : -1;
+        framesRates(-1);
         for (unsigned f = 0; f < frames; f++) {
             if (int(f) == settle)
                 usleep(2000000);
@@ -613,6 +629,7 @@ int main(int argc, char **argv)
                     fprintf(stderr, "frame %u: %s\n", f, cb.error.localizedDescription.UTF8String);
                     return 1;
                 }
+                framesRates(f);
             }
         }
         const size_t warm = cpu.size() > 20 ? 10 : 0;
