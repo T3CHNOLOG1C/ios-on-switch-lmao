@@ -180,6 +180,27 @@ void refused(IOReturn ret, const char *why)
     switch_refusal("TegraVIC", why, "IOSurfaceAccelerator transform refused (%s), the caller falls back", kind);
 }
 
+#if TEGRA_VIC_STATS
+extern "C" void proc_selfname(char *buf, int size);
+extern "C" int proc_selfpid(void);
+
+// Who allocates surfaces VIC cannot address, once a boot: each one costs the copy engine two copies a job, and the
+// fix is that allocator's row alignment.
+void firstBounce(const TegraVICSurfaceDesc *d, const char *side)
+{
+    static int logged;
+    if (__atomic_exchange_n(&logged, 1, __ATOMIC_RELAXED))
+        return;
+    char name[32];
+    proc_selfname(name, sizeof(name));
+    os_log(OS_LOG_DEFAULT,
+           "TegraVIC: first bounce this boot: %s[%d] %s '%c%c%c%c' %ux%u, row pitch %llu (VIC takes multiples of 256)",
+           name, proc_selfpid(), side, static_cast<char>(d->fourcc >> 24), static_cast<char>(d->fourcc >> 16),
+           static_cast<char>(d->fourcc >> 8), static_cast<char>(d->fourcc), d->width, d->height,
+           static_cast<unsigned long long>(d->planeBytesPerRow[0]));
+}
+#endif
+
 struct Job {
     Job *next;
     IOUserClient *client;  // retained
@@ -514,6 +535,10 @@ IOReturn transform(Conn *conn, const void *in, uint32_t size)
         why = staged(&job->dst.desc, &dstStage, &dstAs, &job->bounceDst);
         if (!why && job->plan.readsSource)
             why = staged(&job->src.desc, &srcStage, &srcAs, &job->bounceSrc);
+#if TEGRA_VIC_STATS
+        if (!why && (job->bounceSrc || job->bounceDst))
+            firstBounce(job->bounceSrc ? &job->src.desc : &job->dst.desc, job->bounceSrc ? "source" : "destination");
+#endif
         if (!why)
             why = tegra_vic_image_from(dstAs, kTegraVICWindowBase + TEGRA_VIC_WINDOW_DST * kTegraVICWindowBytes, &dst);
         if (!why && job->plan.readsSource)
