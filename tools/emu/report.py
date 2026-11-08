@@ -5,6 +5,7 @@ import struct
 import zlib
 from pathlib import Path
 
+from tools.emu import gpulog, msgbuf
 from tools.emu.monitor import Monitor
 
 RAMOOPS = (0xB0000000, 0x200000)
@@ -13,9 +14,13 @@ LOG_LINE = re.compile(rb'\[ *(\d+)\.(\d{6})\]: ?([\x20-\x7e]*)')
 PANIC = re.compile(rb'panic\(cpu \d+ caller [^\n\0]*')
 
 
-def capture(monitor: Monitor, run: Path) -> None:
+def capture(monitor: Monitor, run: Path, kernel: Path | None) -> None:
     monitor.command('stop')
-    (run / 'registers.txt').write_text(monitor.human('info registers -a'))
+    registers = monitor.human('info registers -a')
+    (run / 'registers.txt').write_text(registers)
+    live = msgbuf.read(monitor, kernel, registers) if kernel else None
+    if live:
+        (run / 'msgbuf.raw').write_bytes(live)
     monitor.command('pmemsave', val=RAMOOPS[0], size=RAMOOPS[1], filename=str(run / 'ramoops.raw'))
     monitor.command('pmemsave', val=FRAMEBUFFER[0], size=FRAMEBUFFER[1], filename=str(run / 'framebuffer.raw'))
     try:
@@ -60,7 +65,8 @@ def program_counters(registers: str) -> list[str]:
 
 def summarize(run: Path) -> str:
     ramoops = (run / 'ramoops.raw').read_bytes()
-    log = kernel_log(ramoops)
+    live = run / 'msgbuf.raw'
+    log = kernel_log(live.read_bytes() if live.exists() else ramoops)
     (run / 'kernel.log').write_text('\n'.join(log) + '\n')
     panic = panic_text(ramoops)
     if panic:
@@ -74,6 +80,7 @@ def summarize(run: Path) -> str:
         f'kernel log: {len(log)} lines; secondary cores online: {", ".join(online) or "none"}',
         f'core PCs: {" ".join(program_counters((run / "registers.txt").read_text()))}',
         f'panic: {panic or "none"}',
+        f'gpu: {gpulog.summarize(run)}',
         'last kernel lines:',
         *log[-12:],
     ]

@@ -17,7 +17,7 @@ struct TegraVICSurface {
 };
 
 extern "C" {
-bool tegra_vic_surface_start(void);  // finds the IOSurfaceRoot (V5)
+bool tegra_vic_surface_start(void);  // finds the IOSurfaceRoot (V3)
 IOReturn tegra_vic_surface_lookup(uint32_t id, task_t task, TegraVICSurface *out);
 void tegra_vic_surface_release(TegraVICSurface *s);
 IOReturn tegra_vic_surface_prepare(TegraVICSurface *s, uint64_t extent, uint64_t *pages, uint32_t max, uint32_t *count);

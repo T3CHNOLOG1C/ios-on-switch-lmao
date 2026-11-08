@@ -35,7 +35,6 @@
 #include <mach/machine.h>
 #include <os/atomic_private.h>
 #include <pexpert/device_tree.h>
-#include <sys/imgact.h>
 
 #include <switch/pretranslated.h>
 
@@ -317,7 +316,6 @@ void switch_pretranslated_redirect(struct nameidata *ndp)
     }
     vnode_put(vp);
     ndp->ni_vp = copy;
-    ndp->ni_flag |= NAMEI_SWITCH_PRETRANSLATED;
 }
 
 static const char *switch_pt_op_name(enum switch_pt_op op)
@@ -384,21 +382,29 @@ int switch_pretranslated_refuse(enum switch_pt_op op, vnode_t v0, vnode_t v1, vn
     return EPERM;
 }
 
-static bool switch_pt_cdhash_pinned(vnode_t vp, int64_t arch_offset)
+static bool switch_pt_cdhash_pinned(const uint8_t *cdhash)
 {
-    struct cs_blob *blob = ubc_cs_blob_get(vp, CPU_TYPE_ANY, CPU_SUBTYPE_ANY, (off_t)arch_offset);
     TrustCacheQueryToken_t token;
     uint8_t uuid[kUUIDSize];
-    return blob && query_trust_cache(kTCQueryTypeAll, blob->csb_cdhash, &token) == KERN_SUCCESS &&
+    return query_trust_cache(kTCQueryTypeAll, cdhash, &token) == KERN_SUCCESS &&
            amfi->TrustCache.queryGetUUID(&token, uuid).error == kTCReturnSuccess &&
            memcmp(uuid, switch_pt.trust, sizeof(uuid)) == 0;
 }
 
-/* exec's launch-constraint step: may this image keep the launch status of the System file it stands in for? */
-bool switch_pretranslated_trusted(vnode_t vp, int64_t arch_offset, bool redirected)
+static bool switch_pt_signed_as(vnode_t vp, const uint8_t *cdhash)
 {
-    if (!redirected || !os_atomic_load(&switch_pretranslated_on, acquire) || vp == NULLVP ||
-        vp->v_mount != switch_pt.data) {
+    bool found = false;
+    vnode_lock_spin(vp);
+    for (const struct cs_blob *blob = ubc_get_cs_blobs(vp); blob && !found; blob = blob->csb_next) {
+        found = memcmp(blob->csb_cdhash, cdhash, SWITCH_PT_CDHASH) == 0;
+    }
+    vnode_unlock(vp);
+    return found;
+}
+
+static bool switch_pt_authentic(vnode_t vp)
+{
+    if (vp == NULLVP || vp->v_mount != switch_pt.data || !vnode_isreg(vp)) {
         return false;
     }
     struct vnode_attr va;
@@ -407,45 +413,42 @@ bool switch_pretranslated_trusted(vnode_t vp, int64_t arch_offset, bool redirect
     VATTR_WANTED(&va, va_uid);
     VATTR_WANTED(&va, va_gid);
     VATTR_WANTED(&va, va_mode);
-    if (vnode_getattr(vp, &va, vfs_context_kernel())) {
+    if (vnode_getattr(vp, &va, vfs_context_kernel()) || !VATTR_ALL_SUPPORTED(&va)) {
         return false;
     }
     uint32_t file = SWITCH_PT_PROTECTED;
-    const bool listed = switch_pt_map_get(&switch_pt.tables.data, va.va_fileid, &file) && file < SWITCH_PT_PROTECTED;
-    struct cs_blob *blob = ubc_cs_blob_get(vp, CPU_TYPE_ANY, CPU_SUBTYPE_ANY, (off_t)arch_offset);
-    struct switch_pt_trust_facts facts = {
-        .redirected = redirected,
-        .listed = listed,
-        .regular = vnode_isreg(vp),
+    if (!switch_pt_map_get(&switch_pt.tables.data, va.va_fileid, &file) || file >= SWITCH_PT_PROTECTED) {
+        return false;
+    }
+    const uint8_t *cdhash = switch_pt_file_at(&switch_pt.tables.index, file).cdhash;
+    const struct switch_pt_trust_facts facts = {
+        .listed = true,
+        .regular = true,
         .uid = va.va_uid,
         .gid = va.va_gid,
         .mode = va.va_mode,
-        .cdhash_pinned = switch_pt_cdhash_pinned(vp, arch_offset),
-        .cdhash_matches =
-            listed && blob &&
-            memcmp(blob->csb_cdhash, switch_pt_file_at(&switch_pt.tables.index, file).cdhash, SWITCH_PT_CDHASH) == 0,
+        .cdhash_pinned = switch_pt_cdhash_pinned(cdhash),
+        .cdhash_matches = switch_pt_signed_as(vp, cdhash),
     };
-    const bool trusted = switch_pt_trusted(&facts);
-    if (!trusted && switch_pt_log_allowed()) {
-        printf("SwitchPretranslated: file %llu runs without the System volume's launch status (listed %d, %u:%u "
-               "%o, CDHash pinned %d matches %d)\n",
-               (unsigned long long)va.va_fileid, facts.listed, facts.uid, facts.gid, facts.mode, facts.cdhash_pinned,
+    const bool authentic = switch_pt_trusted(&facts);
+    if (!authentic && switch_pt_log_allowed()) {
+        printf("SwitchPretranslated: file %llu is not authenticated (%u:%u %o, CDHash pinned %d matches %d)\n",
+               (unsigned long long)va.va_fileid, facts.uid, facts.gid, facts.mode, facts.cdhash_pinned,
                facts.cdhash_matches);
     }
-    return trusted;
+    return authentic;
 }
 
 /*
- * The System volume's executables translated offline are on Data, so the same self constraint cannot match them. One
- * keeps the launch status of the System file it stands in for only as the lookup redirect produced it and only if
- * switch_pretranslated_trusted() holds (listed, root:wheel, writable by nobody else, CDHash in the trust module pinned
- * for the tree). Nothing else on Data gains anything.
+ * FSIOC_AUTH_FS ("is this file on an authenticated volume") is AMFI's on-authorized-authapfs-volume fact, which the
+ * launch constraints accept in place of on-system-volume. The System files the tree stands in for are on the sealed
+ * System volume; their Data copies are authenticated by their trust module instead, like a cryptex's files by its
+ * manifest. Decided from the vnode alone, never from the path it was found by. An authvp must be a file of the tree.
  */
-bool switch_pretranslated_image(const struct image_params *imgp)
+bool switch_pretranslated_auth_fs(vnode_t vp, const void *data)
 {
-    return imgp->ip_vp && imgp->ip_ndp &&
-           switch_pretranslated_trusted(imgp->ip_vp, (int64_t)imgp->ip_arch_offset,
-                                        (imgp->ip_ndp->ni_flag & NAMEI_SWITCH_PRETRANSLATED) != 0);
+    const fsioc_auth_fs_t *request = data;
+    return request && switch_pt_authentic(vp) && (request->authvp == NULLVP || switch_pt_authentic(request->authvp));
 }
 
 int switch_pretranslated_mmap_check(struct fileglob *fg, int flags, int prot, int maxprot)

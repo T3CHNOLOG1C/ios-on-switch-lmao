@@ -1,27 +1,28 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // Tegra210 VIC (Video Image Compositor 4.0, a falcon behind host1x): bring-up, its SMMU domain, the job engine and
 // sleep. tegra_vic_probe() runs the whole bring-up by default on its own thread:
-//   V0  host1x is up, and VIC's kernel buffers are allocated: the firmware image, an arena for the configuration slot,
-//       the filter structure and the self-test surfaces, and the SMMU page directory with its page tables
+//   V0  host1x is up, and VIC's kernel buffers are allocated: the firmware image, an arena for the configuration slot
+//       and the filter structure, and the SMMU page directory with its page tables
 //   V1  VIC's SMMU domain (ASID 127 for the "vic" swgroup: the kernel buffers 1:1, two empty surface windows), power
 //       partition 23, clock (PLLP, 408 MHz), reset, the VIC MBIST workaround, falcon firmware loaded and started
 //   V2  proof of life through host1x channel 0 in VIC's class: an IMMEDIATE syncpoint increment (the engine's host
 //       interface), then the firmware's FCE microcode size and offset and an OP_DONE increment (the falcon), each
 //       completed by interrupt
-//   V3  SMMU translation proven: a fill whose page table entry sends it to page B lands in B, not at the bus address
-//   V4  every transform, the colour matrices and scaling checked against the reference (TegraVICSelfTest.cpp)
-//   V5  the AppleM2ScalerCSCDriver service and its IOSurfaceAcceleratorClient published (TegraVICUserClient.cpp)
-// One line per stage ("TegraVIC: V1 ok ..."), or the failing stage's FAIL line and nothing after it. Until V5
+//   V3  the AppleM2ScalerCSCDriver service and its IOSurfaceAcceleratorClient published (TegraVICUserClient.cpp)
+// One line per stage ("TegraVIC: V1 ok ..."), or the failing stage's FAIL line and nothing after it. Until V3
 // publishes, every failure is that one line: the swgroup goes back to bypass, the engine back to reset with its clock
-// off, and nothing is published (Core Animation has no IOSurfaceAccelerator, as before this driver). From V5 on the
-// engine is proven: a job past its bound panics with one line, and a lost syncpoint interrupt panics in TegraHost1x.
+// off, and nothing is published (Core Animation has no IOSurfaceAccelerator, as before this driver). No job runs
+// before V3, and from then a job past its bound panics with one line, and a lost syncpoint interrupt panics in
+// TegraHost1x. What the engine does with each configuration is kTegraVICTraits (TegraVICConfig.h), measured on the
+// unit by a boot self-test that came out the same on every logged boot.
 //
 // Why the SMMU: the scaler's operands are other processes' IOSurfaces (scattered pages, half of the Switch's RAM above
 // the 32-bit boundary), and VIC has no scatter-gather. Each job maps its two surfaces page by page into two windows of
 // VIC's address space; everything else in the windows is unmapped, so the SMMU itself keeps the engine inside the job's
 // surfaces, behind the checker (TegraVICConfig.h) that keeps every programmed access inside them. switchroot's bl31
 // (tegra_memctrl_setup) turns the SMMU on with every client's translation bit set and every swgroup in bypass; the
-// global enable is secure-only and reads back as garbage from here, so V3 proves translation instead of reading it.
+// global enable is secure-only and reads back as garbage from here; on every logged boot (31) a fill whose page table
+// entry sent it to another page landed in that page, not at the bus address.
 //
 // Firmware: linux-firmware's nvidia/tegra210/vic04_ucode.bin (firmware/SOURCE), booted non-securely as Linux drm/tegra
 // vic.c does; its FCE microcode is handed over with two methods (VIC_SET_FCE_UCODE_SIZE/OFFSET), as vic_boot does for
@@ -68,9 +69,9 @@ constexpr uint64_t kVicPA = 0x54340000, kVicSize = 0x40000;
 constexpr uint32_t kClass = TEGRA_HOST1X_CLASS_VIC;
 constexpr uint32_t kThiMethod0 = 0x40;  // THI METHOD0 (offset) then METHOD1 (data)
 constexpr uint64_t kMcPA = 0x70019000;
-constexpr uint32_t kPartition = 23;  // TEGRA_POWERGATE_VIC
-constexpr unsigned kClock = 178;     // TEGRA210_CLK_VIC03: CAR bank X bit 18, also its reset
-constexpr uint64_t kArenaBytes = 1ULL << 20;
+constexpr uint32_t kPartition = 23;                           // TEGRA_POWERGATE_VIC
+constexpr unsigned kClock = 178;                              // TEGRA210_CLK_VIC03: CAR bank X bit 18, also its reset
+constexpr uint64_t kArenaBytes = 4ULL * SWITCH_HW_PAGE_SIZE;  // the configuration slot and the filter (0x3000)
 constexpr uint32_t kAsid = TEGRA_SMMU_ASID_VIC;
 
 enum : uint32_t {  // clock and reset controller
@@ -132,18 +133,8 @@ inline uint32_t jobBoundUs(const TegraVICJob *job)
 IOLock *gJobLock;    // one job at a time: map, run, unmap
 IOLock *gStateLock;  // suspend/resume against jobs
 uint32_t gSyncpt, gNext;
-bool gUp, gWedged, gSuspended, gPublished;
+bool gUp, gWedged, gSuspended;
 TegraVICBuffer gConfig, gFilter;
-TegraVICTraits gTraits;
-
-// A job's pages through the physical aperture, without the barrier: the caller's switch_dcache_sync() completes them.
-void cachePages(switch_dcache_op op, const uint64_t *pages, uint32_t count)
-{
-    for (uint32_t i = 0; i < count; i++) {
-        if (switch_dma_pa_managed(pages[i]))
-            switch_dcache_phys_lines(op, pages[i] & ~SWITCH_HW_PAGE_MASK, SWITCH_HW_PAGE_SIZE);
-    }
-}
 
 const char *falconState()
 {
@@ -178,15 +169,6 @@ bool parse(const uint8_t *fw, size_t length)
 inline uint32_t *table(uint32_t index)
 {
     return gDomain.table(index);
-}
-
-// The table entries just written, to memory (the SMMU does not snoop the CPU's caches).
-void cleanDomain()
-{
-    uintptr_t low = 0;
-    uintptr_t high = 0;
-    if (gDomain.takeDirty(&low, &high))
-        switch_dcache_clean(reinterpret_cast<const void *>(low), high - low);
 }
 
 void smmuFlush()
@@ -350,18 +332,11 @@ void park()
     switch_car_clock_disable(kClock);
 }
 
-void timedOut(uint32_t fence, uint64_t us)
+[[noreturn]] void timedOut(uint32_t fence, uint64_t us)
 {
     char host[200];
     tegra_host1x_describe_channel(TEGRA_HOST1X_CHANNEL_VIC, host, sizeof(host));
-    if (gPublished) {
-        panic("TegraVIC: job fence %u not reached in %llu ms (syncpoint %u at %u); %s; %s", fence, us / 1000, gSyncpt,
-              tegra_host1x_syncpt_read(gSyncpt), falconState(), host);
-    }
-    if (gWedged)
-        return;
-    gWedged = true;
-    IOLog("TegraVIC: job fence %u not reached in %llu us (syncpoint %u at %u); %s; %s\n", fence, us, gSyncpt,
+    panic("TegraVIC: job fence %u not reached in %llu ms (syncpoint %u at %u); %s; %s", fence, us / 1000, gSyncpt,
           tegra_host1x_syncpt_read(gSyncpt), falconState(), host);
 }
 
@@ -459,18 +434,9 @@ void bringUp(void *, wait_result_t)
     gSyncpt = id;
     gNext = tegra_host1x_syncpt_read(id);
     gUp = true;
-    if (tegra_vic_self_test(&gTraits)) {  // V3 and V4; their FAIL line is out
-        gUp = false;
-        park();
-        giveBack();
-        return;
-    }
     tegra_host1x_set_sleep_client(engineSuspend, engineResume);
     tegra_host1x_set_strict();
-    // Proven: from here a job past its bound panics (TegraVIC.h).
-    gPublished = true;
-    if (tegra_vic_publish())
-        gPublished = false;
+    tegra_vic_publish();  // a FAIL line is its own; the engine stays up, unused
 }
 }  // namespace
 
@@ -486,7 +452,7 @@ extern "C" bool tegra_vic_ready(void)
 
 extern "C" const TegraVICTraits *tegra_vic_traits(void)
 {
-    return &gTraits;
+    return &kTegraVICTraits;
 }
 
 extern "C" int tegra_vic_buffer(uint64_t size, TegraVICBuffer *out)
@@ -509,11 +475,6 @@ extern "C" uint64_t tegra_vic_config_address(void)
 extern "C" uint64_t tegra_vic_filter_address(void)
 {
     return gFilter.pa;
-}
-
-extern "C" void tegra_vic_cache_pages(switch_dcache_op op, const uint64_t *pages, uint32_t count)
-{
-    cachePages(op, pages, count);
 }
 
 extern "C" void tegra_vic_lock(void)
@@ -555,17 +516,6 @@ extern "C" void tegra_vic_window_clear(uint32_t window)
     bzero(pt, (uint64_t)gWindowMapped[window] * 4);
     switch_dcache_clean(pt, (uint64_t)gWindowMapped[window] * 4);
     gWindowMapped[window] = 0;
-    smmuFlush();
-}
-
-extern "C" void tegra_vic_identity_override(uint64_t iova, uint64_t pa)
-{
-    uint32_t *p = gDomain.pte(iova, true);
-    if (!p)
-        return;
-    *p = TegraSMMUDomain::entry(pa, true);
-    gDomain.touch(p, sizeof(*p));
-    cleanDomain();
     smmuFlush();
 }
 

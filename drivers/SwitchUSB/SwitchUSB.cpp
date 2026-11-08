@@ -13,6 +13,7 @@
 #include "../SwitchBattery/SwitchBattery.h"
 #include "../TegraI2C/TegraI2C.h"
 #include "../../kits/SwitchCAR/SwitchUPHY.h"
+#include "../../kits/SwitchDT/SwitchDTProperty.h"
 #include "SwitchPD.h"
 #include "SwitchPDPolicy.h"
 #include "SwitchUSB.h"
@@ -231,11 +232,9 @@ void usbThread(void *, wait_result_t)
     char why[160] = "";
     if (gDevicePort) {
         if (railOn(why, sizeof(why)) && switchxudc_start(gDevicePort, why, sizeof(why))) {
-            const OSData *configuration = OSDynamicCast(OSData, gDevicePort->getProperty("configuration-string"));
+            const char *configuration = switch_dt_string(gDevicePort, "configuration-string");
             IOLog("SwitchUSB: device mode ready (XUDC at 0x700d0000, configuration %s)\n",
-                  configuration && configuration->getLength()
-                      ? static_cast<const char *>(configuration->getBytesNoCopy())
-                      : "?");
+                  configuration ? configuration : "?");
         } else {
             IOLog("SwitchUSB: device mode off: %s\n", why);
         }

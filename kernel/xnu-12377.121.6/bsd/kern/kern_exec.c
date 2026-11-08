@@ -10344,11 +10344,10 @@ process_signature(proc_t p, struct image_params *imgp)
 	}
 
 	/* call the launch constraints hook (Switch: not for the Data overlay's executables, native_switch_overlay_image,
-	 * nor for the two grafted-equivalent Apple cryptex mounts, native_switch_cryptex_image, nor for the System files
-	 * translated offline, switch_pretranslated_image; trust cache still enforced) */
+	 * nor for the two grafted-equivalent Apple cryptex mounts, native_switch_cryptex_image; trust cache still enforced) */
 	os_reason_t launch_constraint_reason;
-	error = (native_switch_overlay_image(imgp) || native_switch_cryptex_image(imgp) ||
-	    switch_pretranslated_image(imgp)) ? 0 : mac_proc_check_launch_constraints(p, imgp, &launch_constraint_reason);
+	error = (native_switch_overlay_image(imgp) || native_switch_cryptex_image(imgp)) ?
+	    0 : mac_proc_check_launch_constraints(p, imgp, &launch_constraint_reason);
 	if (error != 0) {
 		signature_failure_reason = launch_constraint_reason;
 		goto done;
