@@ -81,7 +81,8 @@ algebraic_lowering += [
 # half are their half sum or product (24 >= 2 x 11 + 2 bits make the double
 # rounding innocuous; checked exhaustively against native f16 arithmetic), so
 # metal2vulkan's f32 emulation of half arithmetic runs as SM53's HADD2/HMUL2.
-half_exact = 'nak->sm >= 53 && !nir_is_denorm_flush_to_zero(info->float_controls_execution_mode, 16)'
+half_denorms_kept = '!nir_is_denorm_flush_to_zero(info->float_controls_execution_mode, 16)'
+half_exact = 'nak->sm >= 53 && ' + half_denorms_kept
 for op in ['fadd', 'fmul']:
     for na in [False, True]:
         for nb in [False, True]:
@@ -91,6 +92,51 @@ for op in ['fadd', 'fmul']:
                 (('f2f16_rtne', (op, x, y)),
                     (op, ('fneg', a) if na else a, ('fneg', b) if nb else b), half_exact),
             ]
+
+# ios-on-switch-lmao: metal2vulkan rounds a half sum (or difference) as
+# fquantize2f16 and, where that gave zero, the f32 sum itself: a sum of two
+# halves below half's smallest normal is a multiple of 2^-24, exact in f32 and
+# as a half denormal. For every pair of halves that is their half sum (checked
+# exhaustively), so it runs as HADD2 too.
+for na in [False, True]:
+    for nb in [False, True]:
+        x = ('fneg', ('f2f32', 'a@16')) if na else ('f2f32', 'a@16')
+        y = ('fneg', ('f2f32', 'b@16')) if nb else ('f2f32', 'b@16')
+        s = ('fadd', x, y)
+        algebraic_lowering += [
+            (('bcsel', ('feq', ('fquantize2f16', s), 0.0), s, ('fquantize2f16', s)),
+                ('f2f32', ('fadd', ('fneg', a) if na else a, ('fneg', b) if nb else b)), half_exact),
+        ]
+
+# ios-on-switch-lmao: on a device without Float16 metal2vulkan moves a half
+# between its bits (a load, a store, a reinterpretation) and the f32 holding it
+# with integer sequences of eleven and fifteen instructions a lane. Each is one
+# F2F, exactly (checked exhaustively): the widening for every bit pattern (the
+# bits above the low 16 ignored, as u2u16 ignores them), the narrowing for
+# every f32 that holds a half, which is every f32 metal2vulkan narrows this
+# way. A NaN stays a NaN, its payload the device's.
+def m2v_half_widened(h):
+    em = ('iand', h, 0x7fff)
+    normal = ('iadd', ('ishl', em, 13), ('bcsel', ('uge', em, 0x7c00), 0x70000000, 0x38000000))
+    denormal = ('fmul', ('u2f32', em), 5.9604644775390625e-08)
+    return ('ior', ('ishl', ('iand', h, 0x8000), 16), ('bcsel', ('ult', em, 0x400), denormal, normal))
+
+def m2v_half_bits(x):
+    mag = ('iand', x, 0x7fffffff)
+    special = ('uge', mag, 0x7f800000)
+    normal = ('umin', ('iadd', ('ushr', mag, 13), ('bcsel', special, 0xfffc8000, 0xfffe4000)),
+                      ('bcsel', special, 0x23c00, 0x7c00))
+    normal = ('bcsel', ('ult', ('iadd', mag, 0x807fffff), 0x1fff), 0x7e00, normal)
+    denormal = ('ult', mag, 0x38800000)
+    scaled = ('f2u32', ('fmul', ('bcsel', denormal, mag, 0), 16777216.0))
+    return ('ior(many-comm-expr)', ('iand', ('extract_u16', x, 1), 0x8000), ('bcsel', denormal, scaled, normal))
+
+algebraic_lowering += [
+    (m2v_half_widened('a@32'), ('f2f32', ('u2u16', a)), half_denorms_kept),
+    (m2v_half_bits('a@32'), ('u2u32', ('f2f16_rtne', a)), half_denorms_kept),
+    (('f2f16_rtne', ('f2f32', 'a@16')), a, half_denorms_kept),
+    (('ior', ('u2u32', 'a@16'), ('ishl', ('u2u32', 'b@16'), 16)), ('pack_32_2x16_split', a, b)),
+]
 
 # ios-on-switch-lmao: metal2vulkan flushes a float's denormal to a signed zero
 # with integer ops wherever Metal does. An FTZ instruction (fp32 unless the
