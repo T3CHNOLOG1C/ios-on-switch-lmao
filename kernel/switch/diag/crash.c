@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * A process that dies of a signal that dumps core (debug kernels): its exception, its faulting thread's registers and
- * its frame chain, as kernel log lines. Early in boot there is no /private/var/cores, so these lines are all a crash
+ * A process that crashed (debug kernels, diag/exit.c decides): its exception, its faulting thread's registers and its
+ * frame chain, as kernel log lines. Early in boot there is no /private/var/cores, so these lines are all a crash
  * leaves. Addresses in the shared cache are unslid ("dsc", as `ipsw dyld a2s` takes them), the main executable's are
  * offsets ("main+").
  */
@@ -26,9 +26,6 @@ void switch_diag_user_crash(task_t task, const char *name, int pid, int signal, 
 {
     struct stall_line line = {.at = 0};
 
-    if (signal == 0) {
-        return;
-    }
     printf("SwitchCrash: %s[%d] signal %d exception %d code 0x%llx subcode 0x%llx\n", name, pid, signal, exception,
            (uint64_t)code, (uint64_t)subcode);
     const arm_saved_state_t *state = task == current_task() ? get_user_regs(current_thread()) : NULL;
