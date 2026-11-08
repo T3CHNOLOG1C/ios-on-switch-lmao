@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-// XNU side of the nvkm shim (see shim/include/nvxnu.h): heap, locks, time, thread calls, GPU interrupts, MMIO, the
-// GPU memory pool, cache maintenance and embedded firmware. No Linux names in here.
+// XNU side of the nvkm shim (see shim/include/nvxnu.h): logs and errors, GPU interrupts, the GPU memory pool, cache
+// maintenance and embedded firmware; kits/SwitchLinux has the kernel services. No Linux names in here.
 #include <os/log.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/IOBufferMemoryDescriptor.h>
@@ -8,10 +8,7 @@
 #include <IOKit/IOInterruptEventSource.h>
 #include <IOKit/IOWorkLoop.h>
 #include <kern/clock.h>
-#include <kern/cpu_data.h>
-#include <kern/locks.h>
 #include <kern/sched_prim.h>
-#include <kern/thread_call.h>
 #include <kern/counter.h>
 #include <kern/host_statistics.h>
 #include <mach/vm_param.h>
@@ -26,9 +23,6 @@
 extern "C" {
 vm_offset_t phystokv(uint64_t pa);  // physical aperture (osfmk/arm64/arm_vm_init.c)
 vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
-vm_offset_t ml_io_map_wcomb(vm_offset_t phys_addr, vm_size_t size);
-// NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
-boolean_t ml_set_interrupts_enabled(boolean_t enable);
 // NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
 boolean_t ml_get_interrupts_enabled(void);
 boolean_t switch_ram_gpu_pool(uint64_t *start, uint64_t *end);
@@ -38,20 +32,6 @@ boolean_t pmap_valid_page(ppnum_t pn);
 void IOLogv(const char *format, va_list ap);
 // NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
 int vsnprintf(char *, size_t, const char *, va_list);
-}
-
-static lck_grp_t *nvxnu_grp()
-{
-	static lck_grp_t *grp;
-	if (!grp) {
-		lck_grp_t *fresh = lck_grp_alloc_init("TegraGM20B", LCK_GRP_ATTR_NULL);
-		// NOLINTNEXTLINE(misc-const-correctness): the compare-and-swap writes the current value back into it
-		lck_grp_t *expected = nullptr;
-		if (!__atomic_compare_exchange_n(&grp, &expected, fresh, false, __ATOMIC_ACQ_REL,
-						 __ATOMIC_ACQUIRE))
-			lck_grp_free(fresh);
-	}
-	return grp;
 }
 
 extern "C" void nvxnu_stats(const char *fmt, ...)
@@ -79,12 +59,10 @@ static void nvxnu_report(const char *line)
 
 extern "C" void nvxnu_log(const char *fmt, ...)
 {
-	char line[512];
 	va_list ap;  // NOLINT(cppcoreguidelines-init-variables): va_start initializes it
 	va_start(ap, fmt);
-	vsnprintf(line, sizeof(line), fmt, ap);
+	switch_linux_vlog(fmt, ap);
 	va_end(ap);
-	nvxnu_report(line);
 }
 
 // Bring-up step trace (M1/M2/CLK steps): only with kTracePaced, set in source for a bring-up test, which also gives the
@@ -191,153 +169,6 @@ extern "C" void nvxnu_errors_fatal(int (*contained)(const char *errors))
 extern "C" const char *nvxnu_gpu_errors(void)
 {
 	return gIrqErrors;
-}
-
-// A 16-byte size header in front of every block: nvxnu_free needs no size.
-extern "C" void *nvxnu_malloc(unsigned long size, int zero)
-{
-	if (size > (1UL << 30))
-		return nullptr;
-	unsigned long *p =
-		static_cast<unsigned long *>(zero ? IOMallocZero(size + 16) : IOMalloc(size + 16));
-	if (!p)
-		return nullptr;
-	p[0] = size;
-	return p + 2;
-}
-
-extern "C" void nvxnu_free(void *ptr)
-{
-	if (!ptr)
-		return;
-	unsigned long *p = static_cast<unsigned long *>(ptr) - 2;
-	IOFree(p, p[0] + 16);
-}
-
-extern "C" unsigned long nvxnu_malloc_size(void *ptr)
-{
-	return ptr ? (static_cast<unsigned long *>(ptr) - 2)[0] : 0;
-}
-
-extern "C" void *nvxnu_mutex_alloc(void)
-{
-	return lck_mtx_alloc_init(nvxnu_grp(), LCK_ATTR_NULL);
-}
-
-extern "C" void nvxnu_mutex_free(void *m)
-{
-	if (m)
-		lck_mtx_free(static_cast<lck_mtx_t *>(m), nvxnu_grp());
-}
-
-extern "C" void nvxnu_mutex_lock(void *m)
-{
-	lck_mtx_lock(static_cast<lck_mtx_t *>(m));
-}
-
-extern "C" void nvxnu_mutex_unlock(void *m)
-{
-	lck_mtx_unlock(static_cast<lck_mtx_t *>(m));
-}
-
-extern "C" int nvxnu_mutex_trylock(void *m)
-{
-	return lck_mtx_try_lock(static_cast<lck_mtx_t *>(m)) ? 1 : 0;
-}
-
-extern "C" void *nvxnu_spin_alloc(void)
-{
-	return lck_spin_alloc_init(nvxnu_grp(), LCK_ATTR_NULL);
-}
-
-extern "C" void nvxnu_spin_free(void *s)
-{
-	if (s)
-		lck_spin_free(static_cast<lck_spin_t *>(s), nvxnu_grp());
-}
-
-extern "C" void nvxnu_spin_lock(void *s)
-{
-	lck_spin_lock(static_cast<lck_spin_t *>(s));
-}
-
-extern "C" void nvxnu_spin_unlock(void *s)
-{
-	lck_spin_unlock(static_cast<lck_spin_t *>(s));
-}
-
-extern "C" unsigned long nvxnu_irq_save(void)
-{
-	return ml_set_interrupts_enabled(FALSE) ? 1UL : 0UL;
-}
-
-extern "C" void nvxnu_irq_restore(unsigned long flags)
-{
-	ml_set_interrupts_enabled(static_cast<boolean_t>(flags));
-}
-
-extern "C" void nvxnu_preempt_disable(void)
-{
-	_disable_preemption();
-}
-
-extern "C" void nvxnu_preempt_enable(void)
-{
-	_enable_preemption();
-}
-
-extern "C" void *nvxnu_rw_alloc(void)
-{
-	return lck_rw_alloc_init(nvxnu_grp(), LCK_ATTR_NULL);
-}
-
-extern "C" void nvxnu_rw_lock_shared(void *rw)
-{
-	lck_rw_lock_shared(static_cast<lck_rw_t *>(rw));
-}
-
-extern "C" void nvxnu_rw_unlock_shared(void *rw)
-{
-	lck_rw_unlock_shared(static_cast<lck_rw_t *>(rw));
-}
-
-extern "C" void nvxnu_rw_lock_exclusive(void *rw)
-{
-	lck_rw_lock_exclusive(static_cast<lck_rw_t *>(rw));
-}
-
-extern "C" void nvxnu_rw_unlock_exclusive(void *rw)
-{
-	lck_rw_unlock_exclusive(static_cast<lck_rw_t *>(rw));
-}
-
-extern "C" nvxnu_u64 nvxnu_nanotime(void)
-{
-	uint64_t ns = 0;
-	absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
-	return ns;
-}
-
-extern "C" nvxnu_u64 nvxnu_abstime_to_ns(nvxnu_u64 abstime)
-{
-	uint64_t ns = 0;
-	absolutetime_to_nanoseconds(abstime, &ns);
-	return ns;
-}
-
-extern "C" void nvxnu_udelay(nvxnu_u32 us)
-{
-	IODelay(us);
-}
-
-extern "C" void nvxnu_usleep(nvxnu_u32 us)
-{
-	delay(static_cast<int>(us));
-}
-
-extern "C" void nvxnu_yield(void)
-{
-	delay(1);
 }
 
 // No polled mode: both GPU lines are claimed at the end of M1 (panic if they cannot be), every wait sleeps until a
@@ -574,79 +405,6 @@ extern "C" void nvxnu_irq_resume(void)
 	__atomic_store_n(&gGpuOff, 0, __ATOMIC_RELEASE);
 	for (auto *source : gIrqSources)
 		source->enable();
-}
-
-extern "C" int nvxnu_mutex_sleep(void *m, const void *event, nvxnu_u64 deadline_ns)
-{
-	auto *mtx = static_cast<lck_mtx_t *>(m);
-	// NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): the wait event is the word's address
-	auto *ev = reinterpret_cast<event_t>(const_cast<void *>(event));
-	if (deadline_ns == ~0ULL) {
-		return static_cast<int>(lck_mtx_sleep(mtx, LCK_SLEEP_DEFAULT, ev, THREAD_UNINT) !=
-					THREAD_TIMED_OUT);
-	}
-	const uint64_t now = nvxnu_nanotime();
-	if (deadline_ns <= now)
-		return 0;
-	uint64_t interval = 0;
-	nanoseconds_to_absolutetime(deadline_ns - now, &interval);
-	return static_cast<int>(lck_mtx_sleep_deadline(mtx, LCK_SLEEP_DEFAULT, ev, THREAD_UNINT,
-						       mach_absolute_time() + interval) !=
-				THREAD_TIMED_OUT);
-}
-
-extern "C" void nvxnu_wakeup(const void *event)
-{
-	// NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): the wait event is the word's address
-	thread_wakeup(reinterpret_cast<event_t>(const_cast<void *>(event)));
-}
-
-extern "C" void *nvxnu_work_alloc(void (*fn)(void *), void *arg)
-{
-	// Through void * on purpose: a direct cast trips -Wcast-function-type-mismatch. thread_call passes a second
-	// argument, which fn ignores.
-	void *const entry = reinterpret_cast<void *>(fn);
-	return thread_call_allocate(reinterpret_cast<thread_call_func_t>(entry), arg);
-}
-
-extern "C" void nvxnu_work_schedule(void *w)
-{
-	if (w)
-		thread_call_enter(static_cast<thread_call_t>(w));
-}
-
-extern "C" void nvxnu_work_cancel_wait(void *w)
-{
-	if (w)
-		thread_call_cancel_wait(static_cast<thread_call_t>(w));
-}
-
-extern "C" void nvxnu_work_schedule_after(void *w, nvxnu_u64 ns)
-{
-	uint64_t interval = 0;
-	uint64_t deadline = 0;
-	nanoseconds_to_absolutetime(ns, &interval);
-	clock_absolutetime_interval_to_deadline(interval, &deadline);
-	if (w)
-		thread_call_enter_delayed(static_cast<thread_call_t>(w), deadline);
-}
-
-extern "C" void nvxnu_work_cancel(void *w)
-{
-	if (w)
-		thread_call_cancel(static_cast<thread_call_t>(w));
-}
-
-extern "C" volatile void *nvxnu_ioremap(nvxnu_u64 pa, nvxnu_u64 size, int write_combined)
-{
-	const vm_offset_t va = write_combined ? ml_io_map_wcomb(pa, size) : ml_io_map(pa, size);
-	return reinterpret_cast<volatile void *>(va);
-}
-
-extern "C" void nvxnu_iounmap(volatile void *va, nvxnu_u64 size)
-{
-	(void)va;
-	(void)size;
 }
 
 static void dcache_op(const void *va, nvxnu_u64 size, bool invalidate)

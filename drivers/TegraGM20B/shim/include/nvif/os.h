@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 /*
  * Switch replacement for nouveau's include/nvif/os.h: the small slice of the Linux kernel API that
- * the vendored nvkm code uses, implemented on XNU (shim/linux.c + shim/xnu_glue.cpp via nvxnu.h).
+ * the vendored nvkm code uses, implemented on XNU (kits/SwitchLinux, shim/linux.c + shim/xnu_glue.cpp via nvxnu.h).
  * Nothing in here includes an XNU header.
  */
 #ifndef __NOUVEAU_OS_H__
@@ -715,11 +715,33 @@ struct mutex {
 };
 
 #define DEFINE_MUTEX(n) struct mutex n = {NULL}
-void mutex_init(struct mutex *m);
-void mutex_destroy(struct mutex *m);
-void mutex_lock(struct mutex *m);
-void mutex_unlock(struct mutex *m);
-int mutex_trylock(struct mutex *m);
+
+static inline void mutex_init(struct mutex *m)
+{
+	m->lck = switch_linux_mutex_alloc();
+}
+
+static inline void mutex_destroy(struct mutex *m)
+{
+	switch_linux_mutex_free(m->lck);
+	m->lck = NULL;
+}
+
+static inline void mutex_lock(struct mutex *m)
+{
+	switch_linux_mutex_lock(switch_linux_mutex_of(&m->lck));
+}
+
+static inline void mutex_unlock(struct mutex *m)
+{
+	switch_linux_mutex_unlock(m->lck);
+}
+
+static inline int mutex_trylock(struct mutex *m)
+{
+	return switch_linux_mutex_trylock(switch_linux_mutex_of(&m->lck)) ? 1 : 0;
+}
+
 #define mutex_lock_nested(m, s) mutex_lock(m)
 #define __mutex_init(m, n, k)  \
 	do {                   \
@@ -729,92 +751,78 @@ int mutex_trylock(struct mutex *m);
 bool mutex_is_locked(struct mutex *m);
 #define mutex_lock_interruptible(m) (mutex_lock(m), 0)
 
+/* kits/SwitchLinux: a word in the lock, preemption off while held, the _irq forms mask interrupts as Linux's do. */
 typedef struct spinlock {
-	void *lck;
+	switch_linux_spinlock lock;
 } spinlock_t;
 
-#define DEFINE_SPINLOCK(n) spinlock_t n = {NULL}
-#define __SPIN_LOCK_UNLOCKED(n) {NULL}
-void spin_lock_init(spinlock_t *s);
-void spin_lock(spinlock_t *s);
-void spin_unlock(spinlock_t *s);
-#define spin_lock_irqsave(s, f)         \
-	do {                            \
-		(f) = nvxnu_irq_save(); \
-		spin_lock(s);           \
-	} while (0)
-#define spin_unlock_irqrestore(s, f)  \
-	do {                          \
-		spin_unlock(s);       \
-		nvxnu_irq_restore(f); \
-	} while (0)
-#define spin_lock_irq(s) spin_lock(s)
-#define spin_unlock_irq(s) spin_unlock(s)
+#define DEFINE_SPINLOCK(n) spinlock_t n = {SWITCH_LINUX_SPINLOCK_INIT}
+#define __SPIN_LOCK_UNLOCKED(n) {SWITCH_LINUX_SPINLOCK_INIT}
+#define spin_lock_init(s) ((s)->lock.holder = 0)
+#define spin_lock(s) switch_linux_spin_lock(&(s)->lock)
+#define spin_unlock(s) switch_linux_spin_unlock(&(s)->lock)
+#define spin_trylock(s) switch_linux_spin_trylock(&(s)->lock)
+#define spin_lock_irqsave(s, f) ((f) = switch_linux_spin_lock_irqsave(&(s)->lock))
+#define spin_unlock_irqrestore(s, f) switch_linux_spin_unlock_irqrestore(&(s)->lock, (f))
+#define spin_lock_irq(s) switch_linux_spin_lock_irq(&(s)->lock)
+#define spin_unlock_irq(s) switch_linux_spin_unlock_irq(&(s)->lock)
 #define spin_lock_bh(s) spin_lock(s)
 #define spin_unlock_bh(s) spin_unlock(s)
-#define assert_spin_locked(s) \
-	do {                  \
-		(void)(s);    \
-	} while (0)
+#define assert_spin_locked(s) BUG_ON(!switch_linux_spin_is_locked(&(s)->lock))
 
 /* Linux's rwlock_t spins with preemption off: nvkm takes one with interrupts off inside nvkm_intr's spinlock
  * (nvkm_event_ntfy), where a sleeping lck_rw is not allowed (xnu-12377 asserts it). Readers may nest. */
-typedef struct {
-	unsigned int state; /* the reader count, or RWLOCK_WRITER */
-} rwlock_t;
+typedef switch_linux_rwlock rwlock_t;
 
-void rwlock_init(rwlock_t *l);
-void read_lock(rwlock_t *l);
-void read_unlock(rwlock_t *l);
-void write_lock(rwlock_t *l);
-void write_unlock(rwlock_t *l);
-#define read_lock_irqsave(l, f)         \
-	do {                            \
-		(f) = nvxnu_irq_save(); \
-		read_lock(l);           \
-	} while (0)
-#define read_unlock_irqrestore(l, f)  \
-	do {                          \
-		read_unlock(l);       \
-		nvxnu_irq_restore(f); \
-	} while (0)
-#define write_lock_irq(l) write_lock(l)
-#define write_unlock_irq(l) write_unlock(l)
-#define read_lock_irq(l) read_lock(l)
-#define read_unlock_irq(l) read_unlock(l)
-#define write_lock_irqsave(l, f)        \
-	do {                            \
-		(f) = nvxnu_irq_save(); \
-		write_lock(l);          \
-	} while (0)
-#define write_unlock_irqrestore(l, f) \
-	do {                          \
-		write_unlock(l);      \
-		nvxnu_irq_restore(f); \
-	} while (0)
+#define rwlock_init(l) ((l)->state = 0)
+#define read_lock(l) switch_linux_read_lock(l)
+#define read_unlock(l) switch_linux_read_unlock(l)
+#define write_lock(l) switch_linux_write_lock(l)
+#define write_unlock(l) switch_linux_write_unlock(l)
+#define read_lock_irqsave(l, f) ((f) = switch_linux_read_lock_irqsave(l))
+#define read_unlock_irqrestore(l, f) switch_linux_read_unlock_irqrestore((l), (f))
+#define write_lock_irqsave(l, f) ((f) = switch_linux_write_lock_irqsave(l))
+#define write_unlock_irqrestore(l, f) switch_linux_write_unlock_irqrestore((l), (f))
+#define read_lock_irq(l) switch_linux_read_lock_irq(l)
+#define read_unlock_irq(l) switch_linux_read_unlock_irq(l)
+#define write_lock_irq(l) switch_linux_write_lock_irq(l)
+#define write_unlock_irq(l) switch_linux_write_unlock_irq(l)
 
 struct rw_semaphore {
 	void *lck;
 };
 
-void init_rwsem(struct rw_semaphore *s);
-void down_read(struct rw_semaphore *s);
-void up_read(struct rw_semaphore *s);
-void down_write(struct rw_semaphore *s);
-void up_write(struct rw_semaphore *s);
+static inline void init_rwsem(struct rw_semaphore *s)
+{
+	s->lck = switch_linux_rwsem_alloc();
+}
+
+static inline void down_read(struct rw_semaphore *s)
+{
+	switch_linux_down_read(switch_linux_rwsem_of(&s->lck));
+}
+
+static inline void up_read(struct rw_semaphore *s)
+{
+	switch_linux_up_read(s->lck);
+}
+
+static inline void down_write(struct rw_semaphore *s)
+{
+	switch_linux_down_write(switch_linux_rwsem_of(&s->lck));
+}
+
+static inline void up_write(struct rw_semaphore *s)
+{
+	switch_linux_up_write(s->lck);
+}
+
 #define down_read_nested(s, n) down_read(s)
 #define down_write_nested(s, n) down_write(s)
-#define local_irq_save(f)               \
-	do {                            \
-		(f) = nvxnu_irq_save(); \
-	} while (0)
-#define local_irq_restore(f) nvxnu_irq_restore(f)
-#define preempt_disable() \
-	do {              \
-	} while (0)
-#define preempt_enable() \
-	do {             \
-	} while (0)
+#define local_irq_save(f) ((f) = switch_linux_irq_save())
+#define local_irq_restore(f) switch_linux_irq_restore(f)
+#define preempt_disable() _disable_preemption()
+#define preempt_enable() _enable_preemption()
 
 struct list_head {
 	struct list_head *next, *prev;
@@ -1142,19 +1150,18 @@ static inline void bitmap_copy(unsigned long *d, const unsigned long *s, unsigne
 
 static inline void *kmalloc(size_t s, gfp_t g)
 {
-	return nvxnu_malloc(s, !!(g & __GFP_ZERO));
+	return switch_linux_malloc(s, !!(g & __GFP_ZERO));
 }
 
 static inline void *kzalloc(size_t s, gfp_t g)
 {
 	(void)g;
-	return nvxnu_malloc(s, 1);
+	return switch_linux_malloc(s, 1);
 }
 
 static inline void kfree(const void *p)
 {
-	if (p)
-		nvxnu_free((void *)p);
+	switch_linux_free(p);
 }
 
 static inline void *kmalloc_array(size_t n, size_t s, gfp_t g)
@@ -1434,12 +1441,11 @@ static inline int dma_set_mask_and_coherent(struct device *d, u64 m)
 void dma_sync_single_for_device(struct device *, dma_addr_t, size_t, enum dma_data_direction);
 void dma_sync_single_for_cpu(struct device *, dma_addr_t, size_t, enum dma_data_direction);
 
-unsigned long nvxnu_jiffies(void);
-#define jiffies nvxnu_jiffies()
+#define jiffies ((unsigned long)(switch_linux_nanotime() / (NSEC_PER_SEC / HZ)))
 
 static inline ktime_t ktime_get(void)
 {
-	return (ktime_t)nvxnu_nanotime();
+	return (ktime_t)switch_linux_nanotime();
 }
 
 #define ktime_get_raw ktime_get
@@ -1510,22 +1516,22 @@ static inline s64 ktime_us_delta(ktime_t a, ktime_t b)
 
 static inline void udelay(unsigned long us)
 {
-	nvxnu_udelay((u32)us);
+	switch_linux_udelay(us);
 }
 
 static inline void ndelay(unsigned long ns)
 {
-	nvxnu_udelay((u32)DIV_ROUND_UP(ns, 1000));
+	switch_linux_udelay(DIV_ROUND_UP(ns, 1000));
 }
 
 static inline void mdelay(unsigned long ms)
 {
-	nvxnu_udelay((u32)(ms * 1000));
+	switch_linux_udelay((u64)ms * 1000);
 }
 
 static inline void msleep(unsigned int ms)
 {
-	nvxnu_usleep(ms * 1000);
+	switch_linux_usleep_range((u64)ms * 1000, (u64)ms * 1000);
 }
 
 static inline unsigned long msleep_interruptible(unsigned int ms)
@@ -1536,13 +1542,12 @@ static inline unsigned long msleep_interruptible(unsigned int ms)
 
 static inline void usleep_range(unsigned long lo, unsigned long hi)
 {
-	(void)hi;
-	nvxnu_usleep((u32)lo);
+	switch_linux_usleep_range(lo, hi);
 }
 
 static inline void fsleep(unsigned long us)
 {
-	nvxnu_usleep((u32)us);
+	switch_linux_usleep_range(us, us);
 }
 
 static inline unsigned long msecs_to_jiffies(unsigned int m)
@@ -1573,12 +1578,12 @@ static inline unsigned long nsecs_to_jiffies(u64 n)
 
 static inline void cond_resched(void)
 {
-	nvxnu_yield();
+	switch_linux_cond_resched();
 }
 
 static inline void schedule(void)
 {
-	nvxnu_yield();
+	switch_linux_cond_resched();
 }
 
 long schedule_timeout(long timeout);
@@ -1691,27 +1696,34 @@ struct work_struct {
 };
 struct workqueue_struct;
 void nvxnu_work_trampoline(void *work);
-#define INIT_WORK(w, f)                                                          \
-	do {                                                                     \
-		(w)->func = (f);                                                 \
-		(w)->thread_call = nvxnu_work_alloc(nvxnu_work_trampoline, (w)); \
+#define INIT_WORK(w, f)                                                                 \
+	do {                                                                            \
+		(w)->func = (f);                                                        \
+		(w)->thread_call = switch_linux_call_alloc(nvxnu_work_trampoline, (w)); \
 	} while (0)
 
 static inline bool schedule_work(struct work_struct *w)
 {
-	nvxnu_work_schedule(w->thread_call);
-	return true;
+	return !switch_linux_call_enter(w->thread_call);
 }
 
 #define queue_work(wq, w) schedule_work(w)
 
+/* Linux runs a queued work before flush_work returns; XNU cannot hurry a thread call, so a pending one is taken off
+ * its queue and run here instead. */
 static inline bool flush_work(struct work_struct *w)
 {
-	nvxnu_work_cancel_wait(w->thread_call);
+	if (!switch_linux_call_cancel_wait(w->thread_call))
+		return false;
+	w->func(w);
 	return true;
 }
 
-#define cancel_work_sync flush_work
+static inline bool cancel_work_sync(struct work_struct *w)
+{
+	return switch_linux_call_cancel_wait(w->thread_call);
+}
+
 #define system_wq ((struct workqueue_struct *)0)
 
 /* interrupts: the handler runs from nvxnu_poll_irqs */
