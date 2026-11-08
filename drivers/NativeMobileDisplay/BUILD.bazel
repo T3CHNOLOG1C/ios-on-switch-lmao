@@ -59,6 +59,7 @@ kernel_driver(
         "drivers/TegraVIC",
         "kits/SwitchCAR",
         "kits/SwitchDMA",
+        "kits/SwitchDT",
         "kits/SwitchMMIO",
         "kits/SwitchRefusal",
         "kits/SwitchSysctl",

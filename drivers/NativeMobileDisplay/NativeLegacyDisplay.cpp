@@ -23,6 +23,7 @@
 #include "../ArmGIC/SwitchInterrupts.h"
 #include "../../kits/SwitchDMA/SwitchDcache.h"
 #include "../../kits/SwitchDMA/SwitchDMABuffer.h"
+#include "../../kits/SwitchDT/SwitchDTProperty.h"
 #include "../../kits/SwitchCAR/SwitchCAR.h"
 #include "../../kits/SwitchMMIO/SwitchMMIOWords.h"
 #include "../../kits/SwitchSysctl/SwitchSysctl.h"
@@ -4877,11 +4878,7 @@ public:
         const OSObject *property = provider->getProperty("dot-pitch");
         if (!property)
             return kIOReturnNotFound;
-        const OSData *data = OSDynamicCast(OSData, property);
-        if (!data || data->getLength() != sizeof(*pitch))
-            return kIOReturnBadArgument;
-        memcpy(pitch, data->getBytesNoCopy(), sizeof(*pitch));
-        return kIOReturnSuccess;
+        return switch_osdata_value(property, pitch) ? kIOReturnSuccess : kIOReturnBadArgument;
     }
 
     IOReturn supportedFrameInfo(uint32_t index, uint32_t *count, char *key, uint32_t *flags) override
