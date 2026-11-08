@@ -3263,10 +3263,11 @@ public:
         dc[kDcIntStatus] = kVblankInt | kFrameEndInt | kWinAUnderflowInt;
         underflowRun = 0;
         scanoutStopped = !on;
-        if (on)
+        if (on) {
             writeIntMask(0, kFrameEndInt | (vsyncArmed ? kVblankInt : 0));
-        else
+        } else {
             armFlipDeadline();  // what is in flight now settles
+        }
         if (!on && tapeAttached)
             thread_wakeup((event_t)&tapeFrames);  // no frame end comes now: the console scrolls without one
         return true;
@@ -5222,23 +5223,32 @@ public:
         const uint64_t now = mach_absolute_time();
         uint64_t second = 0;
         nanoseconds_to_absolutetime(1000000000ULL, &second);
-        if (accepted && now - accepted < second)
+        if (accepted != 0u && now - accepted < second)
             return;
         uint32_t id = 0;
         memcpy(&id, reinterpret_cast<const unsigned char *>(head) + swapId, sizeof(id));
+        const auto flag = [](bool on) {
+            return on ? 1 : 0;
+        };
+        const char *scanout = "running";
+        if (hwSuspended) {
+            scanout = "suspended";
+        } else if (scanoutStopped) {
+            scanout = "stopped";
+        }
         IOLog(
             "SwitchDisplay: swap %u held at the queue head %llu ms (accepted %d, taken %llu of %llu): transferred %d, "
             "deferred %d (probe %d, plane probe %d, column scan %d, tape %d, no surface %d), ring front %d pending %d "
             "replaced %d drawing %d held %d, latch retire %d, direct %d, planes %d (armed %d, held %d), gpu %d%s, "
             "copy %d%s, scanout %s, %llu frame ends, %llu since the last flip\n",
-            id, accepted ? static_cast<unsigned long long>(ticksNs(now - accepted) / 1000000) : 0ULL, isValidated(head),
-            static_cast<unsigned long long>(seqOf(head)), static_cast<unsigned long long>(takeSeq), transferred,
-            kickDeferred, probe.active() || probeRequest, planeProbe.active(), columnScanBusy(), tapeSettle,
-            ring.target() == kNoBuffer, ring.front, ring.pending, ring.superseded, ring.drawing, ring.held, latchRetire,
-            directOn, planesOn, planeLatch.armed, planeHeldSet, gpuRequest != nullptr,
-            gpuRequest == head ? " (this swap)" : "", copyQueued,
-            copyQueued && job.request == head ? " (this swap)" : "",
-            hwSuspended ? "suspended" : (scanoutStopped ? "stopped" : "running"),
+            id, accepted != 0u ? static_cast<unsigned long long>(ticksNs(now - accepted) / 1000000) : 0ULL,
+            flag(isValidated(head)), static_cast<unsigned long long>(seqOf(head)),
+            static_cast<unsigned long long>(takeSeq), flag(transferred), flag(kickDeferred),
+            flag(probe.active() || probeRequest), flag(planeProbe.active()), flag(columnScanBusy()), flag(tapeSettle),
+            flag(ring.target() == kNoBuffer), ring.front, ring.pending, ring.superseded, ring.drawing, ring.held,
+            flag(latchRetire), flag(directOn), flag(planesOn), planeLatch.armed, flag(planeHeldSet),
+            flag(gpuRequest != nullptr), gpuRequest == head ? " (this swap)" : "", flag(copyQueued),
+            copyQueued && job.request == head ? " (this swap)" : "", scanout,
             static_cast<unsigned long long>(frameEnds), static_cast<unsigned long long>(frameEnds - flipRequested));
     }
 
