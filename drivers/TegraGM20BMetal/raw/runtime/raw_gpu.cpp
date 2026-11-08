@@ -8,6 +8,7 @@
 #include "raw_clear.h"
 #include "raw_follow.h"
 #include "raw_gpu.h"
+#include "raw_owned.h"
 #include "raw_slm.h"
 #include "raw_target.h"
 #include "raw_tiled_cache.h"
@@ -357,7 +358,8 @@ void Device::emitContext(Push &p)
     }
     const uint32_t *base = pack_.section<uint32_t>(PackBaseline);
     for (uint64_t i = 0; i < pack_.bytes(PackBaseline) / 8; i++)
-        p.m(base[2 * i], base[2 * i + 1]);
+        if (!ownedMethod(base[2 * i]))
+            p.m(base[2 * i], base[2 * i + 1]);
     tiledCacheInit(p, k_.info());
     // the depth/stencil registers (the runtime's, as NVK leaves them for Metal's default state in a pass without the attachment)
     {
@@ -674,6 +676,8 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
     memcpy(writes, ctWrite_, sizeof writes);
     for (uint32_t k = 0; k < pp.blobDwords; k += 2) {
         const uint32_t m = blob[k], v = blob[k + 1];
+        if (ownedMethod(m))
+            continue;  // a pack made before the method was the runtime's: the probe process's value
         if (m >= CT_WRITE && m < CT_WRITE + 32)
             writes[(m - CT_WRITE) / 4] = v;
         w.m(m, v);
