@@ -150,6 +150,7 @@ py_test(
     deps = [
         ":kernel_window",
         ":loader_abi",
+        ":native_xnu_layout",
     ],
 )
 

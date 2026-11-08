@@ -4,9 +4,13 @@ Addresses, the RAM ledger's exclusions, the ADT properties the loader fills, and
 (boot/loader/stage.h).
 """
 
-# The prelinked AMFI closure starts at VA ...0427c000; its 2 MiB offset is kept at PA b207c000.
-PHYSICAL_BASE = 0xB207C000
-WINDOW_SIZE = 768 << 20
+# The kernel window: the trust caches from WINDOW_BASE up, directly below the kernel as XNU wants them
+# (native_xnu_layout.kernel_phys_base), then the kernel from KERNEL_PHYS_BASE (kernel/switch/include/switch/
+# boot_layout.h), where its lowest segment, the prelinked AMFI closure at VA ...0427c000, keeps its 2 MiB offset.
+# 770 MiB take the window to 0xE2200000, the block-rounded envelope the loader checks against the live FDT.
+WINDOW_BASE = 0xB2000000
+KERNEL_PHYS_BASE = 0xB207C000
+WINDOW_SIZE = 770 << 20
 
 # Kept out of XNU's RAM by the loader (the full-RAM profile's ledger).
 NATIVE_EXCLUSIONS = [
