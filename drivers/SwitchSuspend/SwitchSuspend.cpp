@@ -422,7 +422,7 @@ void SwitchSuspend::sleepDevices()
         switch_sleep_mark(SWITCH_STEP_SLEEP_BPMP);
         const uint64_t at = mach_absolute_time();
         const int err = tegra_bpmp_sc7_suspend(line, sizeof(line));
-        switch_power_journal("SwitchSuspend: sleep bpmp: %llu us: %s%s", switch_sleep_ns_since(at) / 1000, line,
+        switch_power_journal("SwitchSuspend: sleep bpmp: %llu us: %s%s", switch_ns_since(at) / 1000, line,
                              err ? " (SC7 may not be entered)" : "");
 #if !(DEVELOPMENT || DEBUG)
         if (err)
@@ -431,7 +431,7 @@ void SwitchSuspend::sleepDevices()
 #endif
     }
     switch_sleep_storage();
-    const uint64_t us = switch_sleep_ns_since(start) / 1000;
+    const uint64_t us = switch_ns_since(start) / 1000;
     switch_power_journal("SwitchSuspend: sleep i2c (last; devices took %llu.%03llu ms)", us / 1000, us % 1000);
     switch_sleep_mark(SWITCH_STEP_SLEEP_I2C);
     tegra_i2c_suspend();
@@ -450,7 +450,7 @@ void SwitchSuspend::quiesce()
     arm_gic_suspend();
     usecConfig = tmr ? *reinterpret_cast<volatile uint32_t *>(tmr + TIMERUS_USEC_CFG) : 0;
     rtcBeforeMS = rtcUsable ? rtcMS() : 0;
-    quiesceNS = switch_sleep_ns_since(start);  // journaled at wake: nothing here may take a lock
+    quiesceNS = switch_ns_since(start);  // journaled at wake: nothing here may take a lock
     // What ATF's SYSTEM_SUSPEND and the PMC will act on (debug kernels; the power trail keeps it through a warm reset).
     switch_power_trail("bpmp channels %#010x", tegra_bpmp_semaphore());
     switch_power_trail("pmc msk %08x %08x st %08x %08x", rd(PMC_WAKE_MASK), rd(PMC_WAKE2_MASK), rd(PMC_WAKE_STATUS),
@@ -482,14 +482,14 @@ void SwitchSuspend::activate()
     arm_gic_resume();
     wakeStatus = rd(PMC_WAKE_STATUS) | rd(PMC_SW_WAKE_STATUS);
     wake2Status = rd(PMC_WAKE2_STATUS) | rd(PMC_SW_WAKE2_STATUS);
-    activateNS = switch_sleep_ns_since(start);
+    activateNS = switch_ns_since(start);
 }
 
 void SwitchSuspend::wakeDevices()
 {
     const uint64_t start = mach_absolute_time();
     // The time between the last sleep step and the first wake step: SC7 and the firmware's warm boot, by this clock.
-    const uint64_t asleepMS = suspendedAt ? switch_sleep_ns_since(suspendedAt) / 1000000 : 0;
+    const uint64_t asleepMS = suspendedAt ? switch_ns_since(suspendedAt) / 1000000 : 0;
     switch_sleep_trail(SWITCH_STEP_WAKE);
     switch_power_trail_watch(kActionWatchSeconds, "wake action");
 #if DEVELOPMENT || DEBUG
@@ -499,7 +499,7 @@ void SwitchSuspend::wakeDevices()
         switch_sleep_trail(SWITCH_STEP_WAKE_I2C);
         const uint64_t at = mach_absolute_time();
         tegra_i2c_resume();
-        switch_power_journal("SwitchSuspend: wake i2c: %llu us", switch_sleep_ns_since(at) / 1000);
+        switch_power_journal("SwitchSuspend: wake i2c: %llu us", switch_ns_since(at) / 1000);
     }
     switch_battery_gauge gaugeAfter = {};
 #if DEVELOPMENT || DEBUG
@@ -528,21 +528,21 @@ void SwitchSuspend::wakeDevices()
         switch_sleep_mark(SWITCH_STEP_WAKE_BPMP);
         const uint64_t at = mach_absolute_time();
         (void)tegra_bpmp_sc7_resume(line, sizeof(line));
-        switch_power_journal("SwitchSuspend: wake bpmp: %llu us: %s", switch_sleep_ns_since(at) / 1000, line);
+        switch_power_journal("SwitchSuspend: wake bpmp: %llu us: %s", switch_ns_since(at) / 1000, line);
     }
     bool alarm = false;
     {
         switch_sleep_mark(SWITCH_STEP_WAKE_RTC);
         const uint64_t at = mach_absolute_time();
         alarm = switch_rtc_resume() == 1;
-        switch_power_journal("SwitchSuspend: wake rtc: %llu us%s", switch_sleep_ns_since(at) / 1000,
+        switch_power_journal("SwitchSuspend: wake rtc: %llu us%s", switch_ns_since(at) / 1000,
                              alarm ? " (ALARM1)" : "");
     }
     {
         switch_sleep_mark(SWITCH_STEP_WAKE_SMMU);
         const uint64_t at = mach_absolute_time();
         const int lost = tegra_smmu_resume();  // before any translated client (host1x engines, display) runs
-        switch_power_journal("SwitchSuspend: wake smmu: %llu us%s", switch_sleep_ns_since(at) / 1000,
+        switch_power_journal("SwitchSuspend: wake smmu: %llu us%s", switch_ns_since(at) / 1000,
                              lost ? " (a swgroup was not restored)" : "");
     }
     switch_wake_devices();
@@ -568,7 +568,7 @@ void SwitchSuspend::wakeDevices()
         if (wakeHoldEnd)
             thread_call_enter_delayed(wakeHoldEnd, deadline);
     }
-    const uint64_t us = switch_sleep_ns_since(start) / 1000;
+    const uint64_t us = switch_ns_since(start) / 1000;
     switch_power_event("SwitchSuspend: wake %u: %s (PMC WAKE_STATUS %#x WAKE2_STATUS %#x), devices %llu.%03llu ms",
                        sleeps, reason, wakeStatus, wake2Status, us / 1000, us % 1000);
     switch_sleep_mark(SWITCH_STEP_AWAKE);

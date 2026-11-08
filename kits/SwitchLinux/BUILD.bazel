@@ -30,5 +30,5 @@ kernel_driver(
         "SwitchLinux.cpp",
         "SwitchLinuxLock.cpp",
     ],
-    hdr_deps = [],
+    hdr_deps = ["kits/SwitchTime"],
 )

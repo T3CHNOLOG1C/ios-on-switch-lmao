@@ -49,7 +49,7 @@ void switch_sleep_timed(uint8_t step, void (*hook)())
     switch_sleep_mark(step);
     const uint64_t start = mach_absolute_time();
     hook();
-    const uint64_t us = switch_sleep_ns_since(start) / 1000;
+    const uint64_t us = switch_ns_since(start) / 1000;
     switch_power_journal("SwitchSuspend: %s: %llu.%03llu ms", switch_sleep_step_name(step), us / 1000, us % 1000);
 }
 
@@ -66,7 +66,7 @@ bool switch_sleep_devices()
     switch_sleep_mark(SWITCH_STEP_SLEEP_BLUETOOTH);
     const uint64_t at = mach_absolute_time();
     const bool btWake = switch_bluetooth_suspend();
-    switch_power_journal("SwitchSuspend: sleep bluetooth: %llu us", switch_sleep_ns_since(at) / 1000);
+    switch_power_journal("SwitchSuspend: sleep bluetooth: %llu us", switch_ns_since(at) / 1000);
     switch_sleep_timed(SWITCH_STEP_SLEEP_WIFI, switch_wlan_suspend);
     switch_sleep_timed(SWITCH_STEP_SLEEP_HOST1X,
                        tegra_nvdec_suspend);  // NVDEC, NVENC, VIC, NVJPG quiesced, then host1x

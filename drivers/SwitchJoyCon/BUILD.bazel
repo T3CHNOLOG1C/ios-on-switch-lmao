@@ -42,6 +42,7 @@ kernel_driver(
         "drivers/TegraAPBDMA",
         "drivers/TegraGPIO",
         "kits/SwitchDMA",
+        "kits/SwitchTime",
     ],
     late = ["SwitchJoyConHID.cpp"],
     # Game-controller personalities.

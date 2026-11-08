@@ -133,7 +133,7 @@ TEST(SdAdmaSource, PipelinedWorker)
     // complete(): STATUS first (a command that finished meanwhile takes no interrupt), then the interrupt; its time limit
     // starts there; a lost interrupt still panics, and polling only without the interrupt (irqMode false).
     const std::string complete = body("int NativeSwitchBlock::complete(");
-    EXPECT_THAT(complete, HasSubstr("const uint64_t start = nowNs();"));
+    EXPECT_THAT(complete, HasSubstr("const uint64_t start = switch_now_ns();"));
     EXPECT_LT(Index(complete, "s = r32(STATUS);"), Index(complete, "waitSignal("));
     EXPECT_THAT(complete, HasSubstr("SDMMC1 interrupt lost"));
     EXPECT_LT(Index(complete, "if (irqMode)"), Index(complete, "IOSleep(1)"));

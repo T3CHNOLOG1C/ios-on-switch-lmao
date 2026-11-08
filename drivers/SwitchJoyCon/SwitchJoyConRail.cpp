@@ -148,6 +148,7 @@
 #include "SwitchJoyConForward.h"
 #include "SwitchJoyConSession.h"
 #include "../../kits/SwitchDMA/SwitchDcache.h"
+#include "../../kits/SwitchTime/SwitchTime.h"
 
 extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 
@@ -407,15 +408,6 @@ size_t buildPacket(uint8_t *out, uint8_t cmd, uint8_t subcmd, const uint8_t *pay
     if (length)
         memcpy(out + kHeader, payload, length);
     return kHeader + length;
-}
-
-uint64_t nowMS()
-{
-    uint64_t abs = 0;
-    uint64_t ns = 0;
-    clock_get_uptime(&abs);
-    absolutetime_to_nanoseconds(abs, &ns);
-    return ns / 1000000;
 }
 
 bool bluetoothDisabled()
@@ -1043,7 +1035,7 @@ void SwitchJoyConRail::uartAction(OSObject *owner, IOInterruptEventSource *sende
 
 void SwitchJoyConRail::received(Side &s, const uint8_t *packet, size_t length)
 {
-    s.lastReply = nowMS();
+    s.lastReply = switch_now_ms();
     const uint8_t cmd = packet[5];
     switch (s.phase) {
     case kHandshake:
@@ -1520,7 +1512,7 @@ void SwitchJoyConRail::run(Side &s)
     IOLockUnlock(s.outLock);
     s.rumbleSent = false;
     s.phase = kRunning;
-    s.lastReply = nowMS();
+    s.lastReply = switch_now_ms();
     s.reports = 0;
     s.errorsAtRun = s.lineErrors;
     s.overflowsAtRun = s.overflows;
@@ -1571,7 +1563,7 @@ void SwitchJoyConRail::republish(Side &s)
     IOLockUnlock(s.outLock);
     if (!wanted || republishOff || s.phase != kRunning || !s.hid)
         return;
-    if (!switch_joycon_republish_allowed(&s.guard, served, nowMS())) {
+    if (!switch_joycon_republish_allowed(&s.guard, served, switch_now_ms())) {
         republishOff = true;
         IOLog("SwitchJoyCon: Joy-Con (%c): backboardd[%d] ended a second HID session within %u ms; not publishing "
               "Joy-Con HID devices again this boot\n",
@@ -1623,7 +1615,7 @@ void SwitchJoyConRail::pollAction(OSObject *owner, IOTimerEventSource *)
 // Joy-Con that has said nothing for 500 ms is gone (J:1793).
 void SwitchJoyConRail::tick(Side &s)
 {
-    if (nowMS() - s.lastReply > kSilenceMS) {
+    if (switch_now_ms() - s.lastReply > kSilenceMS) {
         checkDelivery(s, "no reply for 500 ms");
         // Pulled off the rail, or the HID phase does not work (0 reports): either way it is handshaken again if seated.
         const char *rxDma = s.dma && !s.dmaOff ? "idle" : "off";
@@ -1664,7 +1656,7 @@ void SwitchJoyConRail::rumbleAfterReply(Side &s)
         return;
     uint8_t report[kMaxOutput];
     size_t length = 0;
-    const uint64_t now = nowMS();
+    const uint64_t now = switch_now_ms();
     IOLockLock(s.outLock);
     if (s.rumbleLength >= 10) {
         const uint8_t *half = s.rumble + (s.cfg->left ? 2 : 6);
@@ -1702,7 +1694,7 @@ void SwitchJoyConRail::runningReport(Side &s, const uint8_t *report, size_t leng
     if (!s.hid)
         return;
     IOLockLock(s.outLock);
-    const bool forward = switch_joycon_forward_report(&s.forward, report, length, nowMS());
+    const bool forward = switch_joycon_forward_report(&s.forward, report, length, switch_now_ms());
     IOLockUnlock(s.outLock);
     if (forward)
         switch_joycon_hid_input(s.hid, report, length);
