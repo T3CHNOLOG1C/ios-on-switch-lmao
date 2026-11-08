@@ -103,6 +103,7 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
     // a planar texture's image (4:2:0 converted, 4:4:4 codes) holds its surface at this seed (_imageCurrent): converted
     // again only once the surface's seed moves (r8a: a YouTube page's thumbnails converted again at every command buffer)
     uint32_t _imageSeed;
+    uint64_t _imageWrites;  // and its surface's writes the seed does not show (surfaceWrites)
     bool _imageCurrent;
     RMTexture *_parent;  // a view's
     RMBuffer *_buffer;   // a texture over a buffer's

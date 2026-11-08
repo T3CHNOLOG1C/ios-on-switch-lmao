@@ -51,6 +51,8 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
 - (void)dealloc
 {
     _twin = nil;
+    if (_rawOk && _surface && _raw.converted())
+        surfaceConverted(_surface, false);
     if (_rawOk)
         if (gRM)
             gRM->raw->destroyTexture(_raw);
@@ -265,6 +267,8 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
           bytesPerRow:(NSUInteger)row
         bytesPerImage:(NSUInteger)image
 {
+    if (_surface)
+        noteSurfaceWrite(_surface);
     if (_rawOk && _raw.chain && !slice && r.size.depth <= 1) {
         cpuLevel(self, r, level, (uint8_t *)bytes, row, true);
         return;

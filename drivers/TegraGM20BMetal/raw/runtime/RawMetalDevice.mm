@@ -320,7 +320,18 @@ static bool producesTexture(MTLTextureDescriptor *d)
                                                    uint32_t(d.pixelFormat), t->_raw, producesTexture(d));
         if (t->_rawOk)
             keepExtendedRange(d, t->_raw, false);
+    } else if (rawShape(d) && plane < IOSurfaceGetPlaneCount(s)) {
+        // a plane as a texture of its own (a video player's R8 luma and RG8 chroma): the plane's bytes, pitch, as CoreVideo
+        // lays its planes out for every other reader (never a block-linear layout the kernel would decide for the surface)
+        void *base = IOSurfaceGetBaseAddress(s);
+        t->_rawOk = gRM->raw->createSurfaceTexture(
+            IOSurfaceGetID(s), base, IOSurfaceGetAllocSize(s), s,
+            uintptr_t(IOSurfaceGetBaseAddressOfPlane(s, plane)) - uintptr_t(base), uint32_t(d.width),
+            uint32_t(d.height), uint32_t(IOSurfaceGetBytesPerRowOfPlane(s, plane)), uint32_t(d.pixelFormat), t->_raw,
+            false);
     }
+    if (t->_rawOk && t->_raw.converted())
+        surfaceConverted(s, true);
     if (t->_rawOk && writesTexture(d))
         declareGpuWrites(t);
     if (!t->_rawOk) {  // a surface the raw path does not take: m2v's texture over it, made now (it may refuse: nil, as today)

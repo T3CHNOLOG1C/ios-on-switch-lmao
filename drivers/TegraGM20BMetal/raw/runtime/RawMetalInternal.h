@@ -173,10 +173,17 @@ bool eventsReady(RMCommandBuffer *cb);
 void waitEvents(RMCommandBuffer *cb);
 
 // RawMetalFinish.mm
+void forEachWritten(RMCommandBuffer *cb, size_t from, size_t to, void (*written)(void *));
 extern GpuMemoryRelease &gRawRelease;
 void scheduled(RMCommandBuffer *cb);
 void finish(RMCommandBuffer *cb, NSError *error);
 void completionLoop();
+
+// RawMetalSurfaceWrites.mm
+void surfaceConverted(IOSurfaceRef s, bool made);  // a planar or YCbCr texture over `s` made, or gone
+uint64_t surfaceWrites(IOSurfaceRef s);
+void noteSurfaceWrite(IOSurfaceRef s);
+void noteSurfaceWrites(RMCommandBuffer *cb, size_t from, size_t to);  // after [from, to) of `cb` was submitted
 
 // RawMetalSubmit.mm
 void orderRefused(const char *what, int kr);

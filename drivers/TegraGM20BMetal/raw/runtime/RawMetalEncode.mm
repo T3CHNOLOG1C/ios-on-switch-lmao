@@ -103,12 +103,19 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
             planesWritten.push_back(t);
         return 0;
     };
+
     // the planar textures its draws sample: their images from their planes first, once (m2v converts at each encoder that uses
     // one; nothing between this command buffer's passes writes the planes, refused below), then the passes, whose prologue's
     // full barrier orders the copies before their reads. A texture bound where no draw's state reads it is not converted: the
     // image is made when a draw samples it. A sampler that clamps to zero or to the border reads a 4:4:4 code texture as clamp to
     // edge (m2v's address map), which the raw path does not derive: such a command buffer is m2v's.
-    std::vector<std::pair<RMTexture *, uint32_t>> converted;  // planar images converted here, at their surfaces' seeds
+    struct Conversion {
+        RMTexture *t;
+        uint32_t seed;
+        uint64_t writes;
+    };
+
+    std::vector<Conversion> converted;  // planar images converted here, at their surfaces' seeds and write counts
     {
         std::vector<RMTexture *> planar, rendered;
         std::vector<RMSampler *> samplers;
@@ -166,9 +173,10 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
             std::vector<RMTexture *> stale;
             for (RMTexture *t : planar) {
                 const uint32_t seed = t->_surface ? IOSurfaceGetSeed(t->_surface) : 0;
-                if (!t->_surface || !t->_imageCurrent || t->_imageSeed != seed) {
+                const uint64_t writes = t->_surface ? surfaceWrites(t->_surface) : 0;
+                if (!t->_surface || !t->_imageCurrent || t->_imageSeed != seed || t->_imageWrites != writes) {
                     stale.push_back(t);
-                    converted.push_back({t, seed});
+                    converted.push_back({t, seed, writes});
 #if SWITCH_FRAME_TIMELINE
                     traceSurfaceImage(t, "converted", seed);
 #endif
@@ -551,10 +559,12 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
     uint32_t seq = 0;
     if (!rc->commit(seq))
         return fail(PredEncKernel, "the kernel refused the submission");
-    for (const auto &c : converted) {  // (submitted: their images hold the surfaces at these seeds)
-        c.first->_imageSeed = c.second;
-        c.first->_imageCurrent = true;
+    for (const Conversion &c : converted) {  // (submitted: their images hold the surfaces at these seeds)
+        c.t->_imageSeed = c.seed;
+        c.t->_imageWrites = c.writes;
+        c.t->_imageCurrent = true;
     }
+    noteSurfaceWrites(cb, from, to);
     for (RMTexture *t : planesWritten)  // a write the surface's seed does not show: its image is converted again
         t->_imageCurrent = false;
     cb->_seqno = seq;

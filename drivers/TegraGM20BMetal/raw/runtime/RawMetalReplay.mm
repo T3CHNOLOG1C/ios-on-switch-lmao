@@ -387,5 +387,6 @@ id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool pa
     __asm__ volatile("dsb sy" ::: "memory");
 #endif
     gRM->stats.replayClean += cleaned;
+    noteSurfaceWrites(cb, from, to);
     return m;
 }
