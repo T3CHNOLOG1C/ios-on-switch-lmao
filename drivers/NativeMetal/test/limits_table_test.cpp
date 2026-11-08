@@ -14,7 +14,7 @@
 namespace {
 
 struct BaseModel {
-    uint8_t table[kLimitsTableBytes] = {};
+    uint8_t table[kMTLDeviceLimitsBytes] = {};
 
     uint32_t at(uint16_t offset) const
     {
@@ -123,7 +123,7 @@ TEST(LimitsTable, OffsetsAreDistinctAlignedFieldsInsideTheTable)
     std::map<uint16_t, std::string> seen;
     for (const LimitField &field : kLimitFields) {
         EXPECT_EQ(field.offset % field.bytes, 0) << field.selector;
-        EXPECT_LE(field.offset + field.bytes, kLimitsTableBytes) << field.selector;
+        EXPECT_LE(field.offset + field.bytes, kMTLDeviceLimitsBytes) << field.selector;
         EXPECT_TRUE(seen.emplace(field.offset, field.selector).second) << field.selector;
     }
     EXPECT_EQ(seen.size(), 62u);
@@ -132,7 +132,7 @@ TEST(LimitsTable, OffsetsAreDistinctAlignedFieldsInsideTheTable)
 // _MTLDevice's limits are 264 bytes in 21H461 and 24B119: maxBufferLength, a 64-bit field, at 0x100
 TEST(LimitsTable, TheTableRunsThroughMaxBufferLength)
 {
-    EXPECT_EQ(kLimitsTableBytes, 0x108u);
+    EXPECT_EQ(kMTLDeviceLimitsBytes, 0x108u);
     Fill f({{"maxBufferLength", 3ull << 31}});
     uint64_t v;
     memcpy(&v, f.base.table + 0x100, 8);

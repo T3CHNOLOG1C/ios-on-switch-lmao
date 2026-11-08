@@ -7255,7 +7255,7 @@ id<MTLDevice> raw_metal_device_open(const char *packPath, uint64_t stack, id<MTL
         const void *from = ((const void *(*)(id, SEL))objc_msgSend)(fallback, limits);
         void *to = ((void *(*)(id, SEL))objc_msgSend)(r->device, limits);
         if (from && to && from != to) {
-            memcpy(to, from, kLimitsTableBytes);
+            memcpy(to, from, kMTLDeviceLimitsBytes);
             fillLimitsFromMethods(r->device, static_cast<uint8_t *>(to), [](const LimitField &field, LimitFill how) {
                 if (how != LimitFill::Filled)
                     SWITCH_REFUSE_DETAIL("raw", "limits.layout", field.offset,
