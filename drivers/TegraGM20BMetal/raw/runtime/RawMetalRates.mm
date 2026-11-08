@@ -7,7 +7,7 @@ static uint64_t gPredRates[PredCount];  // the rates line's last gPredCbs (its t
 static struct {
     uint64_t raw, m2v, encodeUs, draws, passes, copies, deferred, aborted, reasons[WhyCount], ringWaits, lastUs,
         switches, cpuOrdered, acquires, poolStalls, eventsReleased, heldReturns, abortUs, replayUs, replayClean,
-        rtUnaligned, rtMixed, predOnly[PredCount], splits, splitM2v, levelPasses, mirrorsOut, mirrorsIn;
+        rtUnaligned, rtMixed, predOnly[PredCount], splits, splitM2v, levelPasses;
 } gRates;
 
 bool raw_metal_texture_kept(id<MTLTexture> texture)
@@ -85,17 +85,14 @@ size_t raw_metal_rates(char *out, size_t size)
     char diag[768];
     snprintf(diag, sizeof diag,
              " sp=%llu/%llu abortenc=%.0fus/a replay=%.0fus/m rclean=%.0fKB/m rt128=%llu(pitch %u va&255 %u) "
-             "rtmix=%llu lvl=%llu "
-             "mir=%llu/%llu states=%llu/%llu/%llu/%llu/%.0fms why=%s",
+             "rtmix=%llu lvl=%llu states=%llu/%llu/%llu/%llu/%.0fms why=%s",
              (unsigned long long)sp, (unsigned long long)segs,
              (s.abortUs.load() - gRates.abortUs) / double(aborts ? aborts : 1),
              (s.replayUs.load() - gRates.replayUs) / double(m2vs),
              (s.replayClean.load() - gRates.replayClean) / 1024.0 / double(m2vs),
              (unsigned long long)(k.rtUnaligned.load() - gRates.rtUnaligned), k.rtUnalignedPitch.load(),
              k.rtUnalignedVa.load(), (unsigned long long)(k.rtMixed.load() - gRates.rtMixed),
-             (unsigned long long)(k.levelPasses.load() - gRates.levelPasses),
-             (unsigned long long)(k.mirrorsOut.load() - gRates.mirrorsOut),
-             (unsigned long long)(k.mirrorsIn.load() - gRates.mirrorsIn), (unsigned long long)made.hits,
+             (unsigned long long)(k.levelPasses.load() - gRates.levelPasses), (unsigned long long)made.hits,
              (unsigned long long)made.misses, (unsigned long long)made.refusals, (unsigned long long)made.failures,
              made.makeUs / 1000.0, *preds ? preds : "-");
 #if SWITCH_FRAME_TIMELINE
@@ -124,8 +121,6 @@ size_t raw_metal_rates(char *out, size_t size)
     gRates.rtUnaligned = k.rtUnaligned.load();
     gRates.rtMixed = k.rtMixed.load();
     gRates.levelPasses = k.levelPasses.load();
-    gRates.mirrorsOut = k.mirrorsOut.load();
-    gRates.mirrorsIn = k.mirrorsIn.load();
     const int n = snprintf(
         out, size,
         "raw %.0fs c=%llu(%.1f/s) m2v=%llu%s%s%s sw=%llu cpu=%llu acq=%llu enc=%.0fus/c d=%.1f p=%.1f b=%.2f "

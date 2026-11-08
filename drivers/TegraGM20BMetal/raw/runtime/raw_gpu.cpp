@@ -1177,9 +1177,9 @@ bool Device::createBufferTexture(const Buffer &b, uint64_t offset, uint32_t widt
 
 bool Device::createView(const Texture &of, uint32_t format, Texture &t)
 {
-    // A mipmapped texture's view is m2v's. Metal views a converted image (planar, YCbCr) only in its own format or that
-    // format's sRGB twin (m2v view_plan.rs), neither of which has a header here.
-    if (of.chain || of.converted())
+    // Metal views a converted image (planar, YCbCr) only in its own format or that format's sRGB twin (m2v view_plan.rs),
+    // neither of which has a header here.
+    if (of.converted())
         return false;
     const FormatInfo *f = formatInfo(format);
     if (!f || f->bpp != of.bpp || of.memoryless || of.sampled || xrForm(format) != XrForm::None ||
@@ -1194,8 +1194,15 @@ bool Device::createView(const Texture &of, uint32_t format, Texture &t)
     t.import = nullptr;  // the viewed texture owns the memory (RawMetal.mm keeps it alive while a view lives)
     t.span = {};
     t.lease = nullptr;
+    t.chain = nullptr;  // a mipmapped texture's view: every level sampled, level 0 rendered and copied
     if (!(t.tic = allocTic()))
         return false;
+    if (of.chain) {
+        uint32_t w[8];
+        fx::mipChainTic(of.chain->layout, of.va, f->tic0, f->srgb, 0, of.chain->layout.levels, w);
+        memcpy(tic_.cpu + 32 * t.tic, w, 32);
+        return true;
+    }
     writeTic(t);
     return true;
 }
@@ -1311,21 +1318,30 @@ bool Device::createMipTexture(uint32_t width, uint32_t height, uint32_t format, 
     if (!chainsOn_ || !f || !fmt2d || f->srgb || levels < 2 || !f->rt)
         return false;
     Texture::Chain *c = new Texture::Chain;
-    if (!fx::mipChainLayout(width, height, levels, f->bpp, c->layout) || !createTexture(width, height, format, t)) {
+    if (!fx::mipChainLayout(width, height, levels, f->bpp, c->layout) || !shape(width, height, format, t)) {
         delete c;
         return false;
     }
-    bool placed;
     {
         std::lock_guard<std::mutex> l(lock_);
-        placed = blAlloc(c->layout.bytes, c->layout.align, c->span);
+        if (!blAlloc(c->layout.bytes, c->layout.align, t.span)) {
+            delete c;
+            return false;
+        }
+        if (!(t.tic = allocTic())) {
+            Lease *none = nullptr;
+            freeSpan(t.span, Memory::Bl, none);
+            delete c;
+            return false;
+        }
     }
-    if (!placed) {
-        delete c;
-        destroyTexture(t);
-        return false;
-    }
-    c->va = c->span.va;
+    const fx::MipLevel &l0 = c->layout.level[0];
+    t.va = c->va = t.span.va;
+    t.cpu = t.span.cpu;
+    t.pitch = l0.rowBytes;
+    t.blockLinear = true;
+    t.blockHeight = l0.yLog2;
+    t.layerBytes = c->layout.bytes;
     c->fmt2d = fmt2d;
     uint32_t w[8];
     fx::mipChainTic(c->layout, c->va, f->tic0, f->srgb, 0, levels, w);
@@ -1434,7 +1450,6 @@ void Device::destroyTexture(Texture &t)
                 memset(tic_.cpu + 32 * level, 0, 32);
                 freeTic_.push_back(level);
             }
-        blFree(t.chain->span);
         delete t.chain;
         t.chain = nullptr;
     }
@@ -3667,23 +3682,15 @@ void BlitEncoder::convertPlanar(const Texture &t)
     p_.m(CE_LAUNCH_DMA, kLaunchPitch | 1u << 10, SUBC_COPY);
 }
 
-void BlitEncoder::generate(Texture &t, bool all)
+void BlitEncoder::generate(Texture &t)
 {
     Texture::Chain *c = t.chain;
     if (!c)
         return;
-    const uint32_t last = all ? c->layout.levels - 1 : 0;
+    const uint32_t last = c->layout.levels - 1;
     room(uint32_t(fx::generateWords(c->layout, 0, last)));
-    const fx::Pitch l0{t.va, t.pitch, t.width, t.height};
-    fx::emitGenerate(p_, c->layout, c->va, &l0, c->fmt2d, 0, last, dev_->sampling_);
-    c->l0Fresh = true;
-    if (all) {
-        c->levelsFresh = true;
-        c->rawLevels = c->mirrorLevels = 0;
-        dev_->stats.chainGenerates++;
-    } else {
-        dev_->stats.chainRefreshes++;
-    }
+    fx::emitGenerate(p_, c->layout, c->va, nullptr, c->fmt2d, 0, last, dev_->sampling_);
+    dev_->stats.chainGenerates++;
 }
 
 void BlitEncoder::copyFromLevel(const Texture &t, uint32_t level, uint32_t sx, uint32_t sy, const Texture &dst,
@@ -3703,17 +3710,6 @@ void BlitEncoder::copyFromLevel(const Texture &t, uint32_t level, uint32_t sx, u
     const fx::Pitch d{dst.va, dst.pitch, dst.width, dst.height};
     fx::emitCopyFromLevel(p_, c->layout, c->va, level, d, c->fmt2d, sx, sy, dx, dy, w, h);
     dev_->stats.chainCopies++;
-}
-
-void BlitEncoder::copyToLevel(Texture &t, uint32_t level, const Texture &src)
-{
-    Texture::Chain *c = t.chain;
-    if (!c || !level || level >= c->layout.levels)
-        return;
-    const fx::MipLevel &l = c->layout.level[level];
-    room(uint32_t(fx::copyWords()));
-    const fx::Pitch s{src.va, src.pitch, src.width, src.height};
-    fx::emitCopyToLevel(p_, c->layout, c->va, level, s, c->fmt2d, 0, 0, 0, 0, l.width, l.height);
 }
 
 void BlitEncoder::end()

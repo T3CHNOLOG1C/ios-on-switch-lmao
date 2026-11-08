@@ -135,42 +135,24 @@ id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool pa
                       uint64_t(count) * r.vertexStride);
     };
     std::set<void *> updated;  // fences this part updated
-    MirrorWrites toMirrors;    // later levels of mipmapped textures the open encoder writes (mipWritten)
     for (size_t at = from; at < to; at++) {
         const Cmd &c = cb->_tape[at];
         switch (c.op) {
         case OpRender: {
-            MTLRenderPassDescriptor *pass = (__bridge MTLRenderPassDescriptor *)c.obj, *twin = twinPass(pass);
-            if (cb->_chains) {
-                mipSync(cb, m, at, to);
-                for (unsigned j = 0; j < 8; j++) {  // a mipmapped attachment: level 0 in place, another level m2v's own
-                    MTLRenderPassColorAttachmentDescriptor *a = pass.colorAttachments[j];
-                    if (!chained((__bridge void *)a.texture))
-                        continue;
-                    if (a.level)
-                        twin.colorAttachments[j].texture = [(RMTexture *)a.texture rmMipTwin];
-                    mipWritten((__bridge void *)a.texture, a.level, &toMirrors);
-                }
-            }
-            enc = [m renderCommandEncoderWithDescriptor:twin];
+            enc = [m renderCommandEncoderWithDescriptor:twinPass((__bridge MTLRenderPassDescriptor *)c.obj)];
             memset(bound, 0, sizeof bound);
             pipe = nil;
             break;
         }
         case OpBlit:
-            if (cb->_chains)
-                mipSync(cb, m, at, to);
             enc = [m blitCommandEncoder];
             break;
         case OpCompute:
-            if (cb->_chains)
-                mipSync(cb, m, at, to);
             enc = [m computeCommandEncoderWithDispatchType:MTLDispatchType(c.a)];
             break;
         case OpEnd:
             [enc endEncoding];
             enc = nil;
-            mirrorWrites(m, toMirrors);
             break;
         case OpPipeline:
             pipe = [(__bridge id)c.obj isKindOfClass:[RMPipeline class]] ? (__bridge RMPipeline *)c.obj : nil;
@@ -206,9 +188,9 @@ id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool pa
             break;
         case OpTexture:
             if (c.stage == 1)
-                [enc setVertexTexture:mipTwinOf(c.obj, false) atIndex:c.index];
+                [enc setVertexTexture:twinOf((__bridge id)c.obj) atIndex:c.index];
             else
-                [enc setFragmentTexture:mipTwinOf(c.obj, false) atIndex:c.index];
+                [enc setFragmentTexture:twinOf((__bridge id)c.obj) atIndex:c.index];
             break;
         case OpSampler:
             if (c.stage == 1)
@@ -274,13 +256,12 @@ id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool pa
             break;
         case OpCopyTexture: {
             const uint64_t x = c.x, o = extra(cb, x + 10);
-            mipWritten(c.obj2, extra(cb, x + 9), &toMirrors);
-            [enc copyFromTexture:mipTwinOf(c.obj, !extra(cb, x + 1))
+            [enc copyFromTexture:twinOf((__bridge id)c.obj)
                       sourceSlice:extra(cb, x)
                       sourceLevel:extra(cb, x + 1)
                      sourceOrigin:MTLOriginMake(extra(cb, x + 2), extra(cb, x + 3), extra(cb, x + 4))
                        sourceSize:MTLSizeMake(extra(cb, x + 5), extra(cb, x + 6), extra(cb, x + 7))
-                        toTexture:mipTwinOf(c.obj2, !extra(cb, x + 9))
+                        toTexture:twinOf((__bridge id)c.obj2)
                  destinationSlice:extra(cb, x + 8)
                  destinationLevel:extra(cb, x + 9)
                 destinationOrigin:MTLOriginMake(uint32_t(o), o >> 32, extra(cb, x + 11))];
@@ -308,13 +289,12 @@ id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool pa
                 else
                     use(c.obj);
             }
-            mipWritten(c.obj2, extra(cb, x + 7), &toMirrors);
             [enc copyFromBuffer:twinOf((__bridge id)c.obj)
                        sourceOffset:extra(cb, x)
                   sourceBytesPerRow:extra(cb, x + 1)
                 sourceBytesPerImage:extra(cb, x + 2)
                          sourceSize:MTLSizeMake(extra(cb, x + 3), extra(cb, x + 4), extra(cb, x + 5))
-                          toTexture:mipTwinOf(c.obj2, !extra(cb, x + 7))
+                          toTexture:twinOf((__bridge id)c.obj2)
                    destinationSlice:extra(cb, x + 6)
                    destinationLevel:extra(cb, x + 7)
                   destinationOrigin:MTLOriginMake(uint32_t(o), o >> 32, extra(cb, x + 9))];
@@ -332,7 +312,7 @@ id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool pa
                 else
                     use(c.obj2);
             }
-            [enc copyFromTexture:mipTwinOf(c.obj, !extra(cb, x + 1))
+            [enc copyFromTexture:twinOf((__bridge id)c.obj)
                              sourceSlice:extra(cb, x)
                              sourceLevel:extra(cb, x + 1)
                             sourceOrigin:MTLOriginMake(uint32_t(o), o >> 32, extra(cb, x + 3))
@@ -344,16 +324,7 @@ id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool pa
             break;
         }
         case OpMipmaps:
-            if (chained(
-                    c.obj)) {  // m2v's texture of every level (mipSync made its level 0 current): the chain's are behind it
-                RMTexture *t = (__bridge RMTexture *)c.obj;
-                [enc generateMipmapsForTexture:[t rmMipTwin]];
-                t->_mipLevels = true;
-                t->_raw.chain->levelsFresh = false;
-                t->_raw.chain->mirrorLevels = 0;  // every level regenerated: no mirror is newer
-            } else {
-                [enc generateMipmapsForTexture:twinOf((__bridge id)c.obj)];
-            }
+            [enc generateMipmapsForTexture:twinOf((__bridge id)c.obj)];
             break;
         case OpInvocation: {
             NSInvocation *inv = (__bridge NSInvocation *)c.obj;

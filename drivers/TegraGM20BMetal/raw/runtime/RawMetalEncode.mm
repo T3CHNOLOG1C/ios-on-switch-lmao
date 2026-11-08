@@ -49,72 +49,10 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
     raw::RenderEncoder *re = nullptr;
     raw::BlitEncoder *be = nullptr;
 
-    // mipmapped textures' states this encode changes (raw::Texture::Chain, RMTexture's _mipL0/_mipLevels): put back when it is
-    // abandoned (its work never runs; the command buffer or segment goes to m2v, whose replay keeps them from what ran)
-    struct ChainState {
-        RMTexture *t;
-        bool l0, levels, mipL0, mipLevels;
-        uint16_t rawLevels, mirrorLevels;
-    };
-
-    std::vector<ChainState> chainStates;
-    auto touch = [&](RMTexture *t) -> raw::Texture::Chain & {
-        raw::Texture::Chain &c = *t->_raw.chain;
-        for (const ChainState &k : chainStates)
-            if (k.t == t)
-                return c;
-        chainStates.push_back({t, c.l0Fresh, c.levelsFresh, t->_mipL0, t->_mipLevels, c.rawLevels, c.mirrorLevels});
-        return c;
-    };
-    auto untouch = [&]() {
-        for (const ChainState &k : chainStates) {
-            k.t->_raw.chain->l0Fresh = k.l0;
-            k.t->_raw.chain->levelsFresh = k.levels;
-            k.t->_mipL0 = k.mipL0;
-            k.t->_mipLevels = k.mipLevels;
-            k.t->_raw.chain->rawLevels = k.rawLevels;
-            k.t->_raw.chain->mirrorLevels = k.mirrorLevels;
-        }
-    };
-    // a chain as sampling or a copy of a level needs it: its levels generated again where m2v generated them last (its own
-    // texture of every level's), else its level 0 refreshed where level 0 was written since; then the levels m2v rendered
-    // since, from their mirrors (after the generate, which would write over them)
-    auto current = [&](RMTexture *t, raw::BlitEncoder *b) {
-        raw::Texture::Chain &c = touch(t);
-        const uint16_t mirrored = c.mirrorLevels;
-        if (!c.levelsFresh)
-            b->generate(t->_raw, true);
-        else if (!c.l0Fresh)
-            b->generate(t->_raw, false);
-        for (uint32_t l = 1; l < c.layout.levels; l++)
-            if (mirrored & (1u << l))
-                if (RMTexture *mirror = [t rmMirror:l]) {
-                    b->copyToLevel(t->_raw, l, mirror->_raw);
-                    c.rawLevels |= uint16_t(1u << l);
-                    d.stats.mirrorsIn++;
-                }
-        c.mirrorLevels = 0;
-    };
-    // the raw path wrote level `level` of `t`: level 0 puts the chain's copy and m2v's behind it; a later level is the chain's
-    // own (rawLevels), m2v's behind it
-    auto chainWritten = [&](RMTexture *t, uint32_t level) {
-        if (!t->_raw.chain)
-            return;
-        raw::Texture::Chain &c = touch(t);
-        if (level) {
-            c.rawLevels |= uint16_t(1u << level);
-            t->_mipLevels = false;
-            t->_mirrored = false;
-        } else {
-            c.l0Fresh = false;
-            t->_mipL0 = false;
-        }
-    };
     auto fail = [&](RMPred p, const char *w, uint64_t a = 0, uint64_t b = 0) {
         *why = w;
         hit(cb, p, a, b);
         rc->abandon();
-        untouch();
         return false;
     };
     // a draw the encoder refused: its predicate and values (raw_gpu.h Refusal)
@@ -125,7 +63,6 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
         hit(cb, f.id < sizeof map / sizeof *map ? map[f.id] : PredEncPassRender, f.a,
             uint64_t(f.b) | uint64_t(f.c) << 32);
         rc->abandon();
-        untouch();
         return false;
     };
     // A planar render target's stand-in passes (raw::Texture::planarStandIn), the frontend's: the planes' codes into the stand-in
@@ -291,14 +228,6 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
     // its shadow at each encoder that uses it once written since)
     std::set<RMTexture *> fresh;
     raw::Texture levelTargets[8];  // the open pass's level targets: the encoder reads them until its end()
-
-    struct LevelCopy {
-        RMTexture *t;
-        uint32_t level;
-        RMTexture *mirror;
-    };
-
-    std::vector<LevelCopy> afterPass;  // the open pass's levels rendered into their mirrors
     uint64_t levelPasses = 0;
     static std::atomic<bool> loggedLevel{false};
     auto refresh = [&](size_t pass) {
@@ -375,53 +304,6 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
                 refresh(at);
             if (cb->_standIns && !standIns(at))
                 return false;
-            if (cb->_chains) {  // the chains this pass samples, current first (one blit of the 2D engine's work)
-                raw::BlitEncoder *b = nullptr;
-                auto stale = [](const raw::Texture::Chain *c) {
-                    return c && (!c->l0Fresh || !c->levelsFresh || c->mirrorLevels);
-                };
-                for (size_t k = at + 1; k < to && cb->_tape[k].op != OpEnd; k++) {
-                    const Cmd &u = cb->_tape[k];
-                    if (u.op != OpTexture || !u.obj)
-                        continue;
-                    RMTexture *t = (__bridge RMTexture *)u.obj;
-                    if (!stale(t->_raw.chain))
-                        continue;
-                    if (!b)
-                        b = rc->blit();
-                    current(t, b);
-                }
-                // a level this pass renders: the chain current first, or a later generate from level 0 or copy from a
-                // mirror would write over what the pass leaves there
-                for (unsigned j = 0; j < 8; j++) {
-                    MTLRenderPassColorAttachmentDescriptor *a = pass.colorAttachments[j];
-                    RMTexture *t = (RMTexture *)a.texture;
-                    if (!t || !a.level || !stale(t->_raw.chain))
-                        continue;
-                    if (!b)
-                        b = rc->blit();
-                    current(t, b);
-                }
-                if (b)
-                    b->end();
-            }
-            // One memory layout for every color target of a pass (NVK renders a pass's linear targets through tiled
-            // shadows once any is tiled): a level beside a pitch target renders into the level's mirror, which holds the
-            // whole level from the chain before the pass (texels outside what the pass writes go back unchanged) and is
-            // copied into the chain after it.
-            bool levels = false, pitch = false;
-            for (unsigned j = 0; j < 8; j++) {
-                MTLRenderPassColorAttachmentDescriptor *a = pass.colorAttachments[j];
-                RMTexture *t = (RMTexture *)a.texture;
-                if (!t)
-                    continue;
-                if (t->_raw.chain && a.level)
-                    levels = true;
-                else
-                    pitch = true;
-            }
-            const bool viaMirror = levels && pitch;
-            raw::BlitEncoder *loads = nullptr;
             raw::PassDesc p;
             for (unsigned j = 0; j < 8; j++) {
                 MTLRenderPassColorAttachmentDescriptor *a = pass.colorAttachments[j];
@@ -444,31 +326,13 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
                     fresh.erase(t);  // this pass writes it
                 standInFresh.erase(t);
                 if (t->_raw.chain && a.level) {
-                    // the chain keeps the texture's levels (levelsFresh), m2v's are behind, and they are no longer what
-                    // generating from level 0 gives (rawLevels)
-                    if (viaMirror) {
-                        RMTexture *mirror = [t rmMirror:a.level];
-                        if (!mirror)
-                            return fail(PredEncPassRender, "a mip level beside a pitch target, with no mirror",
-                                        a.level);
-                        levelTargets[j] = mirror->_raw;
-                        if (!loads)
-                            loads = rc->blit();
-                        const raw::fx::MipLevel &lv = t->_raw.chain->layout.level[a.level];
-                        loads->copyFromLevel(t->_raw, uint32_t(a.level), 0, 0, mirror->_raw, 0, 0, lv.width, lv.height);
-                        afterPass.push_back({t, uint32_t(a.level), mirror});
-                    } else if (!raw::chainLevelTarget(t->_raw, uint32_t(a.level), levelTargets[j])) {
+                    if (!raw::chainLevelTarget(t->_raw, uint32_t(a.level), levelTargets[j]))
                         return fail(PredEncPassRender, "a mip level the raw path cannot render to", a.level);
-                    } else {
-                        levelTargets[j].tic = gRM->raw->levelTic(t->_raw, uint32_t(a.level));
-                    }
-                    chainWritten(t, uint32_t(a.level));
+                    levelTargets[j].tic = gRM->raw->levelTic(t->_raw, uint32_t(a.level));
                     levelPasses++;
                     if (!loggedLevel.exchange(true))
                         os_log(rawLog(), "raw: renders into mip levels (first: level %lu of %ux%u format %u)",
                                (unsigned long)a.level, t->_raw.width, t->_raw.height, t->_raw.format);
-                } else {
-                    chainWritten(t, 0);
                 }
                 p.color[j].texture = a.level                 ? &levelTargets[j]
                                      : t->_raw.planarStandIn ? t->_raw.planarStandIn
@@ -494,8 +358,6 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
             }
             p.width = uint32_t(std::min<NSUInteger>(pass.renderTargetWidth, UINT32_MAX));
             p.height = uint32_t(std::min<NSUInteger>(pass.renderTargetHeight, UINT32_MAX));
-            if (loads)
-                loads->end();
             for (RMTexture *t : standInLoads)
                 if (standInPass(t, false))
                     return false;
@@ -512,13 +374,6 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
                 re->end();
             if (be)
                 be->end();
-            if (re && !afterPass.empty()) {
-                raw::BlitEncoder *x = rc->blit();
-                for (const LevelCopy &l : afterPass)
-                    x->copyToLevel(l.t->_raw, l.level, l.mirror->_raw);
-                x->end();
-                afterPass.clear();
-            }
             for (RMTexture *t : standInStores)
                 if (standInPass(t, true))
                     return false;
@@ -605,12 +460,6 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
             const uint32_t sx = uint32_t(extra(cb, x + 2)), sy = uint32_t(extra(cb, x + 3)),
                            w = uint32_t(extra(cb, x + 5)), h = uint32_t(extra(cb, x + 6)), dx = uint32_t(o),
                            dy = uint32_t(o >> 32);
-            // a later level (decided at record) is read and written in its chain made current first: a generate from level 0
-            // or a copy from a mirror after the write would write over it
-            if (sl)
-                current(s, be);
-            if (dl)
-                current(t, be);
             if (sl && !dl && !t->_raw.blockLinear) {
                 be->copyFromLevel(s->_raw, uint32_t(sl), sx, sy, t->_raw, dx, dy, w, h);
             } else {
@@ -621,16 +470,12 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
                     raw::chainLevelImage(t->_raw, uint32_t(dl), toLevel);
                 be->copyTexels(sl ? fromLevel : s->_raw, sx, sy, dl ? toLevel : t->_raw, dx, dy, w, h);
             }
-            chainWritten(t, uint32_t(dl));
             break;
         }
-        case OpMipmaps: {  // a chain's levels from level 0 (decided at record); m2v's texture of every level is behind it
+        case OpMipmaps: {  // a chain's levels from level 0 (decided at record)
             RMTexture *t = (__bridge RMTexture *)c.obj;
             useTexture(rc, t, true);
-            touch(t);
-            be->generate(t->_raw, true);
-            t->_mipLevels = false;
-            t->_mirrored = false;
+            be->generate(t->_raw);
             break;
         }
         case OpCopyBuffer: {
@@ -656,11 +501,8 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
                 fresh.erase(t);
             standInFresh.erase(t);
             raw::Texture level;
-            if (dl) {
-                current(t, be);
+            if (dl)
                 raw::chainLevelImage(t->_raw, uint32_t(dl), level);
-            }
-            chainWritten(t, uint32_t(dl));
             BufferRows rows;
             bufferRows(so, row, uint32_t(h), uint32_t(w * t->_raw.bpp), t->_raw.bpp, true,
                        rows);  // (decided at record)
@@ -679,10 +521,8 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
             const uint64_t x = c.x, o = extra(cb, x + 2), w = extra(cb, x + 4), h = extra(cb, x + 5),
                            dof = extra(cb, x + 7), row = extra(cb, x + 8), sl = extra(cb, x + 1);
             raw::Texture level;
-            if (sl) {
-                current(s, be);
+            if (sl)
                 raw::chainLevelImage(s->_raw, uint32_t(sl), level);
-            }
             BufferRows rows;
             bufferRows(dof, row, uint32_t(h), uint32_t(w * s->_raw.bpp), s->_raw.bpp, false,
                        rows);  // (decided at record)

@@ -80,11 +80,9 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
                                      MTLResourceStorageModeShared)
                     : nil;
             MTLTextureDescriptor *d = _descriptor;
-            if (_raw.chain) {  // level 0 (the chain's levels are the m2v texture of every level's: rmMipTwin)
+            if (_raw.chain && d.storageMode == MTLStorageModeMemoryless) {  // every level, in place (memory here)
                 d = [_descriptor copy];
-                d.mipmapLevelCount = 1;
-                if (d.storageMode == MTLStorageModeMemoryless)
-                    d.storageMode = MTLStorageModePrivate;  // (memory here)
+                d.storageMode = MTLStorageModePrivate;
             }
             if (pages && _raw.blockLinear && native_bridge_metal_texture_tiled_in_place)
                 made = native_bridge_metal_texture_tiled_in_place(pages, d, 0);
@@ -115,54 +113,6 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
                              "no m2v twin for a %ux%u texture of format %lu (kind %u)", _raw.width, _raw.height,
                              (unsigned long)_descriptor.pixelFormat, unsigned(_kind));
     return twin;
-}
-
-// A mipmapped texture's m2v texture of every level (made on first need)
-- (id)rmMipTwin
-{
-    @synchronized(self) {
-        if (_mipTwin)
-            return _mipTwin;
-    }
-    return twinPublish(self, _mipTwin, [gRM->fallback newTextureWithDescriptor:_descriptor]);
-}
-
-// Level `level`'s mirror (_mirrors): a pitch pool texture of the level's size and format, with its m2v in-place twin. nil:
-// none, and the levels cross between the drivers by being generated from level 0.
-- (RMTexture *)rmMirror:(NSUInteger)level
-{
-    if (!_raw.chain || !level || level >= _raw.chain->layout.levels)
-        return nil;
-    @synchronized(self) {
-        if (_mirrors && level < _mirrors.count && [_mirrors[level] isKindOfClass:[RMTexture class]])
-            return _mirrors[level];
-    }
-    const raw::fx::MipLevel &l = _raw.chain->layout.level[level];
-    MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:_descriptor.pixelFormat
-                                                                                 width:l.width
-                                                                                height:l.height
-                                                                             mipmapped:NO];
-    d.storageMode = MTLStorageModePrivate;
-    d.usage = MTLTextureUsageShaderRead | MTLTextureUsageRenderTarget;
-    id made = [(RMDevice *)_device rmNewTexture:d tiled:false];  // (rows: the 2D engine's copies of a level are pitch)
-    RMTexture *m = [made isKindOfClass:[RMTexture class]] ? (RMTexture *)made : nil;
-    if (!m || !m->_rawOk || m->_raw.memoryless || ((m->_raw.va | m->_raw.pitch) & 127) || ![m rmTwin]) {
-        once([NSString
-            stringWithFormat:@"no mirror for level %lu (%ux%u format %lu) of a mipmapped texture: its levels "
-                             @"cross between the drivers by generating them from level 0",
-                             (unsigned long)level, l.width, l.height, (unsigned long)_descriptor.pixelFormat]);
-        return nil;
-    }
-    @synchronized(self) {
-        if (!_mirrors)
-            _mirrors = [NSMutableArray array];
-        while (_mirrors.count <= level)
-            [_mirrors addObject:[NSNull null]];
-        if ([_mirrors[level] isKindOfClass:[RMTexture class]])
-            return _mirrors[level];
-        _mirrors[level] = m;
-    }
-    return m;
 }
 
 - (MTLTextureType)textureType
@@ -307,7 +257,7 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
 }
 
 // CPU writes into the texture's own pages (level 0, slice 0, a 2D texture), cleaned to memory at once: a later command buffer's
-// GPU reads see them. A shared mipmapped texture's later levels: cpuLevel. Other textures are m2v's (their twin's replaceRegion).
+// GPU reads see them. A shared mipmapped texture's levels: cpuLevel. Other textures are m2v's (their twin's replaceRegion).
 - (void)replaceRegion:(MTLRegion)r
           mipmapLevel:(NSUInteger)level
                 slice:(NSUInteger)slice
@@ -315,7 +265,7 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
           bytesPerRow:(NSUInteger)row
         bytesPerImage:(NSUInteger)image
 {
-    if (_rawOk && _raw.chain && level && !slice && r.size.depth <= 1) {
+    if (_rawOk && _raw.chain && !slice && r.size.depth <= 1) {
         cpuLevel(self, r, level, (uint8_t *)bytes, row, true);
         return;
     }
@@ -347,8 +297,6 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
 #if defined(__aarch64__)
     __asm__ volatile("dsb sy" ::: "memory");
 #endif
-    if (_raw.chain)
-        noteCpuLevels(self, 1);
 }
 
 - (void)replaceRegion:(MTLRegion)r
@@ -367,7 +315,7 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
       mipmapLevel:(NSUInteger)level
             slice:(NSUInteger)slice
 {
-    if (_rawOk && _raw.chain && level && !slice && r.size.depth <= 1) {
+    if (_rawOk && _raw.chain && !slice && r.size.depth <= 1) {
         cpuLevel(self, r, level, (uint8_t *)bytes, row, false);
         return;
     }
@@ -415,11 +363,6 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
     v->_parent = self;
     if (_rawOk && !_raw.memoryless && raw::formatInfo(uint32_t(format)))
         v->_rawOk = gRM->raw->createView(_raw, uint32_t(format), v->_raw);
-    if (_raw.chain) {  // a view of a mipmapped texture: m2v's view of its texture of every level (the replay keeps that current)
-        v->_twin = [(id<MTLTexture>)[self rmMipTwin] newTextureViewWithPixelFormat:format];
-        refuseTexture(v, PredTexView, format, 2, @"view", @"of a mipmapped texture");
-        return v->_twin ? (id<MTLTexture>)v : nil;
-    }
     if (!v->_rawOk)
         refuseTexture(v, PredTexView, format, _rawOk, @"view",
                       [NSString stringWithFormat:@"parent kind %u pred %s", unsigned(_kind), kPredNames[_pred]]);

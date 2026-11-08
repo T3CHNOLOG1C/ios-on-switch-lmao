@@ -77,7 +77,6 @@ static bool submitSegments(RMCommandBuffer *cb);
 static bool submitLocked(RMCommandBuffer *cb)
 {
     RawState &r = *gRM;
-    foldCpuLevels();
     if (!cb->_segs.empty())
         return submitSegments(cb);
     const char *why = nullptr;
@@ -137,8 +136,6 @@ static bool submitLocked(RMCommandBuffer *cb)
     switch_frame::trace(switch_frame::kReplay, switch_frame::kStart, cb->_frame.seq);
     tTwinTicks = 0;
 #endif
-    if (r.fallback)
-        mirrorsForM2v(cb, 0, cb->_tape.size());
     id<MTLCommandBuffer> m = r.fallback ? replay(cb, 0, cb->_tape.size(), false) : nil;
 #if SWITCH_FRAME_TIMELINE
     cb->_frame.mark(switch_frame::ReplayEnd);
@@ -315,8 +312,6 @@ static bool submitSegments(RMCommandBuffer *cb)
         } else {
             r.stats.splitM2v++;
             const uint64_t began = nowUs();
-            if (r.fallback)
-                mirrorsForM2v(cb, s.from, s.to);
             id<MTLCommandBuffer> m = r.fallback ? replay(cb, s.from, s.to, true) : nil;
             if (!m) {
                 cb->_segError = [NSError errorWithDomain:MTLCommandBufferErrorDomain

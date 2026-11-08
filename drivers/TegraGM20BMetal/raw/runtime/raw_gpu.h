@@ -173,22 +173,14 @@ struct Texture {
     // no draw call stores Metal's straight route's codes
     bool compressed = false;
 
-    // A mipmapped texture's levels (r12, raw/fx): level 0 is this texture (pitch, pool memory: rendered, copied and cleared as any
-    // other), and `chain` the block-linear image of every level that its texture header (tic) points at, which the 2D engine
-    // fills from level 0 (BlitEncoder::generate). The chain's own level 0 is a copy: `l0Fresh` says it holds what the texture's
-    // level 0 holds now, `levelsFresh` that its later levels were generated since the last generateMipmaps (encode order, under
-    // the submit lock: the GPU's order).
-    // `rawLevels`: levels written directly (a pass into the level, chainLevelTarget, or a copy from a mirror) since the last
-    // generate, so not what generating from level 0 gives: m2v gets them by copies (RawMetalMips.mm mirrorsForM2v).
-    // `mirrorLevels`: levels m2v rendered since, held by the RMTexture's mirror of each and copied into the chain before
-    // the raw path next reads it (BlitEncoder::copyToLevel).
+    // A mipmapped texture's levels (r12, raw/fx): `chain` is the block-linear image of every level, NIL's layout, and this texture
+    // is its level 0 (va, span, pitch and block height level 0's; its header, tic, the chain's). The 2D engine fills the later
+    // levels from level 0 in place (BlitEncoder::generate); m2v's twin is a texture of every level over the same memory, so
+    // whatever either driver writes into a level is the level.
     struct Chain {
         fx::MipChain layout;
         uint64_t va = 0;
-        Span span;
         uint32_t fmt2d = 0;
-        bool l0Fresh = false, levelsFresh = false;
-        uint16_t rawLevels = 0, mirrorLevels = 0;
         uint32_t levelTic[fx::kMaxLevels] = {};  // a view of each level alone (Device::levelTic), made on first use
     } *chain = nullptr;
 
@@ -489,15 +481,12 @@ public:
     // A planar texture's image from its surface's planes (Texture::planar): two remapped copies, the luma codes into green
     // (alpha 255), then the chroma pairs into red (Cr) and blue (Cb), each leaving the other components as they are
     void convertPlanar(const Texture &t);
-    // A mipmapped texture's chain (Texture::chain) on the 2D engine: `all`, generateMipmaps (level 0 converted from the texture,
-    // then each level from the one above); else level 0 only (the texture's level 0 was written since: what sampling it needs)
-    void generate(Texture &t, bool all);
+    // generateMipmaps of a mipmapped texture (Texture::chain) on the 2D engine: each later level from the one above, in place
+    void generate(Texture &t);
     // `w` x `h` texels of chain level `level` of `t` at (sx, sy) into the pitch texture `dst` at (dx, dy) (copyFromTexture of a
     // level below the first); 1:1 on the 2D engine
     void copyFromLevel(const Texture &t, uint32_t level, uint32_t sx, uint32_t sy, const Texture &dst, uint32_t dx,
                        uint32_t dy, uint32_t w, uint32_t h);
-    // The whole of chain level `level` of `t` from the pitch texture `src` of its size (its mirror); 1:1 on the 2D engine
-    void copyToLevel(Texture &t, uint32_t level, const Texture &src);
     void end();
 
 private:
@@ -658,8 +647,8 @@ public:
     bool createView(const Texture &of, uint32_t format, Texture &t);  // the same memory as another format
     // Memoryless (a pass gives it a backing); Depth32Float_Stencil8 among them, as zeta (Texture::zeta)
     bool createMemoryless(uint32_t width, uint32_t height, uint32_t format, Texture &t);
-    // A mipmapped 2D texture of `levels` levels: level 0 a pool texture as createTexture's, its header the block-linear chain's
-    // (Texture::chain). False: not one the raw path keeps (chainsOn() false, a format the 2D engine does not filter, no memory).
+    // A mipmapped 2D texture of `levels` levels: level 0 of its block-linear chain (Texture::chain), its header the chain's.
+    // False: not one the raw path keeps (chainsOn() false, a format the 2D engine does not filter, no memory).
     bool createMipTexture(uint32_t width, uint32_t height, uint32_t format, uint32_t levels, Texture &t);
     // The texture header of level `level` of mipmapped texture `t`'s chain alone, as NVK's view of that level (a pass into
     // the level fetches its color through it); 0: none
@@ -825,14 +814,14 @@ public:
         // color targets in rows the raw path rendered through a block-linear shadow, beside a block-linear one in their pass
         std::atomic<uint64_t> rtMixed{0};
         std::atomic<uint32_t> rtUnalignedPitch{0}, rtUnalignedVa{0};
-        // mip chains: made, chain bytes, generated (whole) and level-0 refreshes, copies out of a level
-        std::atomic<uint64_t> chains{0}, chainBytes{0}, chainGenerates{0}, chainRefreshes{0}, chainCopies{0};
+        // mip chains: made, chain bytes, generated, copies out of a level
+        std::atomic<uint64_t> chains{0}, chainBytes{0}, chainGenerates{0}, chainCopies{0};
         // write-combined buffers: live bytes, and the buffers that asked for one and got pool memory (the WC pool full)
         std::atomic<uint64_t> wcBytes{0}, wcFallbacks{0};
         // the copy engine's work encoded: launches and the bytes they write (copies, remaps, the pass prologue's shadow copies)
         std::atomic<uint64_t> ceOps{0}, ceBytes{0};
-        // passes into a chain level, and levels copied between a chain and its mirrors (out: for m2v; in: what m2v rendered)
-        std::atomic<uint64_t> levelPasses{0}, mirrorsOut{0}, mirrorsIn{0};
+        // passes into a chain level
+        std::atomic<uint64_t> levelPasses{0};
         // pack programs placed in the shader heap, and states not made because it was full
         std::atomic<uint64_t> programsPlaced{0}, heapFull{0};
         // framebuffer-fetch barriers encoded, and those left out where the draw's pixels meet none a color write reached

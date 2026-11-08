@@ -149,19 +149,11 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed);
 #endif
 
 // RawMetalTextureCpu.mm
-void noteCpuLevels(RMTexture *t, uint32_t bits);
-void foldCpuLevels();
 void cpuTiled(RMTexture *t, MTLRegion r, uint8_t *bytes, NSUInteger row, bool write);
 void cpuLevel(RMTexture *t, MTLRegion r, NSUInteger level, uint8_t *bytes, NSUInteger row, bool write);
 
 // RawMetalDevice.mm
 const char *ycbcrPlan(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteger plane, raw::YcbcrPlan &out);
-
-// RawMetalMips.mm
-void mipSync(RMCommandBuffer *cb, id<MTLCommandBuffer> m, size_t at, size_t to);
-void mipWritten(void *o, uint64_t level, MirrorWrites *toMirrors);
-void mirrorWrites(id<MTLCommandBuffer> m, MirrorWrites &writes);
-void mirrorsForM2v(RMCommandBuffer *cb, size_t from, size_t to);
 
 // RawMetalReplay.mm
 id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool part);
