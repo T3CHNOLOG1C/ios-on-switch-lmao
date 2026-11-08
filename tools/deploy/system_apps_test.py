@@ -159,8 +159,17 @@ class RestageTest(unittest.TestCase):
         system_apps.restage(self.system, self.data, Log())
         self.assertFalse((self.data / system_apps.STAGED / 'Fitness.app').exists())
 
-    def test_restaging_twice_copies_nothing_more(self):
+    def test_restaging_twice_copies_once_and_asks_again(self):
         self.assertTrue(system_apps.restage(self.system, self.data, Log()))
+        stamp = (self.data / system_apps.STAGED / 'FaceTime.app/FaceTime').stat().st_ino
+        log = Log()
+        self.assertTrue(system_apps.restage(self.system, self.data, log))
+        self.assertEqual((self.data / system_apps.STAGED / 'FaceTime.app/FaceTime').stat().st_ino, stamp)
+        self.assertIn('0 restaged', log.lines[0])
+
+    def test_installed_apps_need_nothing(self):
+        self.install('FaceTime.app', b'arm64e')
+        self.install('Files.app', b'arm64e')
         self.assertFalse(system_apps.restage(self.system, self.data, Log()))
 
     def test_an_installed_app_is_left_alone(self):
