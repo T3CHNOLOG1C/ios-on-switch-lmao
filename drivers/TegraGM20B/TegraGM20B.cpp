@@ -25,6 +25,7 @@
 #include "TegraGM20BGpu.h"
 #include "TegraGM20BRail.h"
 #include "TegraGM20BSleep.h"
+#include "shim/include/switch_tiled_cache.h"
 
 extern "C" {
 // NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
@@ -245,6 +246,14 @@ extern "C" int tegra_gm20b_bringup_busy(void)
 				((__atomic_load_n(&gBringupDone, __ATOMIC_ACQUIRE) == 0) ||
 				 (__atomic_load_n(&gSleeping, __ATOMIC_ACQUIRE) != 0) ||
 				 __atomic_load_n(&gRailMoving, __ATOMIC_ACQUIRE) > 0));
+}
+
+extern "C" int switch_tiled_cache_on(void)
+{
+	unsigned off = 0;
+	return static_cast<int>(
+		(PE_parse_boot_argn("switch-no-tiled-cache", &off, sizeof(off)) == 0) ||
+		(off == 0u));
 }
 
 extern "C" void tgm_journal(const char *fmt, ...)

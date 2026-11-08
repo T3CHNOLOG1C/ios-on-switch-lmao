@@ -27,6 +27,7 @@
 #include "TegraGM20BPushScan.h"
 #include "TegraGM20BSchedPolicy.h"
 #include "TegraGM20BSharedWiring.h"
+#include "shim/include/switch_tiled_cache.h"
 using tgm_scan::PushCounts;
 using tgm_scan::PushParse;
 using tgm_scan::scanPush;
@@ -2036,6 +2037,8 @@ IOReturn AGXDeviceUserClient::getInfo(TegraGM20BAbiInfo *out)
 		     TegraGM20BInfoPriority | TegraGM20BInfoKillRecord;
 	if (info.comptag_lines)
 		out->flags |= TegraGM20BInfoCompression;
+	if (switch_tiled_cache_on())
+		out->flags |= TegraGM20BInfoTiledCache;
 	out->chipset = info.chipset;
 	out->device_id = 0;
 	out->gpc_count = info.gpc_count;
