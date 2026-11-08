@@ -51,7 +51,7 @@ def build_package(kind: str, flags: list[str]) -> tuple[Path, Path]:
     options = [f'--//ipsw:kind={KINDS[kind]}', *flags]
     bazel(base, 'build', *options, '//:boot')
     root = Path(bazel(base, 'info', *options, 'execution_root'))
-    package, kernel = bazel(base, 'cquery', *options, '--output=files', '//:boot', '//kernel:prelinked').splitlines()
+    package, kernel = (bazel(base, 'cquery', *options, '--output=files', t) for t in ('//:boot', '//kernel:prelinked'))
     return root / package, root / kernel
 
 
