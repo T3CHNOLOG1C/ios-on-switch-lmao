@@ -62,7 +62,7 @@
 
 - (NSUInteger)minimumLinearTextureAlignmentForPixelFormat:(MTLPixelFormat)format
 {
-    const NSUInteger a = [gRM->fallback minimumLinearTextureAlignmentForPixelFormat:format];
+    const NSUInteger a = NSUInteger(deviceAnswer(@selector(minimumLinearTextureAlignmentForPixelFormat:), format));
     return a ? std::max<NSUInteger>(a, 32) : a;
 }
 

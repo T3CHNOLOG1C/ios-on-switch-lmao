@@ -13,7 +13,8 @@
 // baseline line that is no longer one. Then every zero-argument selector the facade answers zero is sent to its object, and
 // every zero-argument method of an m2v class its facade object lacks (none a kind sends: m2v's own accessors): the rates line
 // must count the first answered zero, the second missing (tw=../f), and no object may have made a twin.
-// Last, the API inventory (selcover_inventory.h): the run fails where it differs from raw/test/inventory.tsv. SELCOVER_WRITE=1
+// Then the raw device's capability answers against m2v's device (selcover_answers.h), and last the API inventory
+// (selcover_inventory.h): the run fails where it differs from raw/test/inventory.tsv. SELCOVER_WRITE=1
 // writes the baseline and the inventory instead; SELCOVER_STRICT=1 is m2v's deletion gate: it fails on any inventory row
 // raw neither answers, reads nor refuses.
 // usage: selcover <pack> <cache> <nvk dylib> <default.metallib> <tree> <tree>/drivers/NativeMetal/abi/kinds/<kind>.json...
@@ -28,6 +29,7 @@
 #include "../runtime/RawMetal.h"
 #include "NativeBridgeMetalFrontend.h"
 #include "bridge/NativeMetalObjects.h"
+#include "selcover_answers.h"
 #include "selcover_inventory.h"
 
 namespace {
@@ -395,11 +397,16 @@ int main(int argc, char **argv)
         const unsigned open = inventory::open(rows);
         printf("inventory: %zu rows, %u neither raw's, read nor refused\n%s", rows.size(), open,
                inventory::totals(rows).c_str());
+        unsigned compared = 0;
+        const unsigned answersDiffer = answers::differ(dev, m2v, compared);
+        printf("device answers: %u compared with m2v's device, %u differ\n", compared, answersDiffer);
         const bool strict = getenv("SELCOVER_STRICT") && open;
-        const bool pass = !added && !gone && zerosOk && !drift && !strict;
-        printf("%s: selcover (%u new gaps, %u baseline lines answered now, %u inventory lines differ%s%s)\n",
-               pass ? "PASS" : "FAIL", added, gone, drift, zerosOk ? "" : ", unanswered selectors miscounted",
-               strict ? ", the deletion gate's rows open" : "");
+        const bool pass = !added && !gone && zerosOk && !drift && !strict && !answersDiffer;
+        printf(
+            "%s: selcover (%u new gaps, %u baseline lines answered now, %u inventory lines differ, %u device answers "
+            "differ%s%s)\n",
+            pass ? "PASS" : "FAIL", added, gone, drift, answersDiffer,
+            zerosOk ? "" : ", unanswered selectors miscounted", strict ? ", the deletion gate's rows open" : "");
         return pass ? 0 : 1;
     }
 }

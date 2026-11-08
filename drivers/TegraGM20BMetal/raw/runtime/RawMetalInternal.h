@@ -236,6 +236,11 @@ uint64_t surfaceWrites(IOSurfaceRef s);
 void noteSurfaceWrite(IOSurfaceRef s);
 void noteSurfaceWrites(RMCommandBuffer *cb, size_t from, size_t to);  // after [from, to) of `cb` was submitted
 
+// RawMetalDeviceAnswers.mm: the per-kind capability answers (raw_device_answers.h) as methods of the device class `cls`, where
+// it has none of its own; and an argument query's answer
+void installDeviceAnswers(Class cls);
+uint64_t deviceAnswer(SEL selector, uint64_t argument);
+
 // RawMetalQueuePriority.mm
 void queuePriorityAdd(RMQueue *queue);
 void queuePriorityRemove(RMQueue *queue);
