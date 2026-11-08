@@ -853,7 +853,9 @@ private:
     struct Ring {
         Bo bo;
         uint64_t head = 0, since = 0;  // next free byte; where the open command buffer's use began
-        bool waited = false;           // an allocation waited for the GPU since the last begin(): it doubles there
+        // No span in flight lies in [head, clear): an allocation there needs no look at them (alloc's scan sets it)
+        uint64_t clear = 0;
+        bool waited = false;  // an allocation waited for the GPU since the last begin(): it doubles there
 
         struct Span {
             uint64_t begin, end;
