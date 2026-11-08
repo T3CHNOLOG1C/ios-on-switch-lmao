@@ -103,6 +103,12 @@ PRODUCT_IDENTITY = (
 # is acoustic-id, which iOS 27's VirtualAudio takes its tunings directory from (J181's 2003:
 # /Library/Audio/Tunings/AID2003). J120 has none and its tunings are named by the model.
 AUDIO_IDENTITY = ('acoustic-id',)
+# libMobileGestalt (21H461 and 24B119 alike) takes the syscfg from /chosen/syscfg-v2-data, else from the
+# AppleDiagnosticDataAccessReadOnly service (Apple's kext over the iPad's NAND, absent here), and otherwise waits 5 s
+# for that service to appear. Without this every syscfg question stalled its asker 5 s: backboardd's display setup,
+# long enough for Core Animation clients (chronod, contextstored, replicatord) to abort in +[CADisplay displays].
+# MobileGestalt reads only the magic ('SCfg') and the entry count: a header of 24 bytes with no entries.
+SYSCFG_EMPTY = struct.pack('<6I', 0x53436667, 24, 24, 0, 0, 0)
 
 
 def adt_parse(data: bytes, pos: int = 0) -> tuple[list, int]:
@@ -203,6 +209,7 @@ def _chosen(tree: list, portrait: bool) -> list:
     # Locally administered addresses; MobileGestalt waits on these when they are missing.
     for index, key in enumerate(('mac-address-wifi0', 'mac-address-bluetooth0', 'mac-address-ethernet0')):
         put(chosen, key, bytes([0x02, 0x1D, 0x5A, 0x00, 0x00, index + 1]))
+    put(chosen, 'syscfg-v2-data', SYSCFG_EMPTY)
     for key in ('certificate-production-status', 'effective-production-status-ap'):
         put(chosen, key, u32(0))
     for key in ('certificate-security-mode', 'effective-security-mode-sep'):

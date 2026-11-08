@@ -133,6 +133,14 @@ class Capabilities(unittest.TestCase):
         self.assertNotIn('function-button_halleffect', buttons)
         self.assertEqual(properties(find(tree, 'product', 'maps'))['3d-maps'], struct.pack('<I', 0))
 
+    def test_syscfg_is_there_and_empty(self):
+        adt_edit = load_adt_edit()
+        tree, _ = adt_edit.adt_parse(adt_edit.ipad_adt(switch_tree()))
+        syscfg = properties(find(tree, 'chosen'))['syscfg-v2-data']
+        self.assertEqual(syscfg[:4], b'gfCS')
+        self.assertEqual(len(syscfg), 24)
+        self.assertEqual(struct.unpack_from('<I', syscfg, 0x14)[0], 0)
+
 
 def h(n: int) -> bytes:
     return bytes([n]) * 20
