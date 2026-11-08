@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 /*
- * Linux kernel API used by the vendored nvkm code, implemented on top of nvxnu.h (shim/xnu_glue.cpp).
+ * Linux kernel API used by the vendored nvkm code, implemented on top of kits/SwitchLinux and nvxnu.h
+ * (shim/xnu_glue.cpp).
  * Original code; nothing here is copied from Linux (the rbtree is a textbook red-black tree using
  * Linux's node layout so nvkm's rb_link_node()/rb_entry() work unchanged).
  */
@@ -13,54 +14,6 @@ struct tegra_sku_info tegra_sku_info;
 const char *dev_name(const struct device *dev)
 {
 	return dev && dev->init_name ? dev->init_name : "gpu";
-}
-
-static void *lazy(void **slot, void *(*alloc)(void), void (*release)(void *))
-{
-	void *have = __atomic_load_n(slot, __ATOMIC_ACQUIRE);
-	if (have)
-		return have;
-	void *fresh = alloc();
-	void *expected = NULL;
-	if (!__atomic_compare_exchange_n(slot, &expected, fresh, false, __ATOMIC_ACQ_REL,
-					 __ATOMIC_ACQUIRE)) {
-		release(fresh);
-		return expected;
-	}
-	return fresh;
-}
-
-static void rw_release(void *rw)
-{
-	(void)rw; /* rare race loser: leak one lock */
-}
-
-void mutex_init(struct mutex *m)
-{
-	m->lck = NULL;
-	lazy(&m->lck, nvxnu_mutex_alloc, nvxnu_mutex_free);
-}
-
-void mutex_destroy(struct mutex *m)
-{
-	if (m->lck)
-		nvxnu_mutex_free(m->lck);
-	m->lck = NULL;
-}
-
-void mutex_lock(struct mutex *m)
-{
-	nvxnu_mutex_lock(lazy(&m->lck, nvxnu_mutex_alloc, nvxnu_mutex_free));
-}
-
-void mutex_unlock(struct mutex *m)
-{
-	nvxnu_mutex_unlock(m->lck);
-}
-
-int mutex_trylock(struct mutex *m)
-{
-	return nvxnu_mutex_trylock(lazy(&m->lck, nvxnu_mutex_alloc, nvxnu_mutex_free));
 }
 
 bool mutex_is_locked(struct mutex *m)
@@ -87,99 +40,12 @@ bool refcount_dec_and_mutex_lock(refcount_t *r, struct mutex *lock)
 	return true;
 }
 
-void spin_lock_init(spinlock_t *s)
-{
-	s->lck = NULL;
-	lazy(&s->lck, nvxnu_spin_alloc, nvxnu_spin_free);
-}
-
-void spin_lock(spinlock_t *s)
-{
-	nvxnu_spin_lock(lazy(&s->lck, nvxnu_spin_alloc, nvxnu_spin_free));
-}
-
-void spin_unlock(spinlock_t *s)
-{
-	nvxnu_spin_unlock(s->lck);
-}
-
-#define RWLOCK_WRITER 0x80000000u
-
-void rwlock_init(rwlock_t *l)
-{
-	__atomic_store_n(&l->state, 0, __ATOMIC_RELAXED);
-}
-
-void read_lock(rwlock_t *l)
-{
-	nvxnu_preempt_disable();
-	unsigned int seen = __atomic_load_n(&l->state, __ATOMIC_RELAXED);
-	while ((seen & RWLOCK_WRITER) ||
-	       !__atomic_compare_exchange_n(&l->state, &seen, seen + 1, true, __ATOMIC_ACQUIRE,
-					    __ATOMIC_RELAXED)) {
-		cpu_relax();
-		seen = __atomic_load_n(&l->state, __ATOMIC_RELAXED);
-	}
-}
-
-void read_unlock(rwlock_t *l)
-{
-	__atomic_sub_fetch(&l->state, 1, __ATOMIC_RELEASE);
-	nvxnu_preempt_enable();
-}
-
-void write_lock(rwlock_t *l)
-{
-	nvxnu_preempt_disable();
-	unsigned int idle = 0;
-	while (!__atomic_compare_exchange_n(&l->state, &idle, RWLOCK_WRITER, true, __ATOMIC_ACQUIRE,
-					    __ATOMIC_RELAXED)) {
-		cpu_relax();
-		idle = 0;
-	}
-}
-
-void write_unlock(rwlock_t *l)
-{
-	__atomic_store_n(&l->state, 0, __ATOMIC_RELEASE);
-	nvxnu_preempt_enable();
-}
-
-void init_rwsem(struct rw_semaphore *s)
-{
-	s->lck = NULL;
-	lazy(&s->lck, nvxnu_rw_alloc, rw_release);
-}
-
-void down_read(struct rw_semaphore *s)
-{
-	nvxnu_rw_lock_shared(lazy(&s->lck, nvxnu_rw_alloc, rw_release));
-}
-
-void up_read(struct rw_semaphore *s)
-{
-	nvxnu_rw_unlock_shared(s->lck);
-}
-
-void down_write(struct rw_semaphore *s)
-{
-	nvxnu_rw_lock_exclusive(lazy(&s->lck, nvxnu_rw_alloc, rw_release));
-}
-
-void up_write(struct rw_semaphore *s)
-{
-	nvxnu_rw_unlock_exclusive(s->lck);
-}
-
-unsigned long nvxnu_jiffies(void)
-{
-	return (unsigned long)(nvxnu_nanotime() / (NSEC_PER_SEC / HZ));
-}
-
 long schedule_timeout(long timeout)
 {
-	if (timeout > 0 && timeout != MAX_SCHEDULE_TIMEOUT)
-		nvxnu_usleep((u32)(timeout * (USEC_PER_SEC / HZ)));
+	if (timeout > 0 && timeout != MAX_SCHEDULE_TIMEOUT) {
+		const u64 us = (u64)timeout * (USEC_PER_SEC / HZ);
+		switch_linux_usleep_range(us, us);
+	}
 	return 0;
 }
 
@@ -190,8 +56,8 @@ void nvxnu_work_trampoline(void *work)
 }
 
 /* request_irq() only records the handler; nvxnu_poll_irqs() runs it in thread context, from the GPU interrupt work
- * loop (shim/xnu_glue.cpp) and nowhere else. Never from primary interrupt context: nvkm's handlers take
- * lck_spin/lck_mtx based locks that are not IRQ-safe here. */
+ * loop (shim/xnu_glue.cpp) and nowhere else. Never from primary interrupt context: nvkm's handlers take mutexes
+ * (lck_mtx) as well as spinlocks. */
 static struct {
 	irq_handler_t handler;
 	void *dev;
@@ -281,7 +147,7 @@ void *krealloc(const void *p, size_t s, gfp_t g)
 	}
 	d = kmalloc(s, g);
 	if (d && p) {
-		size_t old = nvxnu_malloc_size((void *)p);
+		size_t old = switch_linux_malloc_size(p);
 		memcpy(d, p, old < s ? old : s);
 		kfree(p);
 	}
@@ -1092,12 +958,12 @@ void dma_unmap_sgtable(struct device *d, struct sg_table *t, enum dma_data_direc
 
 void __iomem *ioremap(phys_addr_t pa, size_t size)
 {
-	return (void __iomem *)nvxnu_ioremap(pa, size, 0);
+	return (void __iomem *)switch_linux_ioremap(pa, size, 0);
 }
 
 void __iomem *ioremap_wc(phys_addr_t pa, size_t size)
 {
-	return (void __iomem *)nvxnu_ioremap(pa, size, 1);
+	return (void __iomem *)switch_linux_ioremap(pa, size, 1);
 }
 
 void iounmap(volatile void __iomem *va)

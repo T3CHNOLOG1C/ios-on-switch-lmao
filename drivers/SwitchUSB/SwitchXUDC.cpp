@@ -680,7 +680,7 @@ void SwitchXUDC::handleControlRequestStateChange(int, int newState)
     const DmaBuffer &buffer = ep0Buffer;
     if (newState == kStateOutData || newState == kStateOutDataLong) {
         ep0Length = request->setupLength() < buffer.size ? request->setupLength() : buffer.size;
-        cacheFlush(buffer.va, ep0Length ? ep0Length : 1);
+        switch_dcache_clean_invalidate(buffer.va, ep0Length ? ep0Length : 1);
         stage = Stage::DataOut;
         ep0Trb = hw.push(0, buffer.pa, ep0Length, trbType(TRB_DATA) | TRB_ISP | TRB_IOC);
         hw.doorbell(0, sequence);
@@ -722,7 +722,7 @@ void SwitchXUDC::ep0Kick()
             finish(request, kIOReturnDMAError, 0);
             continue;
         } else {
-            cacheFlush(ep0Buffer.va, length ? length : 1);
+            switch_dcache_clean_invalidate(ep0Buffer.va, length ? length : 1);
             stage = Stage::DataIn;
             ep0Length = length;
             ep0Trb = hw.push(0, ep0Buffer.pa, length, trbType(TRB_DATA) | TRB_ISP | TRB_IOC | TRB_DIR_IN);
@@ -753,7 +753,7 @@ void SwitchXUDC::ep0Complete(const Event &e)
         break;  // -> state 1
     case Stage::DataOut:
         if (ok && control) {
-            cacheFlush(buffer.va, actual ? actual : 1);
+            switch_dcache_clean_invalidate(buffer.va, actual ? actual : 1);
             control->inputDataPacket(buffer.va, actual);
         }
         break;
@@ -976,7 +976,7 @@ SwitchXUDC::Admit SwitchXUDC::admit(uint32_t dci, Request &r)
         piece.pa = pool.pa + page * kBouncePageBytes;
         if (!out)
             requestRead(r, r.md, piece.offset, va, piece.length);
-        cacheFlush(va, piece.length ? piece.length : 1);
+        switch_dcache_clean_invalidate(va, piece.length ? piece.length : 1);
     }
     if (r.length)
         requestSync(r, r.md, 0, r.length, out);
@@ -1017,7 +1017,7 @@ void SwitchXUDC::releaseTrbs(uint32_t dci, const Tds::Td &td, Request &r, bool c
             uint8_t *va = pool.va + (pa - pool.pa);
             if (copyBack && offset < actual) {
                 const uint32_t got = actual - offset < length ? actual - offset : length;
-                cacheFlush(va, got);
+                switch_dcache_clean_invalidate(va, got);
                 requestWrite(r, r.md, offset, va, got);
             }
             poolGive(pa);
@@ -1087,7 +1087,7 @@ void SwitchXUDC::serialPiece(uint32_t dci)
         complete(dci, kIOReturnDMAError, 0, nullptr);
         return;
     }
-    cacheFlush(ep.serial.va, piece ? piece : 1);
+    switch_dcache_clean_invalidate(ep.serial.va, piece ? piece : 1);
     ep.serialLength = piece;
     const uint32_t index = hw.pushData(dci, ep.serial.pa, piece, 0, trbType(TRB_NORMAL) | TRB_ISP | TRB_IOC);
     ep.tds->push({static_cast<uint16_t>(index), 1, piece, false});
@@ -1111,7 +1111,7 @@ void SwitchXUDC::serialEvent(uint32_t dci, const Decision &d)
     const uint32_t actual = d.outcome == Outcome::Done && d.actual <= ep.serialLength ? d.actual : 0;
     IOReturn status = statusOf(d.outcome);
     if (status == kIOReturnSuccess && !ep.in && actual) {
-        cacheFlush(ep.serial.va, actual);
+        switch_dcache_clean_invalidate(ep.serial.va, actual);
         if (r.md->writeBytes(r.done, ep.serial.va, actual) != actual)
             status = kIOReturnDMAError;
     }
@@ -1357,7 +1357,7 @@ SwitchXUDC::Admit SwitchXUDC::admitIsoc(uint32_t dci, Request &r)
         piece.pa = pool.pa + page * kBouncePageBytes;
         if (!out)
             requestRead(r, r.md, piece.offset, va, piece.length);
-        cacheFlush(va, piece.length);
+        switch_dcache_clean_invalidate(va, piece.length);
     }
     if (r.length)
         requestSync(r, r.md, 0, r.length, out);
@@ -1418,7 +1418,7 @@ void SwitchXUDC::completeIsoc(uint32_t dci, uint64_t now)
         if (f.length && inPool(pa)) {
             uint8_t *va = pool.va + (pa - pool.pa);
             if (!ep.in && f.actual) {
-                cacheFlush(va, f.actual);
+                switch_dcache_clean_invalidate(va, f.actual);
                 requestWrite(r, r.md, offset, va, f.actual);
             }
             poolGive(pa);

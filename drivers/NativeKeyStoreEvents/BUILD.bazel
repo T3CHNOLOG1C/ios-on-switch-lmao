@@ -43,5 +43,6 @@ kernel_driver(
     ],
     hdr_deps = [
         "drivers/TegraSE",
+        "kits/SwitchDMA",
     ],
 )

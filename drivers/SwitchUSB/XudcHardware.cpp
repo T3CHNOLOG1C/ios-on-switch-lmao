@@ -174,15 +174,6 @@ inline void barrier()
 }
 }  // namespace
 
-void cacheFlush(const volatile void *p, size_t n)
-{
-    uintptr_t at = reinterpret_cast<uintptr_t>(p) & ~static_cast<uintptr_t>(63);
-    const uintptr_t end = reinterpret_cast<uintptr_t>(p) + n;
-    for (; at < end; at += 64)
-        __asm__ volatile("dc civac, %0" ::"r"(at) : "memory");
-    barrier();
-}
-
 bool DmaBuffer::allocate(uint32_t bytes)
 {
     md = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task,
@@ -198,7 +189,7 @@ bool DmaBuffer::allocate(uint32_t bytes)
     pa = static_cast<uint32_t>(physical);
     size = bytes;
     bzero(va, bytes);
-    cacheFlush(va, bytes);
+    switch_dcache_clean_invalidate(va, bytes);
     return true;
 }
 
@@ -460,7 +451,7 @@ void Hardware::disconnect()
 bool Hardware::nextEvent(Event &event)
 {
     volatile uint32_t *e = reinterpret_cast<volatile uint32_t *>(events.va) + static_cast<size_t>(eventIndex) * 4;
-    cacheFlush(e, 16);
+    switch_dcache_clean_invalidate(e, 16);
     const uint32_t d3 = e[3];
     if ((d3 & TRB_CYCLE) != eventCycle)
         return false;
@@ -475,11 +466,11 @@ bool Hardware::nextEvent(Event &event)
     return true;
 }
 
-// The CPU never writes the event ring: cacheFlush's clean of a dirty line would overwrite events written since.
+// The CPU never writes the event ring: the clean of a dirty line would overwrite events written since.
 bool Hardware::eventPending() const
 {
     volatile uint32_t *e = reinterpret_cast<volatile uint32_t *>(events.va) + static_cast<size_t>(eventIndex) * 4;
-    cacheFlush(e, 16);
+    switch_dcache_clean_invalidate(e, 16);
     return (e[3] & TRB_CYCLE) == eventCycle;
 }
 
@@ -523,13 +514,13 @@ void Hardware::resetEp0()
 {
     const Ring &ring = rings[0];
     volatile uint32_t *c = context(0);
-    cacheFlush(c, 64);
+    switch_dcache_clean_invalidate(c, 64);
     c[2] = ((ring.pa + ring.enqueue * 16) & ~0xfu) | ring.cycle;
     c[3] = 0;
     c[5] &= 0x00ffffffu;                      // rsvd, partial_td, splitxstate, seq_num
     c[11] &= ~0x7fu;                          // device address
     c[1] = (c[1] & 0x0000ffffu) | 64u << 16;  // max packet 64 below SuperSpeed
-    cacheFlush(c, 64);
+    switch_dcache_clean_invalidate(c, 64);
     xw(CTRL, xr(CTRL) & ~(0x7fu << 24));
     if (const uint32_t halted = xr(EP_HALT)) {  // Linux ep_unhalt_all
         xw(EP_HALT, 0);
@@ -615,7 +606,7 @@ void Hardware::resetRing(uint32_t dci)
     link[3] = trbType(TRB_LINK) | TRB_TOGGLE;
     ring.enqueue = 0;
     ring.cycle = 1;
-    cacheFlush(ring.trb, static_cast<size_t>(ring.trbs) * 16);
+    switch_dcache_clean_invalidate(ring.trb, static_cast<size_t>(ring.trbs) * 16);
 }
 
 // hekate xusb_ep_ctx_t / Linux tegra_xudc_ep_context_setup: state running, CErr/CEC 3, dequeue = ring start with
@@ -649,7 +640,7 @@ bool Hardware::initEndpoint(uint32_t dci, uint32_t type, uint32_t maxPacket, uin
     c[4] = average | esit << 16;
     c[6] = 3u << 18;
     c[11] = address;
-    cacheFlush(c, 64);
+    switch_dcache_clean_invalidate(c, 64);
     return true;
 }
 
@@ -693,9 +684,9 @@ bool Hardware::halted(uint32_t dci)
 void Hardware::disableEndpoint(uint32_t dci)
 {
     volatile uint32_t *c = context(dci);
-    cacheFlush(c, 64);
+    switch_dcache_clean_invalidate(c, 64);
     c[0] &= ~7u;
-    cacheFlush(c, 64);
+    switch_dcache_clean_invalidate(c, 64);
     xw(EP_RELOAD, 1u << dci);
     (void)waitBits(xudc, EP_RELOAD, 1u << dci, 0, 1000);
 }
@@ -705,14 +696,14 @@ void Hardware::disableEndpoint(uint32_t dci)
 void Hardware::resetSequence(uint32_t dci)
 {
     volatile uint32_t *c = context(dci);
-    cacheFlush(c, 64);
+    switch_dcache_clean_invalidate(c, 64);
     c[0] &= ~7u;
-    cacheFlush(c, 64);
+    switch_dcache_clean_invalidate(c, 64);
     (void)reloadEndpoint(dci);
-    cacheFlush(c, 64);
+    switch_dcache_clean_invalidate(c, 64);
     c[0] = (c[0] & ~7u) | 1;
     c[5] &= 0x00ffffffu;  // rsvd, partial_td, splitxstate, seq_num
-    cacheFlush(c, 64);
+    switch_dcache_clean_invalidate(c, 64);
     (void)reloadEndpoint(dci);
     toggleBit(EP_PAUSE, dci, false);
     toggleBit(EP_HALT, dci, false);
@@ -726,11 +717,11 @@ void Hardware::dropQueued(uint32_t dci)
     toggleBit(EP_PAUSE, dci, true);
     (void)waitBits(xudc, EP_THREAD_ACTIVE, 1u << dci, 0, 1000);
     volatile uint32_t *c = context(dci);
-    cacheFlush(c, 64);
+    switch_dcache_clean_invalidate(c, 64);
     c[2] = ((ring.pa + ring.enqueue * 16) & ~0xfu) | ring.cycle;
     c[3] = 0;
     c[5] &= 0xf8000000u;  // keep seq_num; clear edtla, rsvd, partial_td, splitxstate
-    cacheFlush(c, 64);
+    switch_dcache_clean_invalidate(c, 64);
     xw(EP_RELOAD, 1u << dci);
     (void)waitBits(xudc, EP_RELOAD, 1u << dci, 0, 1000);
     toggleBit(EP_PAUSE, dci, false);
@@ -753,11 +744,11 @@ uint32_t Hardware::pushData(uint32_t dci, uint64_t bufferPA, uint32_t length, ui
     t[1] = static_cast<uint32_t>(bufferPA >> 32);
     t[2] = (length & 0x1ffff) | (tdSize > 31 ? 31 : tdSize) << 17;
     t[3] = flags | ring.cycle;
-    cacheFlush(t, 16);
+    switch_dcache_clean_invalidate(t, 16);
     if (++ring.enqueue == ring.trbs - 1) {
         volatile uint32_t *link = ring.trb + static_cast<size_t>(ring.enqueue) * 4;
         link[3] = linkControl(link[3], flags, ring.cycle);
-        cacheFlush(link, 16);
+        switch_dcache_clean_invalidate(link, 16);
         ring.enqueue = 0;
         ring.cycle ^= 1;
     }
@@ -784,9 +775,9 @@ void Hardware::setAddress(uint32_t address)
 {
     xw(CTRL, (xr(CTRL) & ~(0x7fu << 24)) | (address & 0x7f) << 24);
     volatile uint32_t *c = context(0);
-    cacheFlush(c, 64);
+    switch_dcache_clean_invalidate(c, 64);
     c[11] = (c[11] & ~0x7fu) | (address & 0x7f);
-    cacheFlush(c, 64);
+    switch_dcache_clean_invalidate(c, 64);
 }
 
 void Hardware::run()

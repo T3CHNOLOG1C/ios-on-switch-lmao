@@ -137,6 +137,7 @@
 #include <string.h>
 #include "SwitchBluetooth.h"
 #include "SwitchBluetoothLeFilter.h"
+#include "../../kits/SwitchDMA/SwitchDcache.h"
 #include "../../kits/SwitchRefusal/SwitchRefusal.h"
 #include "SwitchBluetoothLinks.h"
 #include "SwitchBluetoothRxDma.h"
@@ -1387,11 +1388,7 @@ bool SwitchBluetooth::fillTx()
         const uint32_t run = head - tail < kRingBytes - at ? head - tail : kRingBytes - at;
         if (!(at & 3) && run >= 16) {
             txDmaBytes = run & ~15u;
-            for (uintptr_t line = reinterpret_cast<uintptr_t>(tx.data + at) & ~static_cast<uintptr_t>(63),
-                           end = reinterpret_cast<uintptr_t>(tx.data + at + txDmaBytes);
-                 line < end; line += 64)
-                __asm__ volatile("dc cvac, %0" ::"r"(line) : "memory");
-            __asm__ volatile("dsb sy" ::: "memory");
+            switch_dcache_clean(tx.data + at, txDmaBytes);
             if (ier & IER_THRI) {
                 ier &= ~IER_THRI;
                 w32(uart, IER, ier);
@@ -1504,11 +1501,7 @@ bool SwitchBluetooth::takeRxDmaLocked(uint32_t movedBytes, bool ended)
     const uint32_t n = count < room ? count : room;
     if (n) {
         const uint32_t *words = reinterpret_cast<const uint32_t *>(rxBuf.va) + rxDmaTaken;
-        for (uintptr_t line = reinterpret_cast<uintptr_t>(words) & ~static_cast<uintptr_t>(63),
-                       end = reinterpret_cast<uintptr_t>(words + n);
-             line < end; line += 64)
-            __asm__ volatile("dc civac, %0" ::"r"(line) : "memory");
-        __asm__ volatile("dsb sy" ::: "memory");
+        switch_dcache_clean_invalidate(words, static_cast<size_t>(n) * sizeof(*words));
         if (!rxDmaChecked && !rxFrame.lost) {
             rxDmaChecked = true;
             const uint8_t type = static_cast<uint8_t>(words[0]);
