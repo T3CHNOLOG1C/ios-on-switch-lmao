@@ -27,7 +27,9 @@ def entry_bytes(entries: list[dict]) -> bytearray:
         raise ValueError(f'{len(entries)} set-0 entries: a pipeline holds {PACK_ENTRIES}')
     ents = bytearray()
     for e in entries:
-        if e['kind'] == 'ubo':
+        if e['kind'] == 'color_table':  # raw_pack.h EntryColorTable
+            ents += struct.pack('<HBBBBBB', e['off'], 5, 2, 0, 0, 0, 0)
+        elif e['kind'] == 'ubo':
             ents += struct.pack(
                 '<HBBBBH',
                 e['off'],
@@ -216,7 +218,8 @@ def write_json(path: str, pack: Pack, varying: list[int]) -> None:
 
 
 def entry_kind(e: dict) -> str:
-    return 'u' if e['kind'] == 'ubo' else ('h' if e.get('smp') else 't')  # t: a handle whose sampler is unused
+    # u: a buffer descriptor (the colour table's too), t: a handle whose sampler is unused
+    return 'u' if e['kind'] in ('ubo', 'color_table') else ('h' if e.get('smp') else 't')
 
 
 def write_layouts(path: str, pack: Pack) -> None:

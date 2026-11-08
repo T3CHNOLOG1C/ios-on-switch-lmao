@@ -973,7 +973,7 @@ private:
     Pack pack_;
     // heap_: the shader heap's GPU VA reservation (bytes: the program window), bound from its start (heapBound_) in parts of
     // host memory as programs are placed
-    Bo heap_, tic_, tsc_, root_, zero_, tickets_;
+    Bo heap_, tic_, tsc_, root_, zero_, tickets_, colorTable_;
 
     struct HeapPart {
         uint64_t offset = 0, bytes = 0;  // in the heap

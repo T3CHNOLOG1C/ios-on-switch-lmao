@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstring>
 #include "raw_owned.h"
+#include "raw_srgb_table.h"
 
 namespace raw {
 namespace {
@@ -156,7 +157,7 @@ enum class Smp : uint8_t {
 
 struct LayoutEntry {
     uint32_t offset = 0;
-    bool buffer = false;
+    bool buffer = false, colorTable = false;
     uint8_t stage = 0, slot = 0;  // a buffer's
     Tex tex = Tex::None;
     Smp smp = Smp::None;
@@ -194,6 +195,18 @@ Smp samplerKind(const std::array<uint32_t, 8> &t, uint8_t &slot)
     return Smp::Slot;
 }
 
+// layouts.py buffer_entry's colour table: a descriptor of its size over its words (as many as the capture read)
+bool isColorTable(const std::vector<uint32_t> &pw, uint32_t size)
+{
+    static const std::vector<uint32_t> table = [] {
+        std::vector<uint32_t> w(kColorTableBytes / 4);
+        colorTableWords(w.data());
+        return w;
+    }();
+    return size == kColorTableBytes && !pw.empty() && pw.size() <= table.size() &&
+           std::equal(pw.begin(), pw.end(), table.begin());
+}
+
 // layouts.py layout: set 0's entries; false: a problem (`why`)
 bool layout(const nvdec::ProbeSubmission &s, uint32_t index, std::vector<LayoutEntry> &out, std::string &why)
 {
@@ -204,6 +217,14 @@ bool layout(const nvdec::ProbeSubmission &s, uint32_t index, std::vector<LayoutE
             if (const auto p = r.setPointers[0].find(uint32_t(o * 4)); p != r.setPointers[0].end()) {
                 const std::vector<uint32_t> &pw = p->second.words;
                 const uint32_t stage = pw.size() > 1 ? pw[0] >> 8 & 0xFF : 0;
+                if (o + 2 < words.size() && isColorTable(pw, words[o + 2])) {
+                    LayoutEntry e;
+                    e.offset = uint32_t(o * 4);
+                    e.colorTable = true;
+                    out.push_back(e);
+                    o += 4;
+                    continue;
+                }
                 if (pw.size() < 2 || pw[0] >> 16 != kTagBuffer || pw[1] != index || (stage != 1 && stage != 2)) {
                     why = "untagged pointer at " + std::to_string(o * 4) + " (" + hex(pw.empty() ? 0 : pw[0]) + ")";
                     return false;
@@ -471,7 +492,9 @@ bool makeRecord(const ProbeRuns &runs, const PackRules &rules, const ProgramLook
                                        residuals = residualWords(runs.bytes256, runs.bound);
     for (const LayoutEntry &e : layoutEntries) {
         PackEntry &entry = p.entry[p.entries++];
-        if (e.buffer)
+        if (e.colorTable)
+            entry = {uint16_t(e.offset), EntryColorTable, 2, 0, 0, 0, 0};
+        else if (e.buffer)
             entry = bufferEntry(e, sizes16, sizes4096, residuals);
         else if (!handleEntry(e, r, rules, out, entry, why))
             return false;

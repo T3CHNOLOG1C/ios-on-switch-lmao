@@ -514,6 +514,8 @@ def pipeline(
     entries = [
         buffer_entry(e, (p['bucket'], p['index']), sizes, p.get('residuals', {}))
         if e[1] == 'ubo'
+        else {'off': e[0], 'kind': 'color_table'}
+        if e[1] == 'color_table'
         else handle_entry(e, r['tsc'], constexpr_tsc, problems)
         for e in ents
     ]
