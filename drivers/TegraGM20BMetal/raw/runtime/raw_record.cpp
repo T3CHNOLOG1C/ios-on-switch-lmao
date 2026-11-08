@@ -66,6 +66,7 @@ bool interlocked(const nvdec::ProbeSubmission &s)
 // mkpack.py skip_reason
 bool skipReason(const nvdec::ProbeSubmission &s, std::string &why)
 {
+    why.clear();
     if (s.draws != 1 && !s.dispatches && interlocked(s))
         why = "storage form through a scratch, m2v copying the color in and out around it";
     else if (s.draws != 1)

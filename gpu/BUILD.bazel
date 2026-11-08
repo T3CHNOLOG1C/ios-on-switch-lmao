@@ -169,7 +169,9 @@ metal_plugin(
         GM20B_METAL + ":raw/runtime/raw_compiler.cpp",
         GM20B_METAL + ":raw/runtime/raw_metallib.cpp",
         GM20B_METAL + ":raw/runtime/raw_completed.cpp",
+        GM20B_METAL + ":raw/runtime/raw_compute.cpp",
         GM20B_METAL + ":raw/pack/nvdec.cpp",
+        GM20B_METAL + ":raw/pack/nvdec_compute.cpp",
     ],
     frameworks = [
         "Foundation",

@@ -70,6 +70,10 @@ Only those three spellings count. Anything else gives 1, the plain path with non
 log says `SwitchUIScale: switch-ui-scale=1.60 is not 1, 1.25 or 1.6: scale 1` (with your value), so a typo is easy
 to spot.
 
+`switch-luma-compute=1` (iOS 27) lets Core Animation measure its luma-tracking backdrops with compute kernels instead of
+a mipmapped copy. The raw GPU path runs only the dispatch shapes its pack holds, and a debug boot's shader journal
+records the ones Core Animation uses, so this exists to collect them.
+
 Both builds' own line is `-apfs_shared_datavolume`: Apple's AppleKeyStore reads it, and its other source, the ADT's
 `/filesystems e-apfs`, would also switch apfs.kext into a mode that hasn't run here yet.
 
