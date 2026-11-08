@@ -3,7 +3,7 @@ only the steps it reaches:
 
     boot_args.py ............................ boot-args.txt
     overlay.py plan  (manifest) ............. overlay-plan.json
-    adt_edit.py      (board ADT, plan, iOS 27 cache list and os trust module) ... ios.adt
+    adt_edit.py      (board ADT, Apple's tree of the IPSW's iPad, plan, iOS 27 cache list and os trust module) ... ios.adt
     overlay.py trust (plan, Mach-Os) ........ overlay.trustcache
     trust.py         (IPSW, overlay, GPU, iOS 27 pretranslated) ... trustcache.bundle
     build_native_loader.py layout (kernel, ADT, bundle, seed, boot-args)
@@ -32,7 +32,7 @@ refuses it unless this window's constants.json (everything the loader compiles i
 
 load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
 load("//ipsw:defs.bzl", "PretranslatedPinsInfo")
-load("//ipsw:ipsw.bzl", "ios_version", "jetsam_properties_product", "kernel_virt_base", "os_volume_uuid")
+load("//ipsw:ipsw.bzl", "ios_version", "kernel_virt_base", "os_volume_uuid")
 
 # Xcode's tools: macOS only, never on a remote executor (Xcode cannot be shipped there); the results may be cached
 # remotely (the key includes @xcode//:identity).
@@ -202,11 +202,11 @@ def _boot_package_impl(ctx):
     adt = out("ios.adt")
     args = ctx.actions.args()
     args.add("--adt", ctx.file.adt)
+    args.add("--apple-adt", ctx.file._apple_adt)
     args.add("--overlay-plan", plan)
     args.add("--bt-patch", ctx.file.bt_patch)
     args.add("--portrait-header", ctx.file.portrait_header)
     args.add("--root-volume-uuid", os_volume_uuid(ctx.attr._kind[BuildSettingInfo].value))
-    args.add("--jetsam-properties-product", jetsam_properties_product(ctx.attr._kind[BuildSettingInfo].value))
     if smp:
         args.add("--smp")
 
@@ -215,7 +215,7 @@ def _boot_package_impl(ctx):
     if manifest_hash:
         args.add("--boot-manifest-hash")
     pretranslated = ctx.attr.pretranslated[PretranslatedPinsInfo]
-    adt_inputs = [ctx.file.adt, plan, ctx.file.bt_patch, ctx.file.portrait_header]
+    adt_inputs = [ctx.file.adt, ctx.file._apple_adt, plan, ctx.file.bt_patch, ctx.file.portrait_header]
     if pretranslated.cache_list:
         args.add("--a64x-cache-pretranslated", pretranslated.cache_list)
         adt_inputs.append(pretranslated.cache_list)
@@ -388,6 +388,7 @@ boot_package = rule(
         "ini": attr.label(mandatory = True, allow_single_file = True, doc = "bootloader/ini/ios.ini"),
         "kernel": attr.label(mandatory = True, allow_single_file = True),
         "adt": attr.label(mandatory = True, allow_single_file = True, doc = "the board ADT (//boot:adt)"),
+        "_apple_adt": attr.label(default = "//ipsw:device_tree", allow_single_file = True),
         "static_trust": attr.label(mandatory = True, allow_single_file = True),
         "app_trust": attr.label(mandatory = True, allow_single_file = True),
         "data_seed": attr.label(mandatory = True, allow_single_file = True),

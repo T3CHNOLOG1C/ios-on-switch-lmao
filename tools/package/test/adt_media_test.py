@@ -1,8 +1,9 @@
-"""adt_edit.py's ipad_adt over a minimal Switch tree: J120's answers to what iOS reads before it uses a feature."""
+"""adt_edit.py over a minimal Switch tree: the IPSW's own iPad's answers to what iOS reads before it uses a feature."""
 
 import importlib.util
 import struct
 import unittest
+from pathlib import Path
 from types import ModuleType
 
 from python.runfiles import runfiles
@@ -29,42 +30,71 @@ def switch_tree() -> bytes:
     return node([prop('name', b'device-tree\0'), prop('compatible', b'nvidia,fric\0nintendo,nx\0')], [arm_io])
 
 
+def apple_tree() -> bytes:
+    """Apple's device tree of the selected IPSW kind's iPad (//ipsw:device_tree)."""
+    return Path(runfiles.Create().Rlocation('_main/ipsw/device_tree.adt')).read_bytes()
+
+
+def properties(node: list) -> dict[str, bytes]:
+    return {p[0]: p[2] for p in node[0]}
+
+
 def find(tree: list, *path: str) -> list:
     for name in path:
         tree = next(c for c in tree[1] if any(p[0] == 'name' and p[2] == name.encode() + b'\0' for p in c[0]))
     return tree
 
 
+# The iPads the pinned IPSW kinds are for: model -> (platform-name, chip-id, soc-generation).
+SOCS = {b'iPad7,1\0': (b't8011\0', 0x8011, b'H9\0'), b'iPad12,1\0': (b't8030\0', 0x8030, b'H12\0')}
+
+
 class MediaKeys(unittest.TestCase):
-    def test_arm_io_has_j120s_iommu_present_and_soc_generation(self):
+    def test_arm_io_has_iommu_present(self):
         adt_edit = load_adt_edit()
         tree, _ = adt_edit.adt_parse(adt_edit.ipad_adt(switch_tree()))
-        props = {p[0]: p[2] for p in find(tree, 'arm-io')[0]}
-        self.assertIn('iommu-present', props)
+        props = properties(find(tree, 'arm-io'))
         self.assertEqual(props['iommu-present'], b'')
-        self.assertEqual(props['soc-generation'], b'H9\0')
         self.assertEqual(props['device_type'], b'nvidia,tegra210b01\0')
 
 
+class Identity(unittest.TestCase):
+    def setUp(self):
+        self.adt_edit = load_adt_edit()
+        self.apple, _ = self.adt_edit.adt_parse(apple_tree())
+        adt = self.adt_edit.with_ipad_identity(self.adt_edit.ipad_adt(switch_tree()), apple_tree())
+        self.tree, _ = self.adt_edit.adt_parse(adt)
+
+    def test_root_is_apples_ipad_before_the_switch(self):
+        root, apple = properties(self.tree), properties(self.apple)
+        for key in ('model', 'target-type', 'target-sub-type'):
+            self.assertEqual(root[key], apple[key], key)
+        board = apple['compatible'].split(b'\0')[0]
+        self.assertEqual(root['compatible'], board + b'\0nvidia,fric\0nintendo,nx\0')
+
+    def test_soc_is_the_ipads(self):
+        platform, chip, generation = SOCS[properties(self.apple)['model']]
+        self.assertEqual(properties(self.tree)['platform-name'], platform)
+        self.assertEqual(properties(find(self.tree, 'chosen'))['chip-id'], struct.pack('<I', chip))
+        self.assertEqual(properties(find(self.tree, 'arm-io'))['soc-generation'], generation)
+        self.assertEqual(properties(find(self.apple, 'arm-io'))['soc-generation'], generation)
+
+    def test_product_is_apples_but_the_gamut(self):
+        product, apple = properties(find(self.tree, 'product')), properties(find(self.apple, 'product'))
+        for key in self.adt_edit.PRODUCT_IDENTITY:
+            self.assertEqual(product.get(key), apple.get(key), key)
+        self.assertEqual(product['model'], properties(self.apple)['model'])
+        self.assertEqual(product['artwork-display-gamut'], b'sRGB\0')
+
+
 class Capabilities(unittest.TestCase):
-    def test_root_and_product_carry_j120s_answers(self):
+    def test_buttons_and_maps(self):
         adt_edit = load_adt_edit()
         tree, _ = adt_edit.adt_parse(adt_edit.ipad_adt(switch_tree()))
-        root = {p[0]: p[2] for p in tree[0]}
-        self.assertEqual(root['platform-name'], b't8011\0')
-        self.assertEqual(root['target-sub-type'], b'J120AP\0')
-        product = {p[0]: p[2] for p in find(tree, 'product')[0]}
-        self.assertEqual(product['bluetooth-le'], struct.pack('<I', 1))
-        for key in ('ui-pip', 'ui-pinned-app', 'ui-floating-live-app', 'ui-overlay-app'):
-            self.assertEqual(product[key], b'', key)
-        self.assertEqual(product['itunes-min-ver'], struct.pack('<I', 0xC0500))
-        self.assertEqual(product['wifi-chipset'], b'4355\0')
-        self.assertEqual(product['product-name'], b'iPad Pro (12.9-inch) (2nd generation)\0')
-        buttons = {p[0]: p[2] for p in find(tree, 'buttons')[0]}
+        buttons = properties(find(tree, 'buttons'))
         self.assertIn('function-button_volup', buttons)
         self.assertNotIn('function-button_halleffect', buttons)
-        maps = {p[0]: p[2] for p in find(tree, 'product', 'maps')[0]}
-        self.assertEqual(maps['3d-maps'], struct.pack('<I', 0))
+        self.assertEqual(properties(find(tree, 'product', 'maps'))['3d-maps'], struct.pack('<I', 0))
 
 
 if __name__ == '__main__':
