@@ -236,6 +236,7 @@ EXPECTED_SKIPS = (
     'as a uniform buffer the layout does not name',
     'set-0 entries',
     "a buffer of m2v's own",
+    'no fragment stage',
 )
 # raw_pack.h kNoSlot: a texture3d argument's Metal index, which the probe cannot tell (m2v binds its own 3D view there)
 NO_SLOT = 0xFF
@@ -297,6 +298,8 @@ def record_reason(records: list[dict]) -> str | None:
     r = records[0]
     if any(v[2] != 'known' for v in r['prog'].values()):
         return 'unknown program'
+    if sorted(r['prog']) == [1]:
+        return 'no fragment stage'
     if sorted(r['prog']) != [1, 5]:
         return f'stages {sorted(r["prog"])}'
     return None
