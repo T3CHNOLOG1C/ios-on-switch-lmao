@@ -1365,6 +1365,8 @@ void Decoder::draw(const char *kind, uint32_t first, uint32_t count)
             l += b;
         }
         fprintf(out_, "%s\n", l.c_str());
+        // sampler header 0, which a handle naming no sampler names: NVK's texel-fetch sampler on every GPU (nvk_device.c)
+        fprintf(out_, "  tsc0=%s\n", tscEntry(0).c_str());
     }
     // render targets and depth target by name
     for (uint32_t j = 0; j < 8; j++) {

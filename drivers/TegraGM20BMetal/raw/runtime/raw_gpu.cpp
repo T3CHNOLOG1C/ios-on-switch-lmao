@@ -442,6 +442,12 @@ bool Device::init(std::string &err)
     t0[4] = 0xe2840000;
     t0[5] = 0x80000000;
     t0[7] = 0x80000001;
+    // sampler header 0: NVK's texel-fetch sampler (nvk_txf_sampler_header: nearest, clamp to border, unnormalized), which NVK
+    // reserves at index 0 on every GPU, so a handle naming no sampler names it
+    {
+        const uint32_t txf[8] = {0x260db, 0x2000291, 0xfff000, 0, 0, 0, 0, 0};
+        memcpy(tsc_.cpu, txf, 32);
+    }
     // m2v's neutral sampler, which it binds for a sampler slot the function reads and the encoder left unbound (Vulkan defaults:
     // nearest, clamp to edge, mip nearest, no LOD clamp), then the constexpr samplers the pack's functions use
     {
