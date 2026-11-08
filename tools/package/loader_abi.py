@@ -54,6 +54,11 @@ STAMPS_SLOT = 0xA001EF00
 SEED_PROPERTY = 'random-seed'
 SEED_BYTES = 256
 SEED_SOURCE_PROPERTY = 'switch-seed-source'
+# iBoot's /chosen/boot-manifest-hash: the SHA-384 of what authorised this boot. Here the boot is the kernel and the
+# trust cache bundle the window carries (no Apple manifest), hashed by the layout step into this zeroed property.
+# iOS 27's Image4 entangles its nonce magazine with it and refuses to start without one.
+BOOT_MANIFEST_HASH_PROPERTY = 'boot-manifest-hash'
+BOOT_MANIFEST_HASH_BYTES = 48
 SEED_SOURCE_BYTES = 8
 
 # The fixed same-boot SD reference page (boot/storage/sd_reference.h): the loader's code, data and stacks end below.

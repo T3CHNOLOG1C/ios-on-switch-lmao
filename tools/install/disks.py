@@ -21,6 +21,7 @@ from types import FrameType
 from tools.install import host
 
 UNMOUNT_TRIES = 5
+MOUNT_TRIES = 3
 
 APFS_VOLUME = '41504653-0000-11AA-AA11-00306543ECAC'
 PARTIAL = '.partial-'
@@ -70,7 +71,7 @@ def mounted(device: str, log: host.Log, owners: bool, read_only: bool = False) -
     with tempfile.TemporaryDirectory(prefix='switch-') as directory:
         options = 'nobrowse,' + ('owners' if owners else 'noowners')
         mode = ['readOnly'] if read_only else []
-        host.run('diskutil', 'mount', *mode, '-mountOptions', options, '-mountPoint', directory, device, log=log)
+        mount_at(device, directory, [*mode, '-mountOptions', options], log)
         try:
             if not read_only:
                 quiet(Path(directory))
@@ -79,6 +80,23 @@ def mounted(device: str, log: host.Log, owners: bool, read_only: bool = False) -
             if not read_only:
                 settle(Path(directory))
             unmount(device, log, force=True)
+
+
+def mount_at(device: str, directory: str, args: list[str], log: host.Log) -> None:
+    """`diskutil mount <args> -mountPoint directory device`, refused unless the volume really is at `directory`."""
+    where = None
+    for attempt in range(MOUNT_TRIES):
+        host.run(
+            'diskutil', 'mount', *args, '-mountPoint', directory, device, log=log, check=attempt + 1 == MOUNT_TRIES
+        )
+        where = host.mount_point(device)
+        if where and os.path.realpath(where) == os.path.realpath(directory):
+            return
+        # macOS can mount the volume itself (after a partition table write, or a second copy of a volume UUID it has
+        # seen) between our check and our mount; whatever reads `directory` would then read an empty folder.
+        if where:
+            unmount(device, log)
+    raise host.HostError(f'{device} would not mount at {directory} (macOS has it at {where or "nowhere"})')
 
 
 def unmount(device: str, log: host.Log, force: bool = False) -> None:

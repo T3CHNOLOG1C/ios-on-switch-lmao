@@ -745,6 +745,10 @@ bool ArmCpu::finishSecondary()
         armcpu_smp_fail[logicalId] = 3;
         return false;
     }
+    // Before registering: xnu-12377 starts the core inside ml_processor_register, and its initCPU records its own
+    // steps and marks it running.
+    armcpu_smp_step[logicalId] = 2;
+    setCPUState(kIOCPUStateUninitalized);
     ml_processor_info_t info = {};
     info.cpu_id = this;
     info.phys_id = static_cast<uint32_t>(affinity);
@@ -758,8 +762,6 @@ bool ArmCpu::finishSecondary()
         return false;
     }
     setCPUNumber(info.log_id);
-    armcpu_smp_step[logicalId] = 2;
-    setCPUState(kIOCPUStateUninitalized);
     registerService();
     startSecondary();
     return true;
@@ -914,7 +916,13 @@ void ArmCpu::observeAllThread(void *, wait_result_t)
 void ArmCpu::startThread(void *argument, wait_result_t)
 {
     ArmCpu *self = static_cast<ArmCpu *>(argument);
-    __atomic_store_n(&armcpu_smp_step[self->logicalId], 3U, __ATOMIC_RELEASE);
+    // xnu-12377 boots a core inside ml_processor_register (processor_boot, !USE_APPLEARMSMP), which has called
+    // startCPU by now, and answers a kext's processor_start with KERN_FAILURE without doing anything
+    // (processor_start_from_kext). xnu-10063 leaves the core to processor_start.
+    const bool booted = __atomic_load_n(&armcpu_smp_step[self->logicalId], __ATOMIC_ACQUIRE) >= 4;
+    if (!booted) {
+        __atomic_store_n(&armcpu_smp_step[self->logicalId], 3U, __ATOMIC_RELEASE);
+    }
     if (self->gicV2) {
         thread_t observer = nullptr;
         if (kernel_thread_start(&ArmCpu::observeThread, self, &observer) != KERN_SUCCESS) {
@@ -922,7 +930,7 @@ void ArmCpu::startThread(void *argument, wait_result_t)
         }
         thread_deallocate(observer);
     }
-    const kern_return_t result = processor_start(self->machProcessor);
+    const kern_return_t result = booted ? KERN_SUCCESS : processor_start(self->machProcessor);
     gStartStatus[self->logicalId] = result;
     __atomic_store_n(&gStartDone[self->logicalId], 1U, __ATOMIC_RELEASE);
     thread_terminate(current_thread());
@@ -1098,6 +1106,12 @@ void ArmCpu::initCPU(bool boot)
         // CPU driver provokes it with a self-IPI from initCPU (osfmk/kern/machine.c, processor_up).
         signalCPU(this);
         return;
+    }
+    if (gController == nullptr) {
+        // xnu-12377 boots the boot processor inside ml_processor_register (processor_boot), before start() has set
+        // up the interrupt controller; the self-IPI below would find no handler in this core's cpu_data.
+        ml_install_interrupt_handler(this, static_cast<int>(logicalId), this,
+                                     reinterpret_cast<IOInterruptHandler>(&ArmCpu::dispatch), nullptr);
     }
     enableGic();
     enableCPUTimeBase(true);

@@ -14,7 +14,14 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from boot_config import portrait_native
-from loader_abi import SEED_SOURCE_BYTES, SEED_SOURCE_PROPERTY, STAMPS_BYTES, STAMPS_PROPERTY
+from loader_abi import (
+    BOOT_MANIFEST_HASH_BYTES,
+    BOOT_MANIFEST_HASH_PROPERTY,
+    SEED_SOURCE_BYTES,
+    SEED_SOURCE_PROPERTY,
+    STAMPS_BYTES,
+    STAMPS_PROPERTY,
+)
 from native_xnu_layout import parse_adt
 
 # USB 2.0 device mode on the USB-C port (drivers/SwitchUSB): the USB function set configd's USBDeviceConfiguration
@@ -127,6 +134,9 @@ def _chosen(tree: list, portrait: bool) -> list:
         put(chosen, key, u32(0))
     for key in ('certificate-security-mode', 'effective-security-mode-sep'):
         put(chosen, key, u32(1))
+    # xnu-12377 asserts that iBoot reported whether kernel text gets locked (ml_unsafe_kernel_text, which dtrace asks
+    # before patching text). No CTRR here, but the kernel maps its text read-only all the same.
+    put(chosen, 'kernel-ctrr-to-be-enabled', u32(1))
     return chosen
 
 
@@ -342,6 +352,13 @@ def ipad_adt(
     return adt_serialize(tree)
 
 
+def with_boot_manifest_hash_slot(data: bytes) -> bytes:
+    """Return the ADT with a zeroed /chosen/boot-manifest-hash (loader_abi.BOOT_MANIFEST_HASH_PROPERTY)."""
+    tree, _ = adt_parse(data)
+    put(child(tree, 'chosen'), BOOT_MANIFEST_HASH_PROPERTY, bytes(BOOT_MANIFEST_HASH_BYTES))
+    return adt_serialize(tree)
+
+
 def with_a64x_cache_pretranslated(data: bytes, cache: bytes) -> bytes:
     """Return the ADT with iOS 27's /chosen/a64x-cache-pretranslated.
 
@@ -374,6 +391,7 @@ def main() -> None:
     for name in ('adt', 'overlay-plan', 'bt-patch', 'portrait-header', 'out'):
         parser.add_argument('--' + name, required=True, type=Path)
     parser.add_argument('--smp', action='store_true')
+    parser.add_argument('--boot-manifest-hash', action='store_true', help='a zeroed slot the layout step fills')
     parser.add_argument('--a64x-cache-pretranslated', type=Path)
     parser.add_argument('--switch-pretranslated-trust', type=Path)
     args = parser.parse_args()
@@ -385,6 +403,8 @@ def main() -> None:
         bt_patch=args.bt_patch.read_bytes(),
         portrait=portrait_native(args.portrait_header),
     )
+    if args.boot_manifest_hash:
+        adt = with_boot_manifest_hash_slot(adt)
     if args.a64x_cache_pretranslated:
         adt = with_a64x_cache_pretranslated(adt, args.a64x_cache_pretranslated.read_bytes())
     if args.switch_pretranslated_trust:

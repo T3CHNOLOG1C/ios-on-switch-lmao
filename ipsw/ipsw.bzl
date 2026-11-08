@@ -276,6 +276,17 @@ def kinds_where(field, value):
     """
     return sorted([kind for kind, ipsw in IPSWS.items() if ipsw.get(field) == value])
 
+def ios_version(kind):
+    """The kind's iOS major version (pins.bzl's ios).
+
+    Args:
+        kind: an IPSW kind.
+
+    Returns:
+        The version, an int.
+    """
+    return int(IPSWS[kind]["ios"])
+
 def kernel_virt_base(kind):
     """The kind's pinned kernel_virt_base (pins.bzl's derived): the prelinked kernel's lowest segment, as hex.
 

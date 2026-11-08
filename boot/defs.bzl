@@ -32,7 +32,7 @@ refuses it unless this window's constants.json (everything the loader compiles i
 
 load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
 load("//ipsw:defs.bzl", "PretranslatedPinsInfo")
-load("//ipsw:ipsw.bzl", "kernel_virt_base")
+load("//ipsw:ipsw.bzl", "ios_version", "kernel_virt_base")
 
 # Xcode's tools: macOS only, never on a remote executor (Xcode cannot be shipped there); the results may be cached
 # remotely (the key includes @xcode//:identity).
@@ -207,6 +207,11 @@ def _boot_package_impl(ctx):
     args.add("--portrait-header", ctx.file.portrait_header)
     if smp:
         args.add("--smp")
+
+    # iOS 27's Image4 will not start without the current boot's manifest hash; 17's AppleImage4 boots without one.
+    manifest_hash = ios_version(ctx.attr._kind[BuildSettingInfo].value) >= 27
+    if manifest_hash:
+        args.add("--boot-manifest-hash")
     pretranslated = ctx.attr.pretranslated[PretranslatedPinsInfo]
     adt_inputs = [ctx.file.adt, plan, ctx.file.bt_patch, ctx.file.portrait_header]
     if pretranslated.cache_list:
@@ -260,6 +265,8 @@ def _boot_package_impl(ctx):
     args.add("--blocks", shards[0].dirname)
     args.add("--kind", ctx.attr._kind[BuildSettingInfo].value)
     args.add("--virt-base", kernel_virt_base(ctx.attr._kind[BuildSettingInfo].value))
+    if manifest_hash:
+        args.add("--boot-manifest-hash")
     _run(ctx, ctx.executable._window, [args], [kernel, adt, bundle, ctx.file.data_seed, boot_args], [window_plan] + shards, "KernelLayout", "Laying out the kernel window")
 
     compressed = []

@@ -110,12 +110,14 @@
 #include <sys/persona.h>
 #include <sys/reason.h>
 #include <switch/pretranslated.h>
+#include <switch/a64x.h>
 #if SYSV_SHM
 #include <sys/shm_internal.h>           /* shmexec() */
 #endif
 #include <sys/ubc_internal.h>           /* ubc_map() */
 #include <sys/spawn.h>
 #include <sys/spawn_internal.h>
+#include <switch/spawn.h>
 #include <sys/process_policy.h>
 #include <sys/codesign.h>
 #include <sys/random.h>
@@ -4489,7 +4491,7 @@ posix_spawn(proc_t ap, struct posix_spawn_args *uap, int32_t *retval)
 			 * This is a bit fragile: <rdar://problem/16427422>
 			 */
 
-			if ((error = copyin(px_args.attrp, &px_sa, px_sa_offset)) != 0) {
+			if ((error = switch_spawn_copyin_attr(px_args.attrp, px_args.attr_size, &px_sa, px_sa_offset)) != 0) {
 				goto bad;
 			}
 
@@ -7463,6 +7465,14 @@ exec_add_apple_strings(struct image_params *imgp,
 		imgp->ip_applec++;
 	}
 #endif /* __has_feature(ptrauth_calls) */
+	if (switch_a64x_keys_off(imgp->ip_origcputype, imgp->ip_origcpusubtype)) {
+		error = exec_add_user_string(imgp, CAST_USER_ADDR_T(SWITCH_A64X_PTRAUTH_DISABLED), UIO_SYSSPACE, FALSE);
+		if (error) {
+			goto bad;
+		}
+
+		imgp->ip_applec++;
+	}
 
 	/*
 	 * Add main thread mach port name
