@@ -7,7 +7,7 @@
 #include <libkern/c++/OSData.h>
 #include <libkern/c++/OSSymbol.h>
 #include <pexpert/pexpert.h>
-extern "C" OSReturn switch_kernel_classes(void (*initialize)(void));
+extern "C" OSReturn switch_kernel_classes(void (*initialize)());
 extern "C" void native_keyevents_static_init(void) __asm__("__GLOBAL__sub_I_NativeKeyStoreEvents.cpp");
 extern "C" IOService *native_keyevents_allocate(void);
 extern "C" {

@@ -39,7 +39,7 @@ void tegra_gm20b_accelerator_static_init(void) __asm__("__GLOBAL__sub_I_TegraGM2
 IOService *tegra_gm20b_accelerator_allocate(void) __attribute__((weak));
 unsigned tegra_gm20b_accelerator_instance_size(void) __attribute__((weak));
 }
-extern "C" OSReturn switch_kernel_classes(void (*initialize)(void));
+extern "C" OSReturn switch_kernel_classes(void (*initialize)());
 
 // drivers/SwitchPower/SwitchThermal.cpp: a CPU raise held back for the bring-up goes ahead (a no-op before that service
 // runs).

@@ -14,7 +14,7 @@
 #include "../../drivers/SwitchPower/SwitchSensors.h"
 
 extern "C" {
-OSReturn switch_kernel_classes(void (*initialize)(void));
+OSReturn switch_kernel_classes(void (*initialize)());
 kern_return_t OSKextLoadKextWithIdentifier(const char *);
 void sheng_pmgr_static_init(void) __asm__("__GLOBAL__sub_I_ShengPlatformPower.cpp");
 // stage,status,parent-size,own-size,provider,nub,bound-provider,read-before,

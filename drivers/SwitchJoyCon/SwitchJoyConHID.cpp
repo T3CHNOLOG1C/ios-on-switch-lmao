@@ -93,7 +93,7 @@
 #include "SwitchJoyConSession.h"
 #include "../SwitchSuspend/SwitchWake.h"
 
-extern "C" OSReturn switch_kernel_classes(void (*initialize)(void));
+extern "C" OSReturn switch_kernel_classes(void (*initialize)());
 extern "C" void switch_joycon_hid_static_init(void) __asm__("__GLOBAL__sub_I_SwitchJoyConHID.cpp");
 
 namespace {

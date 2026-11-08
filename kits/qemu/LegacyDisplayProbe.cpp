@@ -19,13 +19,13 @@
 #include <machine/machine_routines.h>
 #include "OriginalLegacyFramebufferABI.h"
 #include "../SwitchDT/SwitchDTProperty.h"
-extern "C" OSReturn switch_kernel_classes(void (*initialize)(void));
+extern "C" OSReturn switch_kernel_classes(void (*initialize)());
 extern "C" void native_legacy_display_static_init(void) __asm__("__GLOBAL__sub_I_NativeLegacyDisplay.cpp");
 extern "C" IOService *native_legacy_display_allocate(void);
 extern "C" void native_gop_presenter_static_init(void) __asm__("__GLOBAL__sub_I_NativeGOPPresenter.cpp");
 extern "C" IOService *native_gop_presenter_create(void);
 
-static void native_legacy_static_init(void)
+static void native_legacy_static_init()
 {
     native_legacy_display_static_init();
     native_gop_presenter_static_init();

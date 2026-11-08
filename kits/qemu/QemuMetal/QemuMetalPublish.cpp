@@ -10,7 +10,7 @@
 
 extern "C" {
 extern volatile uint32_t native_shared_window_stage;
-OSReturn switch_kernel_classes(void (*initialize)(void));
+OSReturn switch_kernel_classes(void (*initialize)());
 volatile uint32_t native_qemu_metal_stage, native_qemu_metal_grants;
 volatile int native_qemu_metal_status;
 void native_qemu_metal_static_init(void) __asm__("__GLOBAL__sub_I_QemuMetalAccelerator.cpp");

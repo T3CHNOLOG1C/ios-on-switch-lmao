@@ -13,7 +13,7 @@
 #include "OriginalIOWatchdog.h"
 
 extern "C" {
-OSReturn switch_kernel_classes(void (*initialize)(void));
+OSReturn switch_kernel_classes(void (*initialize)());
 void switch_watchdog_static_init(void) __asm__("__GLOBAL__sub_I_NativeSwitchWatchdog.cpp");
 IOService *switch_watchdog_allocate(void);
 IOService *switch_pmu_allocate(void);

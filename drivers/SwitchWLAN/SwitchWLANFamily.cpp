@@ -19,7 +19,7 @@
 #include "SwitchWLANApple80211.h"
 #include "SwitchWLANNet.h"
 
-extern "C" OSReturn switch_kernel_classes(void (*initialize)(void));
+extern "C" OSReturn switch_kernel_classes(void (*initialize)());
 extern "C" void switch_wlan_family_static_init(void) __asm__("__GLOBAL__sub_I_SwitchWLANFamily.cpp");
 
 namespace {

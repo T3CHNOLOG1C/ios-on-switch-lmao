@@ -11,7 +11,7 @@
 #include <libkern/c++/OSMetaClass.h>
 
 extern "C" {
-OSReturn switch_kernel_classes(void (*initialize)(void));
+OSReturn switch_kernel_classes(void (*initialize)());
 void switch_accel_stub_static_init(void) __asm__("__GLOBAL__sub_I_SwitchAccelStub.cpp");
 IOService *switch_accel_stub_allocate(void);
 unsigned switch_accel_stub_instance_size(void);

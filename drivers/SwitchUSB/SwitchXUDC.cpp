@@ -57,7 +57,7 @@
 using namespace xudc;
 
 extern "C" {
-OSReturn switch_kernel_classes(void (*initialize)(void));
+OSReturn switch_kernel_classes(void (*initialize)());
 void switchxudc_static_init(void) __asm__("__GLOBAL__sub_I_SwitchXUDC.cpp");
 }
 

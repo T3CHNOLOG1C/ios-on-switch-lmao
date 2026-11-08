@@ -44,7 +44,7 @@
 #include "../SwitchPower/SwitchPower.h"
 #include "../../kits/SwitchRefusal/SwitchRefusal.h"
 
-extern "C" OSReturn switch_kernel_classes(void (*initialize)(void));
+extern "C" OSReturn switch_kernel_classes(void (*initialize)());
 
 // SwitchMotion (SwitchOrientationClient.cpp): the orientation device's AOP user client. Weak, so this archive links
 // without it.
