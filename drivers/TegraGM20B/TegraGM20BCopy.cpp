@@ -39,8 +39,8 @@ struct Copier {
 	tgm_chan *chan;
 	tgm_mem *push, *fence;
 	uint32_t *pushCpu;
-	void *fenceCpu;
-	uint64_t pushPa, fencePa, fenceGpu;
+	volatile uint32_t *fenceCpu;
+	uint64_t pushPa, fenceGpu;
 	thread_call_t reap;
 	bool failed;
 	Job jobs[kJobs];
@@ -55,17 +55,23 @@ bool openSpace()
 {
 	Copier &c = gCopy;
 	uint64_t pas[kJobs];
+	uint64_t fencePage = 0;
+	uint32_t fenceOffset = 0;
 	c.pushCpu = static_cast<uint32_t *>(tgm_pool_alloc(kPage * kJobs, 0, &c.pushPa));
-	c.fenceCpu = tgm_pool_alloc(kPage, 0, &c.fencePa);
-	if (!c.pushCpu || !c.fenceCpu || tgm_vm_new(&c.vm))
+	if (!c.pushCpu ||
+	    tgm_fence_kernel(TGM_FENCE_KERNEL_COPY, &c.fenceCpu, &fencePage, &fenceOffset) ||
+	    tgm_vm_new(&c.vm))
 		return false;
 	tgm_vm_claim(c.vm, &gCopy);
 	for (uint32_t i = 0; i < kJobs; i++)
 		pas[i] = c.pushPa + i * kPage;
-	return (tgm_mem_new(c.vm, pas, kJobs, &c.push) == 0) &&
-	       (tgm_vm_map_ordered(c.vm, kPushVa, kPage * kJobs, c.push, 0, 0, 1, nullptr) == 0) &&
-	       (tgm_mem_new(c.vm, &c.fencePa, 1, &c.fence) == 0) &&
-	       (tgm_vm_kmap(c.vm, c.fence, kPage, &c.fenceGpu) == 0);
+	if ((tgm_mem_new(c.vm, pas, kJobs, &c.push) != 0) ||
+	    (tgm_vm_map_ordered(c.vm, kPushVa, kPage * kJobs, c.push, 0, 0, 1, nullptr) != 0) ||
+	    (tgm_mem_new(c.vm, &fencePage, 1, &c.fence) != 0) ||
+	    (tgm_vm_kmap(c.vm, c.fence, kPage, &c.fenceGpu) != 0))
+		return false;
+	c.fenceGpu += fenceOffset;
+	return true;
 }
 
 // lock held: the channel, made again after a fault killed the last one (once its copies were reaped)
@@ -82,8 +88,7 @@ tgm_chan *channel()
 	if (!c.vm && !c.failed && !openSpace())
 		c.failed = true;
 	if (!c.chan && c.vm &&
-	    !tgm_chan_new(c.vm, &gCopy, static_cast<volatile uint32_t *>(c.fenceCpu), c.fenceGpu,
-			  "ce-copy", 0, &c.chan))
+	    !tgm_chan_new(c.vm, &gCopy, c.fenceCpu, c.fenceGpu, "ce-copy", 0, &c.chan))
 		tgm_chan_on_fence(c.chan, fenced, nullptr);
 	return c.chan;
 }

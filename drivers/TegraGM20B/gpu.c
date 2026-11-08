@@ -3715,7 +3715,11 @@ void tgm_chan_del(struct tgm_chan **pchan)
  * Every connection's fence page (its channels' seqno words) is one page of a single pool range, so the GPU present's
  * address space maps all of them once and waits on any user channel with a semaphore acquire. Pages are handed out
  * round-robin and zeroed, so a page freed with an acquire still pending on it is not reused at once. */
-#define TGM_FENCE_PAGES 64 /* one per connection (TegraGM20BUserClient.cpp kMaxConnections) */
+#define TGM_FENCE_USER_PAGES \
+	64 /* one per connection (TegraGM20BUserClient.cpp kMaxConnectionsAll) */
+/* and one after them for the kernel's own client channels (tgm_fence_kernel), so every address space's fence view holds
+ * their fences too */
+#define TGM_FENCE_PAGES (TGM_FENCE_USER_PAGES + 1)
 /* A fence page is a whole VM page at most 16 KiB (XNU's PAGE_MAX_SIZE): its client maps it read-only, and a mapping is
  * whole VM pages, so a smaller slot would show the client its neighbours'. The GPU maps the range in 4 KiB pages. */
 #define TGM_FENCE_SLOT ((size_t)16 * 1024)
@@ -3754,8 +3758,8 @@ int tgm_fence_page_get(volatile uint32_t **va, uint64_t *pa)
 	int ret = -ENOMEM;
 
 	mutex_lock(&live_lock);
-	for (n = 0; !fences_alloc() && n < TGM_FENCE_PAGES; n++) {
-		i = (fences.next + n) % TGM_FENCE_PAGES;
+	for (n = 0; !fences_alloc() && n < TGM_FENCE_USER_PAGES; n++) {
+		i = (fences.next + n) % TGM_FENCE_USER_PAGES;
 		if (fences.used & BIT_ULL(i))
 			continue;
 		fences.used |= BIT_ULL(i);
@@ -3778,6 +3782,26 @@ void tgm_fence_page_put(const volatile uint32_t *va)
 	mutex_lock(&live_lock);
 	fences.used &= ~BIT_ULL(off / TGM_FENCE_SLOT);
 	mutex_unlock(&live_lock);
+}
+
+int tgm_fence_kernel(unsigned int which, volatile uint32_t **va, uint64_t *page_pa,
+		     uint32_t *offset)
+{
+	const size_t off =
+		TGM_FENCE_USER_PAGES * TGM_FENCE_SLOT + which * sizeof(struct TegraGM20BAbiFence);
+	int ret = 0;
+
+	if (which >= TGM_FENCE_KERNEL_CHANNELS)
+		return -EINVAL;
+	mutex_lock(&live_lock);
+	ret = fences_alloc();
+	mutex_unlock(&live_lock);
+	if (ret)
+		return ret;
+	*va = (volatile uint32_t *)((u8 *)fences.va + off);
+	*page_pa = fences.pa + (off & ~(PAGE_SIZE - 1));
+	*offset = (u32)(off & (PAGE_SIZE - 1));
+	return 0;
 }
 
 /* order between the channels of a task:

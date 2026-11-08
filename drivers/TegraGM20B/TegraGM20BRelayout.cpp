@@ -15,6 +15,7 @@
 #include "TegraGM20BGpu.h"
 #include "TegraGM20BRelayout.h"
 #include "TegraGM20BTiled.h"
+#include "../../kits/SwitchRefusal/SwitchRefusal.h"
 #include "../../kits/SwitchScratch/SwitchScratch.h"
 
 namespace
@@ -29,23 +30,29 @@ struct Relayout {
 	tgm_chan *chan;
 	tgm_mem *push, *fence;
 	uint32_t *pushCpu;
-	void *fenceCpu;
-	uint64_t pushPa, fencePa, fenceGpu;
+	volatile uint32_t *fenceCpu;
+	uint64_t pushPa, fenceGpu;
 	bool failed;  // no address space: every move is refused
 } gRelayout;
 
 bool openSpace()
 {
 	Relayout &r = gRelayout;
+	uint64_t fencePage = 0;
+	uint32_t fenceOffset = 0;
 	r.pushCpu = static_cast<uint32_t *>(tgm_pool_alloc(kPage, 0, &r.pushPa));
-	r.fenceCpu = tgm_pool_alloc(kPage, 0, &r.fencePa);
-	if (!r.pushCpu || !r.fenceCpu || tgm_vm_new(&r.vm))
+	if (!r.pushCpu ||
+	    tgm_fence_kernel(TGM_FENCE_KERNEL_RELAYOUT, &r.fenceCpu, &fencePage, &fenceOffset) ||
+	    tgm_vm_new(&r.vm))
 		return false;
 	tgm_vm_claim(r.vm, &gRelayout);
-	return (tgm_mem_new(r.vm, &r.pushPa, 1, &r.push) == 0) &&
-	       (tgm_vm_map_ordered(r.vm, kPushVa, kPage, r.push, 0, 0, 1, nullptr) == 0) &&
-	       (tgm_mem_new(r.vm, &r.fencePa, 1, &r.fence) == 0) &&
-	       (tgm_vm_kmap(r.vm, r.fence, kPage, &r.fenceGpu) == 0);
+	if ((tgm_mem_new(r.vm, &r.pushPa, 1, &r.push) != 0) ||
+	    (tgm_vm_map_ordered(r.vm, kPushVa, kPage, r.push, 0, 0, 1, nullptr) != 0) ||
+	    (tgm_mem_new(r.vm, &fencePage, 1, &r.fence) != 0) ||
+	    (tgm_vm_kmap(r.vm, r.fence, kPage, &r.fenceGpu) != 0))
+		return false;
+	r.fenceGpu += fenceOffset;
+	return true;
 }
 
 tgm_chan *channel()
@@ -58,8 +65,7 @@ tgm_chan *channel()
 		IOLog("tegra-gm20b: block-linear surfaces cannot be moved: no address space\n");
 	}
 	if (!r.chan && !r.failed) {
-		tgm_chan_new(r.vm, &gRelayout, static_cast<volatile uint32_t *>(r.fenceCpu),
-			     r.fenceGpu, "relayout", 1, &r.chan);
+		tgm_chan_new(r.vm, &gRelayout, r.fenceCpu, r.fenceGpu, "relayout", 1, &r.chan);
 	}
 	return r.chan;
 }
@@ -121,21 +127,25 @@ extern "C" uint32_t tgm_relayout_waits(struct tgm_vm *vm, uint32_t self,
 				       const struct tgm_relayout_writer *writers, uint32_t nwriters,
 				       struct tgm_relayout_wait *waits, uint32_t nwaits)
 {
-	for (uint32_t i = 0; i < nwriters; i++) {
-		uint64_t va = 0;
-		const int mapped =
-			static_cast<int>(nwaits < TGM_RELAYOUT_MAX_WAITS &&
-					 tgm_writer_fence_va(vm, writers[i].uid, &va) == 0);
-		switch (tgm_writer_order(self, writers[i].uid, mapped)) {
-		case TGM_WRITER_GPU_ACQUIRE:
-			waits[nwaits++] = {va, writers[i].seqno};
-			break;
-		case TGM_WRITER_CPU_WAIT:
-			tgm_writer_wait(writers[i].uid, writers[i].seqno);
-			break;
-		case TGM_WRITER_IN_CHANNEL:
-			break;
-		}
+	tgm_relayout_writer running[TGM_RELAYOUT_MAX_WAITS];
+	uint64_t fenceVa[TGM_RELAYOUT_MAX_WAITS];
+	uint32_t n = 0;
+	for (uint32_t i = 0; i < nwriters && n < TGM_RELAYOUT_MAX_WAITS; i++) {
+		if (tgm_writer_done(writers[i].uid, writers[i].seqno))
+			continue;
+		running[n] = writers[i];
+		if (tgm_writer_fence_va(vm, writers[i].uid, &fenceVa[n]))
+			fenceVa[n] = 0;
+		n++;
+	}
+	uint32_t refused =
+		nwriters > TGM_RELAYOUT_MAX_WAITS ? nwriters - TGM_RELAYOUT_MAX_WAITS : 0;
+	nwaits = tgm_relayout_follow(self, running, fenceVa, n, waits, nwaits, &refused);
+	if (refused) {
+		switch_refusal(
+			"gpu-order", "writer-unordered",
+			"a kernel copy goes ahead of %u surface writers it cannot acquire on",
+			refused);
 	}
 	return nwaits;
 }

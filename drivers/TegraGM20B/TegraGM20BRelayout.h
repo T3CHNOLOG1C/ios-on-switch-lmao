@@ -14,6 +14,7 @@
 // Plain C, so the host test runs the same words through a copy-engine model.
 #pragma once
 #include <stdint.h>
+#include "TegraGM20BFences.h"
 #include "TegraGM20BGpu.h"
 #include "TegraGM20BLayout.h"
 
@@ -134,9 +135,34 @@ static inline uint32_t tgm_relayout_copy(uint32_t *w, const struct tgm_layout *l
 	return i;
 }
 
-// Appends to waits[nwaits..] the acquires a kernel copy on channel `self` in `vm` makes on `writers` (TegraGM20BFences.h
-// tgm_writer_order: a writer whose fence `vm` cannot map, or past TGM_RELAYOUT_MAX_WAITS acquires, is waited for here on
-// the CPU) and returns the new count. Thread context.
+// Appends to waits[nwaits..] (TGM_RELAYOUT_MAX_WAITS in all) the acquires a kernel copy on channel `self` makes on the
+// running `writers`, writer i's fence at fence_va[i] in the copy's space (0: not in its fence view), by
+// TegraGM20BFences.h tgm_writer_order, and returns the new count; *refused counts the writers it could not acquire on.
+static inline uint32_t tgm_relayout_follow(uint32_t self, const struct tgm_relayout_writer *writers,
+					   const uint64_t *fence_va, uint32_t nwriters,
+					   struct tgm_relayout_wait *waits, uint32_t nwaits,
+					   uint32_t *refused)
+{
+	for (uint32_t i = 0; i < nwriters; i++) {
+		const int acquirable =
+			(fence_va[i] != 0 && nwaits < TGM_RELAYOUT_MAX_WAITS) ? 1 : 0;
+		switch (tgm_writer_order(self, writers[i].uid, acquirable)) {
+		case TGM_WRITER_GPU_ACQUIRE:
+			waits[nwaits].va = fence_va[i];
+			waits[nwaits++].seqno = writers[i].seqno;
+			break;
+		case TGM_WRITER_REFUSED:
+			(*refused)++;
+			break;
+		case TGM_WRITER_IN_CHANNEL:
+			break;
+		}
+	}
+	return nwaits;
+}
+
+// tgm_relayout_follow over the writers still running, with their fences as `vm` maps them; a writer it refuses is one
+// switch_refusal line. Thread context.
 uint32_t tgm_relayout_waits(struct tgm_vm *vm, uint32_t self,
 			    const struct tgm_relayout_writer *writers, uint32_t nwriters,
 			    struct tgm_relayout_wait *waits, uint32_t nwaits);
