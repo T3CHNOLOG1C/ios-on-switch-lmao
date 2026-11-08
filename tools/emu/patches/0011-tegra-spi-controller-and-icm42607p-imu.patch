@@ -820,15 +820,3 @@ index 1aa0e93..29dbb2b 100644
      memory_region_init_io(&s->iomem, OBJECT(dev), &tegra_spi_mem_ops, s,
                            TYPE_TEGRA_SPI, TEGRA_SPI1_SIZE);
      sysbus_init_mmio(SYS_BUS_DEVICE(dev), &s->iomem);
-diff --git a/hw/arm/tegra2/meson.build b/hw/arm/tegra2/meson.build
-index 9852ea9..f42b683 100644
---- a/hw/arm/tegra2/meson.build
-+++ b/hw/arm/tegra2/meson.build
-@@ -56,6 +56,7 @@ arm_ss.add(files(
-   'apb/sysctr/sysctr.c',
-   'apb/dvfs/dvfs.c',
-   'apb/spi/spi.c',
-+  'apb/spi/icm42607.c',
-   'apb/ape/ape.c',
-   'apb/hda/hda.c',
- 
