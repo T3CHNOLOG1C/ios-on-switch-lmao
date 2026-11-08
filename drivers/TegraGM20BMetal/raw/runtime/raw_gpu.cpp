@@ -236,7 +236,7 @@ uint8_t *Device::alloc(Ring &r, uint32_t bytes, uint32_t align, uint64_t &va)
         if (it->begin < at + bytes && at < it->end && it->seqno) {
             stats.ringWaits++;
             r.waited = true;
-            k_.wait(channel_, it->seqno);
+            wait(it->seqno);
             it = r.inflight.erase(it);
             continue;
         }
@@ -369,9 +369,13 @@ bool Device::init(std::string &err)
         neutralTsc_ = nextTsc_++;
     }
     const uint32_t *cs = pack_.section<uint32_t>(PackSamplers);
+    if (pack_.header()->samplers > kConstexprSamplers) {
+        err = "the pack's constexpr samplers do not fit its entries' sampler byte";
+        return false;
+    }
     for (uint32_t i = 0; i < pack_.header()->samplers; i++) {
         memcpy(tsc_.cpu + 32 * nextTsc_, cs + 8 * i, 32);
-        constexprTsc_.push_back(nextTsc_++);
+        constexprTsc_[constexprCount_++] = nextTsc_++;
     }
     // SET_CT_WRITE(i), as the baseline leaves it where a state's registers do not set it
     const uint32_t *base = pack_.section<uint32_t>(PackBaseline);
@@ -418,28 +422,33 @@ bool Device::ensureChannel()
     return true;
 }
 
-// channelLock_ held: the rings, the channel and its context, then the 2D engine's state and its mip-chain self-test (raw/fx)
+// channelLock_ held: the rings, the channel and its context, then the 2D engine's state and its mip-chain self-test (raw/fx).
+// False: what it made is given back, so a later call starts over.
 bool Device::openChannel(std::string &err)
 {
-    if (!k_.alloc(sizes_.push, true, push_.bo) || !k_.alloc(sizes_.upload, true, upload_.bo) ||
-        !k_.channel(kEngines, channel_, fence_)) {
+    auto undo = [&](bool created) {
         err = k_.error();
+        if (created)
+            k_.closeChannel(channel_);
         k_.free(push_.bo);
         k_.free(upload_.bo);
+        push_ = Ring();
+        upload_ = Ring();
         channel_ = 0;
         fence_ = &kNoFence;
         return false;
-    }
+    };
+    if (!k_.alloc(sizes_.push, true, push_.bo) || !k_.alloc(sizes_.upload, true, upload_.bo) ||
+        !k_.channel(kEngines, channel_, fence_))
+        return undo(false);
     uint64_t va;
     uint32_t *start = reinterpret_cast<uint32_t *>(alloc(push_, contextWords() * 4, 256, va));
     Push p{start, start + contextWords()};
     emitContext(p);
     TegraGM20BAbiPush seg = {va, uint32_t(p.at - start), 0};
     uint32_t seq = 0;
-    if (!k_.exec(channel_, &seg, 1, 0, seq)) {
-        err = k_.error();
-        return false;
-    }
+    if (!k_.exec(channel_, &seg, 1, 0, seq))
+        return undo(true);
     lastSeqno_ = seq;
     retire(push_, seq);
     selfTest();
@@ -1044,7 +1053,7 @@ bool Device::createSurfaceTexture(uint64_t surfaceId, void *base, uint64_t alloc
     Texture *sampled = nullptr;
     if (unaligned) {
         sampled = new Texture;
-        if (!createTexture(width, height, format, *sampled)) {
+        if (!createTexture(width, height, format, *sampled, false, true)) {
             delete sampled;
             return false;
         }
@@ -1362,7 +1371,7 @@ void Device::selfTest()
     if (k_.exec(channel_, &seg, 1, lastSeqno_, seq)) {
         lastSeqno_ = seq;
         retire(push_, seq);
-        if (k_.wait(channel_, seq)) {
+        if (wait(seq)) {
             for (uint32_t i = 0; i < fx::kSamplings; i++) {
                 const uint8_t *cpu = chains.cpu + i * stride;
                 selfTestTegra[i] = fx::selfTestCheck(c, cpu, nullptr, false);
@@ -1927,6 +1936,45 @@ void Device::trimBackings()
 
 // ---- command buffer ----
 
+// A wait the kernel refuses with no kill (the call failed, or the submit thread's reopen destroyed the channel meanwhile) is
+// no completion: the channel's status decides. A healthy channel is waited on again; one that keeps refusing is taken as
+// killed, with everything it has not completed, so nothing it may still run is released or written over as done.
+bool Device::waitFence(uint32_t seqno)
+{
+    constexpr unsigned kRefusals = 3;
+    const uint32_t ch = channel_;
+    for (unsigned refused = 0; !done(seqno);) {
+        if (k_.wait(ch, seqno))
+            break;
+        TegraGM20BAbiStatus st;
+        if (k_.lost(ch) || !k_.status(ch, st)) {  // killed, or destroyed by a reopen that kept its kill record
+            noteLost();
+            break;
+        }
+        if (st.error) {
+            k_.markLost(ch);
+            noteLost();
+            break;
+        }
+        if (int32_t(st.completed - seqno) >= 0)
+            return !lost(seqno);
+        if (++refused == kRefusals) {
+            os_log_error(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "raw"),
+                         "raw: the kernel refused %u waits on channel %u's seqno %u (%s): taken as killed", refused, ch,
+                         seqno, k_.error().c_str());
+            {
+                std::lock_guard<std::mutex> l(killedLock_);
+                killedKept_[killedNext_++ % killedKept_.size()] = {
+                    st.completed + 1, __atomic_load_n(&lastSeqno_, __ATOMIC_RELAXED), kWaitRefused};
+            }
+            k_.markLost(ch);  // begin() makes it again
+            noteLost();
+            return false;
+        }
+    }
+    return !lost(seqno);
+}
+
 void Device::noteLost()
 {
     lostThrough_.store(__atomic_load_n(&lastSeqno_, __ATOMIC_RELAXED), std::memory_order_relaxed);
@@ -2007,16 +2055,28 @@ std::string Device::vaOwner(uint64_t va)
 
 bool Device::reopen()
 {
-    noteLost();
-    Killed live = {};
-    if (liveKill(live)) {
-        k_.markLost(channel_);
-        std::lock_guard<std::mutex> l(killedLock_);
-        killedKept_[killedNext_++ % killedKept_.size()] = live;
+    if (!contextless_) {  // the first try for this death: what the channel had failed, its kill record is kept
+        noteLost();
+        Killed live = {};
+        if (liveKill(live)) {
+            k_.markLost(channel_);
+            std::lock_guard<std::mutex> l(killedLock_);
+            killedKept_[killedNext_++ % killedKept_.size()] = live;
+        }
+        contextless_ = true;
     }
-    k_.closeChannel(channel_);
-    if (!k_.channel(kEngines, channel_, fence_))
+    // Closed once: the connection is NVK's, whose next channel may take the slot number
+    if (channel_)
+        k_.closeChannel(channel_);
+    channel_ = 0;
+    fence_ = &kNoFence;
+    auto refused = [&] {
+        std::lock_guard<std::mutex> l(channelLock_);
+        channelError_ = k_.error();
         return false;
+    };
+    if (!k_.channel(kEngines, channel_, fence_))
+        return refused();
     stats.reopens++;
     push_.inflight.clear();
     upload_.inflight.clear();
@@ -2046,9 +2106,10 @@ bool Device::reopen()
     TegraGM20BAbiPush seg = {va, uint32_t(p.at - start), 0};
     uint32_t seq = 0;
     if (!k_.exec(channel_, &seg, 1, 0, seq))
-        return false;
+        return refused();
     lastSeqno_ = seq;
     retire(push_, seq);
+    contextless_ = false;
     return true;
 }
 
@@ -2072,8 +2133,8 @@ CommandBuffer *Device::begin()
     if (!ensureChannel())
         return nullptr;
     Killed live = {};
-    if (k_.lost(channel_) || liveKill(live))
-        reopen();
+    if ((contextless_ || k_.lost(channel_) || liveKill(live)) && !reopen())
+        return nullptr;
     for (auto it = grownOut_.begin(); it != grownOut_.end();)
         if (done(it->second)) {
             k_.free(it->first);
@@ -2164,14 +2225,14 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
     e.dev_ = dev_;
     e.pass_ = pass;
     // the render hardware takes one memory layout for all of a pass's color targets (nvk_rendering_linear): block-linear when
-    // one of them is or beside a zeta, its pitch ones then rendered through block-linear shadows as NVK does; memoryless ones
-    // get a backing of the pass's layout
+    // one of them is, or is a pitch target the hardware cannot take (rendered through a shadow either way), or beside a zeta,
+    // its pitch ones then rendered through block-linear shadows as NVK does; memoryless ones get a backing of the pass's layout
     const Texture *zeta = pass.depthStencil.texture;
     if (zeta && (!zeta->zeta || !zeta->memoryless))
         return nullptr;
     bool blockLinear = zeta != nullptr;
     for (uint32_t j = 0; j < pass.count && j < 8; j++)
-        if (const Texture *t = pass.color[j].texture; t && !t->memoryless && t->blockLinear)
+        if (const Texture *t = pass.color[j].texture; t && !t->memoryless && (t->blockLinear || t->shadowTarget))
             blockLinear = true;
     if (zeta) {
         std::lock_guard<std::mutex> l(dev_->lock_);
@@ -2258,10 +2319,14 @@ BlitEncoder *CommandBuffer::blit()
 bool CommandBuffer::commit(uint32_t &seqno)
 {
     Device &d = *dev_;
+    bool invalidates = false;
+    uint64_t invalidatedBefore = 0;
     {
         std::lock_guard<std::mutex> l(d.lock_);
         if (shaderInvalidate_ && d.heapPlaced_ != d.heapInvalidated_) {
             *shaderInvalidate_ = kInvalidateConstant | kInvalidateInstruction;
+            invalidates = true;
+            invalidatedBefore = d.heapInvalidated_;
             d.heapInvalidated_ = d.heapPlaced_;
         }
     }
@@ -2288,8 +2353,13 @@ bool CommandBuffer::commit(uint32_t &seqno)
     uint32_t seq = 0;
     for (size_t at = 0; at < segments_.size(); at += kMaxSegments) {
         const uint32_t n = uint32_t(std::min<size_t>(kMaxSegments, segments_.size() - at));
-        if (!d.k_.exec(d.channel_, segments_.data() + at, n, d.lastSeqno_, seq, &surfaces_))
+        if (!d.k_.exec(d.channel_, segments_.data() + at, n, d.lastSeqno_, seq, &surfaces_)) {
+            if (!at && invalidates) {  // its prologue never reached the GPU: the next submission's invalidates
+                std::lock_guard<std::mutex> l(d.lock_);
+                d.heapInvalidated_ = invalidatedBefore;
+            }
             return false;
+        }
         d.lastSeqno_ = seq;
     }
     seqno = seq;

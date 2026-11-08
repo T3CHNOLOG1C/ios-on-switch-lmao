@@ -257,8 +257,7 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
                         if (x && x->sampled) {
                             if (!fill)
                                 fill = rc->blit();
-                            fill->copyRect(x->va, x->pitch, x->sampled->va, x->sampled->pitch, x->width, x->height,
-                                           x->bpp);
+                            fill->copyTexels(*x, 0, 0, *x->sampled, 0, 0, x->width, x->height);
                         }
             if (fill)
                 fill->end();
@@ -312,7 +311,7 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
                 continue;
             const raw::Texture &x = t->_raw;
             raw::BlitEncoder *b = rc->blit();
-            b->copyRect(x.va, x.pitch, x.sampled->va, x.sampled->pitch, x.width, x.height, x.bpp);
+            b->copyTexels(x, 0, 0, *x.sampled, 0, 0, x.width, x.height);
             b->end();
         }
     };

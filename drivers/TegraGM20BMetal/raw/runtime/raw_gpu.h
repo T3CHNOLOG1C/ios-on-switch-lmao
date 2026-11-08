@@ -118,8 +118,8 @@ struct Texture {
     uint8_t bpp = 0;
     bool renderable = false;  // a pitch render target as it is: a target format, address and pitch multiples of 128
     // A target format, but an address or pitch the render hardware does not take (NVK's linear-render rule, linearTarget): a pass
-    // renders it through a pool image the copy engine fills from it before and copies back to it after (NVK's own tiled shadow,
-    // nvk_linear_render_copy, for the same targets: the texels stored are the same)
+    // renders it, block-linear, through a pool image the copy engine fills from it before and copies back to it after (NVK's
+    // own tiled shadow, nvk_linear_render_copy, for the same targets: the texels stored are the same)
     bool shadowTarget = false;
     bool memoryless = false;  // no memory: a pass gives it a backing (Device::backing)
     bool wc =
@@ -162,8 +162,8 @@ struct Texture {
     }
 
     // Rows 16 but not 32 bytes apart (or an address off 32): the texture header's pitch takes multiples of 32, so it is sampled
-    // through `sampled`, a pool image of its texels the copy engine refreshes from it (CommandBuffer::refresh) before work that
-    // samples it, as m2v samples such a surface through a shadow image it copies in. tic is sampled's.
+    // through `sampled`, a block-linear pool image of its texels the copy engine refreshes from it before work that samples
+    // it, as m2v samples such a surface through a shadow image it copies in. tic is sampled's.
     Texture *sampled = nullptr;
 
     // An extended-range texture's (raw_xr.h): the image a draw samples, its codes' values as RGBA16Float, which a pass of the
@@ -592,8 +592,10 @@ public:
     // the 2D engine's mip-chain self-test. False: the kernel refused it (`channelError()`), and the device submits nothing.
     bool ensureChannel();
 
-    const std::string &channelError() const
+    // Why the kernel last refused the channel or its context (ensureChannel, or begin() making a killed channel again)
+    std::string channelError()
     {
+        std::lock_guard<std::mutex> l(channelLock_);
         return channelError_;
     }
 
@@ -747,9 +749,7 @@ public:
     // In the kernel, on the fence interrupt. False: the submission failed, the channel died with it in flight (reopen).
     bool wait(uint32_t seqno)
     {
-        if (!done(seqno) && !k_.wait(channel_, seqno) && k_.lost(channel_))
-            noteLost();
-        return !lost(seqno);
+        return done(seqno) ? !lost(seqno) : waitFence(seqno);
     }
 
     bool lost(uint32_t seqno) const
@@ -759,6 +759,10 @@ public:
         return lostAny_.load(std::memory_order_acquire) &&
                int32_t(lostThrough_.load(std::memory_order_relaxed) - seqno) >= 0;
     }
+
+    // A kill record's error the device writes itself (waitFence): the kernel kept refusing to wait on a channel it called
+    // healthy
+    static constexpr uint32_t kWaitRefused = 0x100;
 
     // Why the kernel killed the channel of the last seqno lost() named (its kill record's error), else Kernel::lostError and
     // lostFaultVa: the channel last found dead
@@ -792,7 +796,7 @@ public:
         if (!ensureChannel())
             return KERN_FAILURE;
         for (int attempt = 0;; attempt++) {
-            if (k_.lost(channel_) && !reopen())
+            if ((contextless_ || k_.lost(channel_)) && !reopen())
                 return KERN_FAILURE;
             const int kr = k_.order(channel_, TegraGM20BOrderAfterTask, 0, waits);
             if (kr != kIOReturnNotResponding || attempt)
@@ -804,7 +808,7 @@ public:
     int orderOthersAfter(uint32_t &waits)
     {
         waits = 0;
-        if (!channelReady_.load(std::memory_order_acquire) || k_.lost(channel_))
+        if (!channelReady_.load(std::memory_order_acquire) || contextless_ || k_.lost(channel_))
             return KERN_SUCCESS;
         const int kr = k_.order(channel_, TegraGM20BOrderBeforeTask, lastSeqno_, waits);
         return kr == kIOReturnNotResponding ? KERN_SUCCESS : kr;
@@ -933,6 +937,9 @@ private:
     std::atomic<bool> channelReady_{false};
     bool channelFailed_ = false;
     std::string channelError_;
+    // The channel died and the one made since has no context yet (reopen gave up before the context's Exec): begin() makes it
+    // again before it gives out a command buffer. channel_ is 0 while the kernel holds none of this device's.
+    bool contextless_ = false;
     std::vector<uint32_t> freeTic_, freeTsc_;
     uint32_t nextTic_ = 1, nextTsc_ = 1, neutralTsc_ = 0;
     // the pack's, by record index, each made at its first lookup (a process uses a few of the pack's thousands); a node
@@ -949,7 +956,11 @@ private:
     bool heapPlace(const uint8_t *bytes, uint32_t size, uint64_t &offset);
     void build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs, const PlacedProgram &fs,
                const uint32_t *blob, const char *keyString, bool caTransform);
-    std::vector<uint32_t> constexprTsc_;
+    // The constexpr samplers' header indices, the pack's then the runtime records' (addRecord, under lock_). A slot is written
+    // once, before the state that names it is published, and never moves: a draw reads it without lock_.
+    static constexpr uint32_t kConstexprSamplers = 256;  // PackEntry::sampler is a byte
+    uint32_t constexprTsc_[kConstexprSamplers] = {};
+    uint32_t constexprCount_ = 0;
 
     // the states the runtime made (addRecord), never removed: Pipeline::rec points into them
     struct Completed {
@@ -1042,6 +1053,7 @@ private:
     uint32_t contextWords() const;
     void emitContext(Push &p);
     bool reopen();
+    bool waitFence(uint32_t seqno);
     void noteLost();
     // the last seqno of a channel that died: it and every one before it failed (or completed before; not told apart),
     // where the kernel writes no kill records
