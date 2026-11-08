@@ -123,6 +123,9 @@ void finish(RMCommandBuffer *cb, NSError *error)
             scheduledHandlers = cb->_scheduledHandlers;
             cb->_scheduledHandlers = nil;
             cb->_gpuStart = hostSeconds();
+#if SWITCH_FRAME_TIMELINE
+            gRM->stats.scheduledByFinish++;
+#endif
         } else {
             behindScheduled = !cb->_scheduledDone;
         }
