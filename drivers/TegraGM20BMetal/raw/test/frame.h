@@ -330,6 +330,32 @@ struct Shape {
 
 constexpr uint32_t kRingBytes = 8 << 20;
 
+// FRAME_FILL: each frame's command buffer first fills a buffer over [kFillFrom, kFillBytes) with a byte of the frame
+// (fillBuffer:range:value:: whole words, and ends that are not), and every main-pass draw reads its first fragment uniform
+// slot from that buffer, so what the fill wrote is in the draws' decode
+inline bool fillUniforms()
+{
+    return getenv("FRAME_FILL") != nullptr;
+}
+
+constexpr uint32_t kFillBytes = 4096, kFillFrom = 3;
+
+inline uint8_t fillValue(unsigned frame)
+{
+    return uint8_t(0x30 + frame % 64);
+}
+
+// The fragment slot a main-pass draw reads from the filled buffer (FRAME_FILL): its first fragment payload's; -1: none
+template <typename Draw> int fillSlot(const Draw &d)
+{
+    if (d.blur)
+        return -1;
+    for (const auto &b : d.bytes)
+        if (b.stage == 2)
+            return int(b.slot);
+    return -1;
+}
+
 // FRAME_RTSIZE: the main pass's renderTargetWidth/Height 37 and 23 pixels short of its attachments' (the device's passes, r7o:
 // "a render target size other than the attachment's"), so its render area, default viewport and scissor, clears and the
 // scissors past it are the target size's
