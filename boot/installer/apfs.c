@@ -377,8 +377,13 @@ uint16_t switch_apfs_pool_queue_limit(uint64_t pool_blocks)
 
 uint16_t switch_apfs_main_queue_limit(uint64_t blocks)
 {
-    uint64_t m = blocks < (UINT64_C(1) << 18) ? 1 : blocks < (UINT64_C(1) << 20) ? 2 : 4;
-    uint64_t n = div_up(blocks * m, 4 * FQ_PER_NODE);
+    uint64_t m = 4;
+    if (blocks < (UINT64_C(1) << 18)) {
+        m = 1;
+    } else if (blocks < (UINT64_C(1) << 20)) {
+        m = 2;
+    }
+    uint64_t n = div_up(blocks * m, UINT64_C(4) * FQ_PER_NODE);
     return queue_limit(n < FQ_NODE_MAX ? n : FQ_NODE_MAX);
 }
 
