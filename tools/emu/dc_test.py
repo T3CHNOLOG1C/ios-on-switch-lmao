@@ -92,11 +92,14 @@ class Dc:
         return crcs
 
 
-@unittest.skipIf(qemu.host_missing(), qemu.host_missing())
+@unittest.skipUnless(qemu.ever_built(), 'this Mac has never built tegra_qemu')
 class DcTest(unittest.TestCase):
     def setUp(self) -> None:
+        binary = qemu.built()
+        if not binary:
+            self.fail('this Mac has no tegra_qemu build of these patches: bazel run //tools/emu:build')
         self.log = Path(tempfile.mkdtemp()) / 'qemu.log'
-        self.q = Qtest(qemu.ensure(), self.log)
+        self.q = Qtest(binary, self.log)
         self.dc = Dc(self.q)
         self.q.write(PITCH_A, image(0))
         self.dc.window('A', PITCH_A)

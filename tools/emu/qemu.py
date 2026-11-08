@@ -78,19 +78,12 @@ def _run(args: list, log: Path, cwd: Path | None = None) -> None:
         sys.exit(f'tegra_qemu build failed ({log}):\n' + '\n'.join(tail))
 
 
-def host_missing() -> str | None:
-    """Return what this Mac lacks to build tegra_qemu, or None."""
+def _check_host() -> None:
     missing = [f for f in BREW_FORMULAE if not (BREW / 'opt' / f).exists()]
     if missing:
-        return 'tegra_qemu needs Homebrew formulae: brew install ' + ' '.join(missing)
+        sys.exit('tegra_qemu needs Homebrew formulae: brew install ' + ' '.join(missing))
     if not shutil.which('uv'):
-        return 'tegra_qemu needs uv (https://docs.astral.sh/uv/) for its build-time Python'
-    return None
-
-
-def _check_host() -> None:
-    if missing := host_missing():
-        sys.exit(missing)
+        sys.exit('tegra_qemu needs uv (https://docs.astral.sh/uv/) for its build-time Python')
 
 
 def _source(base: Path, log: Path) -> Path:
@@ -138,6 +131,17 @@ def _make(tmp: Path, base: Path) -> None:
     for notice in ('COPYING', 'COPYING.LIB', 'LICENSE'):
         shutil.copy2(src / notice, tmp / notice)
     (tmp / 'SOURCE').write_text(f'{URL} {COMMIT}\n' + ''.join(f'{p.name} {cache.file_digest(p)}\n' for p in patches()))
+
+
+def ever_built() -> bool:
+    """Return whether this Mac has built tegra_qemu at all, for any key."""
+    return (cache.ROOT / 'tegra-qemu' / 'entries').is_dir()
+
+
+def built() -> Path | None:
+    """Return the patched tegra_qemu binary if this Mac has a build of this key; never build it."""
+    done = cache.existing('tegra-qemu', key())
+    return done / BINARY if done else None
 
 
 def ensure() -> Path:
