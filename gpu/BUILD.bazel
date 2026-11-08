@@ -136,10 +136,7 @@ metal_plugin(
     srcs = [
         GM20B_METAL + ":TegraGM20BMetalPlugin.mm",
         METAL + ":NativeBridgeMetalFrontend.mm",
-        GM20B_METAL + ":raw/runtime/RawMetal.mm",
-        GM20B_METAL + ":raw/runtime/RawAlias.mm",
-        GM20B_METAL + ":raw/runtime/RawComplete.mm",
-        GM20B_METAL + ":raw/runtime/RawProbe.mm",
+        GM20B_METAL + ":raw_facade_srcs",
     ],
     hdrs = [
         METAL + ":frontend_headers",

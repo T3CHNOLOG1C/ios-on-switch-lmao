@@ -1,4 +1,4 @@
-"""What still falls off the raw path, per boot: the sum of RawMetal.mm's 5 s rates lines.
+"""What still falls off the raw path, per boot: the sum of RawMetalRates.mm's 5 s rates lines.
 
 Every 5 s (debug builds) each process with raw on logs
 `TegraGM20BMetal: <process> raw 5s c=N(r/s) m2v=N(reason:n,...) ... why=pred:hit/alone,...`: c counts the command
@@ -26,7 +26,7 @@ CHECK = Check(
     REPORT,
     subsystem='com.brunostjohn.switch.TegraGM20BMetal',
     regex=LINE.pattern,
-    source='drivers/TegraGM20BMetal/raw/runtime/RawMetal.mm (raw_metal_rates)',
+    source='drivers/TegraGM20BMetal/raw/runtime/RawMetalRates.mm (raw_metal_rates)',
 )
 
 
