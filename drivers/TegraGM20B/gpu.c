@@ -780,6 +780,35 @@ void tgm_pool_free(void *va, uint64_t bytes, uint64_t pa)
 	scrub_kick();
 }
 
+int tgm_pool_alloc_chunks(uint64_t bytes, uint64_t *pas)
+{
+	if (!bytes || (bytes & (TGM_COMP_BYTES - 1)))
+		return -EINVAL;
+	return nvxnu_pool_alloc_chunks(bytes >> TGM_COMP_SHIFT, pas);
+}
+
+void tgm_pool_free_chunks(const uint64_t *pas, uint32_t npages)
+{
+	u64 lo = 0;
+	u64 bytes = 0;
+	uint32_t i = 0;
+	for (i = 0; i < npages; i += TGM_COMP_PAGES) {
+		const u64 pa = pas[i];
+		if (bytes && pa + TGM_COMP_BYTES == lo) {
+			lo = pa;
+		} else if (!bytes || pa != lo + bytes) {
+			if (bytes)
+				dma_free_attrs(&gpu_pdev.dev, bytes, NULL, lo, 0);
+			lo = pa;
+			bytes = 0;
+		}
+		bytes += TGM_COMP_BYTES;
+	}
+	if (bytes)
+		dma_free_attrs(&gpu_pdev.dev, bytes, NULL, lo, 0);
+	scrub_kick();
+}
+
 uint64_t tgm_pool_avail(void)
 {
 	return nvxnu_pool_size() - ((u64)nvxnu_pool_used_pages() << PAGE_SHIFT);
@@ -2816,10 +2845,12 @@ static void stats_tick(void)
 	uint64_t pool_clients = 0;
 	uint64_t pool_orphan_bytes = 0;
 	uint64_t pool_orphans = 0;
+	uint64_t pool_comp_bytes = 0;
+	uint64_t pool_comps = 0;
 	uint64_t pool_system_bytes = 0;
 	uint64_t pool_systems = 0;
-	tgm_pool_breakdown(&pool_clients, &pool_orphan_bytes, &pool_orphans, &pool_system_bytes,
-			   &pool_systems);
+	tgm_pool_breakdown(&pool_clients, &pool_orphan_bytes, &pool_orphans, &pool_comp_bytes,
+			   &pool_comps, &pool_system_bytes, &pool_systems);
 	scnprintf(
 		line, sizeof(line),
 		"copy mean %llu us max %llu us (%u), after user work mean %llu us max %llu us "
@@ -2828,7 +2859,8 @@ static void stats_tick(void)
 		"(%llu/s), %lld KiB live in "
 		"%d, %u BoAllocs (%llu KiB, %llu us), pool %lu/%llu MiB (compositor %llu, clients "
 		"%llu, orphans %llu in "
-		"%llu; coherent from system memory %llu MiB in %llu), %s, MC "
+		"%llu; compressible %llu MiB in %llu; coherent from system memory %llu MiB in "
+		"%llu), %s, MC "
 		"%08x "
 		"err "
 		"%08x at %08x; gpu.lock held by channel setup mean %llu us max %llu us (%u), "
@@ -2842,9 +2874,10 @@ static void stats_tick(void)
 		__atomic_load_n(&stats.live, __ATOMIC_RELAXED), allocs, abytes >> 10, ans / 1000,
 		nvxnu_pool_used_pages() >> (20u - PAGE_SHIFT), nvxnu_pool_size() >> 20,
 		__atomic_load_n(&compositor_pool, __ATOMIC_RELAXED) >> 20, pool_clients >> 20,
-		pool_orphan_bytes >> 20, pool_orphans, pool_system_bytes >> 20, pool_systems,
-		scrubbed, mc_int, mc_err, mc_adr, lnew ? lns / lnew / 1000 : 0, lnm / 1000, lnew,
-		lfree ? lfs / lfree / 1000 : 0, lfm / 1000, lfree);
+		pool_orphan_bytes >> 20, pool_orphans, pool_comp_bytes >> 20, pool_comps,
+		pool_system_bytes >> 20, pool_systems, scrubbed, mc_int, mc_err, mc_adr,
+		lnew ? lns / lnew / 1000 : 0, lnm / 1000, lnew, lfree ? lfs / lfree / 1000 : 0,
+		lfm / 1000, lfree);
 	nvxnu_stats("tegra-gm20b: stats2 %s", line);
 	stats_exec_owners(line, sizeof(line), rate);
 	stats_mem(ms);

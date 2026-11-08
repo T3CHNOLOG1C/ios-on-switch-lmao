@@ -133,9 +133,10 @@ TEST(GM20BPoolPolicySource, SystemBosTakeAndReturnSpares)
 {
 	const std::string alloc =
 		flat(definition(client(), "IOReturn AGXDeviceUserClient::boAlloc("));
-	EXPECT_THAT(alloc,
-		    HasSubstr("if (!ret && !bo->pool_va && !(in->flags & TegraGM20BBoContiguous)) "
-			      "spare = spareTake(in->bytes);"));
+	EXPECT_THAT(
+		alloc,
+		HasSubstr("if (!ret && !bo->pool_va && !compressible && "
+			  "!(in->flags & TegraGM20BBoContiguous)) spare = spareTake(in->bytes);"));
 	EXPECT_THAT(alloc, Not(HasSubstr("|| system ? kClasses")));
 	EXPECT_THAT(
 		alloc,
@@ -199,11 +200,44 @@ TEST(GM20BPoolPolicySource, StatsNameThePoolHolders)
 	EXPECT_THAT(
 		stats,
 		HasSubstr("tgm_pool_breakdown(&pool_clients, &pool_orphan_bytes, &pool_orphans, "
-			  "&pool_system_bytes, &pool_systems);"));
+			  "&pool_comp_bytes, &pool_comps, &pool_system_bytes, &pool_systems);"));
 	EXPECT_THAT(
 		stats,
 		HasSubstr(
 			"pool %lu/%llu MiB (compositor %llu, clients \" \"%llu, orphans %llu in"));
+	EXPECT_THAT(stats, HasSubstr("compressible %llu MiB in %llu;"));
+}
+
+// A Compressible BO is pool chunks under the pool's tiers, never a view a task could map, and its chunks go back only once
+// its GPU memory object (and with it its comptags) is gone.
+TEST(GM20BPoolPolicySource, CompressibleBosArePoolChunksNoTaskMaps)
+{
+	const std::string alloc =
+		flat(definition(client(), "IOReturn AGXDeviceUserClient::boAlloc("));
+	const std::string chunks = Between(alloc, "if (!ret && compressible) {",
+					   "if (!ret && (in->flags & TegraGM20BBoCoherent)) {");
+	EXPECT_THAT(chunks,
+		    HasSubstr("refused = compressibleRefusal(in->bytes, pool_bytes_, critical_);"));
+	EXPECT_THAT(
+		flat(definition(client(), "const char *compressibleRefusal(uint64_t bytes, "
+					  "uint64_t held, bool compositor)")),
+		HasSubstr("tgm_pool::compressibleRefusal(bytes, held, avail, limits, compositor)"));
+	EXPECT_THAT(chunks, HasSubstr("takeChunks(in->bytes, bo->pas)"));
+	EXPECT_THAT(alloc, HasSubstr("} else if (!ret && !compressible) {"));
+	EXPECT_THAT(
+		flat(definition(client(), "IOReturn takeChunks(uint64_t bytes, uint64_t *pas)")),
+		HasSubstr("poolZeroNow()"));
+	const std::string release =
+		flat(definition(client(), "void AGXDeviceUserClient::releaseBo(Bo *bo)"));
+	expectBefore(release, "tgm_mem_del(&bo->mem);",
+		     "tgm_pool_free_chunks(bo->pas, bo->npages);");
+	EXPECT_THAT(
+		flat(definition(client(), "IOReturn AGXDeviceUserClient::clientMemoryForType(")),
+		HasSubstr("bo && bo->view"));
+	EXPECT_THAT(flat(definition(SourceText("../shim/linux.c"),
+				    "int nvxnu_pool_alloc_chunks(unsigned long count, unsigned "
+				    "long long *pas)")),
+		    HasSubstr("tgm_comp_pick_chunks(pool_map, pool_dirty, pool_npages,"));
 }
 
 TEST(GM20BPoolScrubSource, NoCpuClearOfTheReservedPool)
@@ -227,7 +261,8 @@ TEST(GM20BPoolScrubSource, EveryAllocationZeroesWhatAFreeLeftDirty)
 	      "void *dma_alloc_attrs(struct device *dev, size_t size, dma_addr_t *handle, gfp_t "
 	      "gfp,",
 	      "void *nvxnu_pool_alloc_clean(unsigned long size, unsigned long align, unsigned long "
-	      "long *pa)"})
+	      "long *pa)",
+	      "int nvxnu_pool_alloc_chunks(unsigned long count, unsigned long long *pas)"})
 		EXPECT_THAT(definition(shim, signature), HasSubstr("pool_zero_dirty("))
 			<< signature;
 	const std::string zero = definition(

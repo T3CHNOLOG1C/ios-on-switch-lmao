@@ -69,6 +69,11 @@ void tgm_waiter_unwoken(uint32_t waiter, uint32_t seq, uint32_t seqno);
 /* align: at least the VM page (0 for just that) */
 void *tgm_pool_alloc(uint64_t bytes, uint64_t align, uint64_t *pa);
 void tgm_pool_free(void *va, uint64_t bytes, uint64_t pa);
+/* A compressible BO's memory: `bytes` (a 128 KiB multiple) as zeroed 128 KiB-aligned 128 KiB chunks of the pool, in no
+ * order and adjacent or not; `pas` gets every 4 KiB page. 0, or -ENOMEM with nothing taken.
+ * tgm_pool_free_chunks gives them back dirty, for the scrubber. */
+int tgm_pool_alloc_chunks(uint64_t bytes, uint64_t *pas);
+void tgm_pool_free_chunks(const uint64_t *pas, uint32_t npages);
 
 /* Address spaces: one per user-client connection, which claims it (tgm_vm_claim_connection): only channels made for
  * that owner may address it, so BoFree's wait for the connection's channels covers every channel that can reach its
@@ -414,9 +419,11 @@ void tgm_stats_bo_alloc(uint64_t bytes, int kind, uint64_t ns, const uint64_t ph
 void tgm_stats_compositor_pool(int64_t bytes);
 void tgm_spare_counts(uint64_t *kept_bytes, uint64_t *ready, uint64_t *pool_zeroing_bytes);
 /* Where the pool is (TegraGM20BUserClient.cpp, for the stats2 line): pool BOs of clients other than the compositor, pool
- * pages freed but still behind their view's release (orphans: a task still maps the view, or an import of it is live), and
- * coherent BOs served from system memory instead (tgm_pool::FromSystem) with their count. */
+ * pages freed but still behind their view's release (orphans: a task still maps the view, or an import of it is live),
+ * every client's compressible BOs with their count, and coherent BOs served from system memory instead
+ * (tgm_pool::FromSystem) with their count. */
 void tgm_pool_breakdown(uint64_t *client_bytes, uint64_t *orphan_bytes, uint64_t *orphans,
+			uint64_t *compressible_bytes, uint64_t *compressibles,
 			uint64_t *system_bytes, uint64_t *systems);
 unsigned long tgm_owner_stats(char *out, unsigned long size);
 void tgm_stats_bo_import(uint64_t bytes, int read_only, int skipped, uint64_t ns,
