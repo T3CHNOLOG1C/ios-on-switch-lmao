@@ -1952,6 +1952,7 @@ IOReturn AGXDeviceUserClient::getStatus(const TegraGM20BAbiChannel *in, TegraGM2
 	out->completed = tgm_chan_completed(chan);
 	out->submitted = tgm_chan_submitted(chan);
 	out->error = tgm_chan_error(chan);
+	out->fault_va = tgm_chan_fault_va(chan);
 	return kIOReturnSuccess;
 }
 

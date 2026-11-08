@@ -1192,6 +1192,7 @@ struct tgm_chan {
 	u64 id;
 	char owner[17];  /* process that created it */
 	char fault[200]; /* the nvkm report it was isolated for */
+	u64 fault_va;    /* error 1: the VA its MMU fault report names */
 	u64 submit_ns;   /* when the last fence was kicked */
 	u64 busy_ns;     /* hang_recover: when it last went from idle to work pending */
 	u64 progress_ns; /* and when its fence last moved, to progress_done */
@@ -1307,6 +1308,11 @@ uint32_t tgm_chan_completed(struct tgm_chan *chan)
 uint32_t tgm_chan_error(struct tgm_chan *chan)
 {
 	return chan->error;
+}
+
+uint64_t tgm_chan_fault_va(struct tgm_chan *chan)
+{
+	return READ_ONCE(chan->fault_va);
 }
 
 uint32_t tgm_chan_waiter(struct tgm_chan *chan)
@@ -1490,6 +1496,8 @@ static int chan_killed(struct nvif_event *event, void *repv, u32 repc)
 	}
 	/* the runlist dropped it, so nothing writes its fence any more: release what it will never complete, after the
 	 * record of what that was (TegraGM20BAbiFence), so a client that sees the fence pass sees the record too */
+	if (fault_code(report) == 1)
+		WRITE_ONCE(chan->fault_va, tgm_fault_va(report, (int)chan->chid));
 	WRITE_ONCE(chan->error, fault_code(report));
 	fence_kill_record(chan->fence_cpu, chan->submitted, chan->error);
 	WRITE_ONCE(*chan->fence_cpu, chan->submitted);
@@ -5970,6 +5978,7 @@ int tgm_bringup(int stage, char *line, unsigned int len)
 		if (ret)
 			return ret;
 		tgm_clkgate_load(gpu.device);
+		tgm_clkgate_guard_reset(gpu.device);
 		tgm_recover_init(gpu.device);
 		tgm_recover_arm(gpu.device);
 		tgm_sched_init(gpu.device);
