@@ -3,6 +3,7 @@
 // fragment program's push) applied to what m2v makes of a Metal descriptor.
 #include "raw_emit.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <iterator>
 #include <map>
@@ -92,7 +93,121 @@ bool parse(const std::string &key, std::map<unsigned, Color> &colors, unsigned &
     return true;
 }
 
+// MTLVertexFormat -> SET_VERTEX_ATTRIBUTE_A's component bit widths, numerical type and R/B swap, through m2v's VkFormat and
+// NVK's nvk_vf_formats; 0 widths: one this has no rule for
+struct VertexFormat {
+    uint8_t widths, type, swap;
+};
+
+VertexFormat vertexFormat(unsigned format)
+{
+    constexpr uint8_t kSnorm = 1, kUnorm = 2, kUint = 4, kFloat = 7;
+    constexpr uint8_t kR32G32B32A32 = 0x01, kR32G32B32 = 0x02, kR16G16B16A16 = 0x03, kR32G32 = 0x04, kR16G16B16 = 0x05,
+                      kR8G8B8A8 = 0x0a, kR16G16 = 0x0f, kR32 = 0x12;
+    switch (format) {
+    case 9:  // UChar4Normalized
+        return {kR8G8B8A8, kUnorm, 0};
+    case 12:  // Char4Normalized
+        return {kR8G8B8A8, kSnorm, 0};
+    case 13:  // UShort2
+        return {kR16G16, kUint, 0};
+    case 19:  // UShort2Normalized
+        return {kR16G16, kUnorm, 0};
+    case 21:  // UShort4Normalized
+        return {kR16G16B16A16, kUnorm, 0};
+    case 22:  // Short2Normalized
+        return {kR16G16, kSnorm, 0};
+    case 24:  // Short4Normalized
+        return {kR16G16B16A16, kSnorm, 0};
+    case 25:  // Half2
+        return {kR16G16, kFloat, 0};
+    case 26:  // Half3
+        return {kR16G16B16, kFloat, 0};
+    case 27:  // Half4
+        return {kR16G16B16A16, kFloat, 0};
+    case 28:  // Float
+        return {kR32, kFloat, 0};
+    case 29:  // Float2
+        return {kR32G32, kFloat, 0};
+    case 30:  // Float3
+        return {kR32G32B32, kFloat, 0};
+    case 31:  // Float4
+        return {kR32G32B32A32, kFloat, 0};
+    case 42:  // UChar4Normalized_BGRA
+        return {kR8G8B8A8, kUnorm, 1};
+    default:
+        return {0, 0, 0};
+    }
+}
+
+// "a<i>=format:offset:buffer:stride:stepFunction:stepRate"
+struct Attribute {
+    unsigned format, offset, buffer, stride, step, rate;
+};
+
 }  // namespace
+
+bool emitVertexInput(const std::string &keyFields, const std::vector<uint32_t> &attributes,
+                     std::vector<EmitRegister> &out, std::string &why)
+{
+    constexpr uint32_t kAttribute = 0x1160, kStreamFormat = 0x1c00, kStreamEnable = 1u << 12, kStepPerVertex = 1;
+    constexpr uint32_t kSourceInactive = 1u << 6, kInactive = kSourceInactive | 0x01u << 21 | 7u << 27;
+    std::map<unsigned, Attribute> descriptor;
+    for (size_t at = 0; at < keyFields.size();) {
+        size_t end = keyFields.find(' ', at);
+        if (end == std::string::npos)
+            end = keyFields.size();
+        const std::string field = keyFields.substr(at, end - at);
+        at = end + 1;
+        unsigned i = 0;
+        Attribute a = {};
+        if (field.size() > 2 && field[0] == 'a' && field[1] >= '0' && field[1] <= '9' &&
+            sscanf(field.c_str(), "a%u=%u:%u:%u:%u:%u:%u", &i, &a.format, &a.offset, &a.buffer, &a.stride, &a.step,
+                   &a.rate) == 7)
+            descriptor[i] = a;
+    }
+    std::vector<uint32_t> sorted(attributes);
+    std::sort(sorted.begin(), sorted.end());
+    std::map<unsigned, unsigned> streams;  // Metal buffer index -> its stream, densely in buffer-index order
+    for (uint32_t index : sorted) {
+        const auto it = descriptor.find(index);
+        if (it == descriptor.end()) {
+            why = "the vertex function reads attribute " + std::to_string(index) + ", which the descriptor lacks";
+            return false;
+        }
+        if (!vertexFormat(it->second.format).widths || it->second.step != kStepPerVertex) {
+            why = "attribute " + std::to_string(index) + " is fetched in the shader (its format or step)";
+            return false;
+        }
+        streams[it->second.buffer] = 0;
+    }
+    unsigned next = 0;
+    for (auto &[buffer, stream] : streams)
+        stream = next++;
+    for (uint32_t location = 0; location < 32; location++) {
+        if (location >= sorted.size()) {
+            out.push_back({kAttribute + 4 * location, kInactive, true});
+            continue;
+        }
+        const Attribute &a = descriptor[sorted[location]];
+        const VertexFormat f = vertexFormat(a.format);
+        out.push_back({kAttribute + 4 * location,
+                       streams[a.buffer] | (a.offset & 0x3fff) << 7 | uint32_t(f.widths) << 21 |
+                           uint32_t(f.type) << 27 | uint32_t(f.swap) << 31,
+                       true});
+    }
+    // a stream no attribute reads is off, its stride unread
+    if (streams.empty())
+        out.push_back({kStreamFormat, 0, false});
+    for (const auto &[buffer, stream] : streams) {
+        unsigned stride = 0;
+        for (const auto &[i, a] : descriptor)
+            if (a.buffer == buffer)
+                stride = a.stride;
+        out.push_back({kStreamFormat + 0x10 * stream, kStreamEnable | (stride & 0xfff), true});
+    }
+    return true;
+}
 
 bool emitState(const std::string &keyFields, const EmitProgram &vertex, const EmitProgram &fragment,
                std::vector<EmitRegister> &out, std::string &why)
