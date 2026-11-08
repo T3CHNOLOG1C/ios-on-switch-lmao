@@ -55,6 +55,9 @@ import sys
 import tempfile
 from pathlib import Path
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import packfile
+
 HERE = Path(__file__).resolve().parent  # drivers/TegraGM20BMetal/raw/pack
 RAW = HERE.parent
 TREE = Path(os.environ.get('RAWPACK_TREE', RAW.parents[2]))  # tree/ (drivers/TegraGM20BMetal/raw -> tree)
@@ -239,7 +242,7 @@ def split_buckets(corpus: Path, work: Path, count: int) -> list[Path]:
     with open(corpus) as f:
         for line in f:
             if line.startswith('R ') and (' label=com.apple.coreanimation.' in line or FRAMEWORK.search(line)):
-                lines[fnv(line.split(' ', 3)[3].encode()) % count].append(line)
+                lines[packfile.fnv(line.split(' ', 3)[3].encode()) % count].append(line)
                 warm = warm or (line if 'f downsample_4_frag' in line else '')
     dirs = []
     for i, part in enumerate(lines):
@@ -248,13 +251,6 @@ def split_buckets(corpus: Path, work: Path, count: int) -> list[Path]:
         (d / 'corpus.log').write_text(warm + ''.join(part))
         dirs.append(d)
     return dirs
-
-
-def fnv(b: bytes) -> int:
-    h = 0xCBF29CE484222325
-    for x in b:
-        h = ((h ^ x) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
-    return h
 
 
 def state_key(line: str) -> str:
