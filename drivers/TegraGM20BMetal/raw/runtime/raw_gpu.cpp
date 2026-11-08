@@ -2276,10 +2276,14 @@ BlitEncoder *CommandBuffer::blit()
 bool CommandBuffer::commit(uint32_t &seqno)
 {
     Device &d = *dev_;
+    bool invalidates = false;
+    uint64_t invalidatedBefore = 0;
     {
         std::lock_guard<std::mutex> l(d.lock_);
         if (shaderInvalidate_ && d.heapPlaced_ != d.heapInvalidated_) {
             *shaderInvalidate_ = kInvalidateConstant | kInvalidateInstruction;
+            invalidates = true;
+            invalidatedBefore = d.heapInvalidated_;
             d.heapInvalidated_ = d.heapPlaced_;
         }
     }
@@ -2306,8 +2310,13 @@ bool CommandBuffer::commit(uint32_t &seqno)
     uint32_t seq = 0;
     for (size_t at = 0; at < segments_.size(); at += kMaxSegments) {
         const uint32_t n = uint32_t(std::min<size_t>(kMaxSegments, segments_.size() - at));
-        if (!d.k_.exec(d.channel_, segments_.data() + at, n, d.lastSeqno_, seq, &surfaces_))
+        if (!d.k_.exec(d.channel_, segments_.data() + at, n, d.lastSeqno_, seq, &surfaces_)) {
+            if (!at && invalidates) {  // its prologue never reached the GPU: the next submission's invalidates
+                std::lock_guard<std::mutex> l(d.lock_);
+                d.heapInvalidated_ = invalidatedBefore;
+            }
             return false;
+        }
         d.lastSeqno_ = seq;
     }
     seqno = seq;

@@ -9,6 +9,8 @@
 //   from VA 0 with no limit.
 // - A channel the kernel killed is made again with its context before any command buffer is encoded for it: one whose
 //   ChannelCreate or context Exec the kernel refused gives no command buffer, and the next begin() tries again.
+// - Programs placed in the shader heap are behind an instruction-cache invalidate before any draw runs them, even when the
+//   kernel refused the submission whose prologue was to invalidate it.
 // usage: faultcheck <pack.bin>
 #include <cstdio>
 #include <cstdlib>
@@ -20,6 +22,7 @@
 
 extern "C" uint64_t cap_draws(void);
 extern "C" uint32_t cap_reg3d(uint32_t mthd);
+extern "C" uint64_t cap_instruction_invalidates(void);
 extern "C" void mock_iokit_kill_next(uint32_t error);
 extern "C" void mock_iokit_fail_next(unsigned method, unsigned count, int kr);
 extern "C" unsigned long mock_iokit_calls(unsigned method);
@@ -195,6 +198,30 @@ void reopenRefused(raw::Device &dev, const Expect &expect)
     dev.destroyBuffer(b);
 }
 
+void invalidateRefused(raw::Device &dev, const Expect &expect)
+{
+    raw::Buffer a, b;
+    if (!dev.createBuffer(4096, a) || !dev.createBuffer(4096, b)) {
+        expect(false, "two buffers");
+        return;
+    }
+    const uint32_t settled = copy(dev, a, b);
+    expect(settled && dev.wait(settled), "a submission after the heap's last placement");
+    const uint64_t before = cap_instruction_invalidates();
+    const raw::PackPipeline *recs = dev.pack().section<raw::PackPipeline>(raw::PackPipelines);
+    for (uint32_t i = 0; i < dev.pack().header()->pipelines; i++)
+        dev.pipeline(recs[i].keyHash);  // every state's programs placed
+    mock_iokit_fail_next(TegraGM20BMethodExec, 1, kIOReturnNoMemory);
+    expect(!copy(dev, a, b), "a submission the kernel refused");
+    const uint32_t next = copy(dev, a, b);
+    expect(next && dev.wait(next), "the next one");
+    const uint64_t invalidates = cap_instruction_invalidates() - before;
+    std::printf("instruction-cache invalidates since the placement: %llu\n", (unsigned long long)invalidates);
+    expect(invalidates == 1, "the next one's prologue invalidates the instruction caches");
+    dev.destroyBuffer(a);
+    dev.destroyBuffer(b);
+}
+
 }  // namespace
 
 int main(int argc, char **argv)
@@ -224,6 +251,7 @@ int main(int argc, char **argv)
     instances(dev, pass, expect);
     unboundStream(dev, pass, expect);
     reopenRefused(dev, expect);
+    invalidateRefused(dev, expect);
     if (failures) {
         std::printf("FAIL: faultcheck (%d)\n", failures);
         return 1;
