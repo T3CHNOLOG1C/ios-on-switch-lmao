@@ -212,9 +212,10 @@ def raw_bound(simple: list[dict], programs: dict[str, dict]) -> tuple[list[dict]
 
 
 # Why a probed state may stay out of the pack (the raw path hands it to m2v): what its draw needs that the raw path
-# draws otherwise. Any other reason is a generator fault and fails the build.
+# draws otherwise. Any other reason is a generator fault and fails the build, m2v failing a state's draw among them: its
+# pipeline did not build (a compiler regression: 39 RenderBox states once failed in NAK's encoder), and the device would
+# draw nothing for it either.
 EXPECTED_SKIPS = (
-    'm2v failed its draw',
     'draws',
     'dispatches',
     'storage form',
