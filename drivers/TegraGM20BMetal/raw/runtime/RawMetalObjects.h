@@ -271,7 +271,7 @@ struct RMSegment {
     std::condition_variable _changed;
     uint32_t _seqno;
     double _gpuStart, _gpuEnd;
-    id _active;               // the encoder being recorded
+    __weak id _active;        // the encoder being recorded (weak: it holds the command buffer, its caller holds it)
     uint64_t _preds;          // every refusal predicate it hit (1 << RMPred)
     uint64_t _predA, _predB;  // the first one's values
     uint8_t _pred0;           // the first one

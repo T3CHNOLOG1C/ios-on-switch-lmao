@@ -64,6 +64,13 @@
     return nil;
 }
 
+// One its caller dropped without ending it is ended here, so the tape's encoders stay closed
+- (void)dealloc
+{
+    if (!_ended && _cb)
+        [self endEncoding];
+}
+
 - (void)endEncoding
 {
     SWITCH_API(ApiEncoder);
