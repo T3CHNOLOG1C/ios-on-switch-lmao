@@ -6,6 +6,8 @@
 #                            loops, exhaustively to 80 bytes at every alignment and over random inputs, guard pages
 #                            after both buffers
 #   xnu_memcmp_source_test   subrs.c uses it on arm64 only, through the two bodies the harness copies
+#   xnu_kernel_classes_source_test  both trees' OSKext.cpp register our drivers' classes under sKextLock, as OSKext::start
+#                            does, and no driver calls OSMetaClass::preModLoad/postModLoad itself
 #   xnu_stall_test           kernel/switch/diag/stall.h's decisions: which samples of a UI main thread are a stall,
 #                            one report and one end per episode, wait names by block_hint.h value, user addresses
 #   xnu_render_senders_test  osfmk/ipc/switch_render_senders.h's table and line: the render server's senders by
@@ -126,6 +128,17 @@ host_test(
     copts = ["-fsanitize=undefined"],
     sanitize = False,
     deps = [":memcmp"],
+)
+
+host_test(
+    name = "xnu_kernel_classes_source_test",
+    srcs = ["xnu_kernel_classes_source_test.cpp"],
+    data = [
+        "//kernel:lint_sources",
+        "//kernel/switch:srcs",
+        "//kernel/xnu-10063.141.1/libkern:c++/OSKext.cpp",
+        "//kernel/xnu-12377.121.6/libkern:c++/OSKext.cpp",
+    ],
 )
 
 host_test(
