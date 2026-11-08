@@ -19,7 +19,7 @@ RAWCAP_LOG=/dev/null "$B/computeframe" nvk "$NVK" "$O/cache" "$LIB" "$KERNEL" "$
 python3 "$HERE/../pack/mkprograms.py" "$O/programs.bin" "$O/cache" >/dev/null
 export RAWCAP_PROGRAMS=$O/programs.bin
 # the kernel's record from a run with every slot tagged (FRAME_BIG_BUFFER binds untagged bytes)
-env NVDEC_KERNELS=1 RAWCAP_LOG=$O/record.log FRAME_BIG_BUFFER= "$B/computeframe" nvk "$NVK" "$O/cache" "$LIB" "$KERNEL" "$THREADS" "$GRID" \
+env NVDEC_KERNELS=1 RAWCAP_LOG="$O/record.log" FRAME_BIG_BUFFER= "$B/computeframe" nvk "$NVK" "$O/cache" "$LIB" "$KERNEL" "$THREADS" "$GRID" \
     2>"$O/record.err"
 RAWCAP_LOG=$O/nvk.log "$B/computeframe" nvk "$NVK" "$O/cache" "$LIB" "$KERNEL" "$THREADS" "$GRID" 2>"$O/nvk.err"
 # PACK_KEY=<raw_compute_key.h key>: the raw run dispatches the pack's kernel of that key instead
