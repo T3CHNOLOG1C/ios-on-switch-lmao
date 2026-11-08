@@ -281,8 +281,10 @@ void tgm_recover_init(struct nvkm_device *device)
 	struct nvkm_inth *inth = &device->fifo->engine.subdev.inth;
 	struct nvkm_runq *runq = NULL;
 
-	if (ctxsw.work || !func->intr_ctxsw_timeout || !func->intr || !func->runq ||
-	    !func->chan.func || !func->chan.func->unbind) {
+	if (ctxsw.work)
+		return;
+	if (!func->intr_ctxsw_timeout || !func->intr || !func->runq || !func->chan.func ||
+	    !func->chan.func->unbind) {
 		nvxnu_log("tegra-gm20b: nvkm's FIFO lacks what recover.c takes over: scheduler "
 			  "errors, "
 			  "context-switch timeouts and PBDMA ENG_RESET stay nvkm's\n");
