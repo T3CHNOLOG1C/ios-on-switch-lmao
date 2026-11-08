@@ -8,6 +8,7 @@
 #include <IOKit/IOInterruptEventSource.h>
 #include <IOKit/IOWorkLoop.h>
 #include <kern/clock.h>
+#include <kern/cpu_data.h>
 #include <kern/locks.h>
 #include <kern/sched_prim.h>
 #include <kern/thread_call.h>
@@ -273,6 +274,16 @@ extern "C" unsigned long nvxnu_irq_save(void)
 extern "C" void nvxnu_irq_restore(unsigned long flags)
 {
 	ml_set_interrupts_enabled(static_cast<boolean_t>(flags));
+}
+
+extern "C" void nvxnu_preempt_disable(void)
+{
+	_disable_preemption();
+}
+
+extern "C" void nvxnu_preempt_enable(void)
+{
+	_enable_preemption();
 }
 
 extern "C" void *nvxnu_rw_alloc(void)
