@@ -346,8 +346,8 @@ def foreign(m: int, n: int) -> bool:
     )
 
 
-# SET_VERTEX_STREAM_A_FORMAT(j) with ENABLE (bit 12) clear: a stream the hardware does not fetch, whose stride the probe saw
-# as an earlier state's leftover. Taken as 0, which the direct compile (runtime/raw_emit.cpp) makes too
+# SET_VERTEX_STREAM_A_FORMAT(j) with ENABLE (bit 12) clear: a stream the hardware does not fetch, whose stride the probe
+# saw as an earlier state's leftover. Taken as 0, which the direct compile (runtime/raw_emit.cpp) makes too
 def disabled_stream(m: int, v: int) -> bool:
     return 0x1C00 <= m < 0x1E00 and (m - 0x1C00) % 0x10 == 0 and not v & 0x1000
 
