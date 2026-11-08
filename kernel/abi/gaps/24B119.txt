@@ -1,5 +1,8 @@
 # What 24B119's kernel (xnu-13432.42.3) answers and our xnu-12377 does not, each with who in 24B119's user space asks
 # (its dyld cache and executables, searched by name and by call).
+# Nothing that starts before SpringBoard depends on one: none of the 108 RunAtLoad or KeepAlive daemons' executables
+# (launchd's first jobs, amfid, backboardd and SpringBoard among them) names a sysctl below, and no libsystem image reads
+# one outside libsystem_sanitizers' ASan start (asan::initShadow). dasd, started on demand, sets kern.trial.*.
 
 # IOKit's io_service_get_wait_info (xnu-13432). IOServiceGetWaitInfo calls it; only /usr/sbin/ioreg does.
 mig 2891
