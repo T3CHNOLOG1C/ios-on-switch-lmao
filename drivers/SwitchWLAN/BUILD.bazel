@@ -115,6 +115,9 @@ switch_abi_bindings(
     out = "family-interface-bindings.S",
     classes = ["//kits/SwitchABI:IOEthernetInterface"],
     objects = [":SwitchWLAN_cc"],
-    own = ["performCommand"],
+    own = [
+        "attachToDataLinkLayer",
+        "performCommand",
+    ],
     subclass = "IO80211Interface",
 )

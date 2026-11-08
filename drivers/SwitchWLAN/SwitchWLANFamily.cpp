@@ -2,18 +2,20 @@
 // The radio as IONetworkingFamily drivers are: IO80211Controller, an IOEthernetController, and its IO80211Interface,
 // an IOEthernetInterface. IONetworkStack names the interface when configd's interface namer asks and attaches it to
 // the stack, as it does every iPad's network interfaces; the family owns the ifnet, its output queue and start thread,
-// the input queue and the packet taps. The class names are the ones IO80211.framework (IOServiceMatching
-// "IO80211Controller", before its DriverKit matching for AppleBCMWLANCore) and SystemConfiguration (a controller
-// conforming to IO80211Controller is Wi-Fi) look for; 21H461 ships no IO80211 family, so nothing else defines them.
+// the input queue and the packet taps. The class names are the ones SystemConfiguration looks for (a controller
+// conforming to IO80211Controller is Wi-Fi); IO80211.framework and wifid find the interface by its IOInterfaceName and
+// IO80211InterfaceRole properties. Neither 21H461 nor 24B119 ships an IO80211 family, so nothing else defines them.
 //
 // The classes' superclasses live in the prelinked IONetworkingFamily, so this is a late object (kernel_driver late):
 // its static initializer runs from publish() once the family is loaded. Their vtables are checked against
 // kits/SwitchABI's IOEthernetController and IOEthernetInterface tables (BUILD.bazel's family bindings).
 #include "OriginalIOEthernetController.h"
 #include "OriginalIOEthernetInterface.h"
+#include <IOKit/IOBSD.h>
 #include <IOKit/IOLib.h>
 #include <libkern/OSKextLib.h>
 #include <libkern/c++/OSData.h>
+#include <libkern/c++/OSString.h>
 #include <libkern/c++/OSSymbol.h>
 #include <net/kpi_interface.h>
 #include "SwitchWLANApple80211.h"
@@ -135,16 +137,24 @@ class IO80211Interface : public IOEthernetInterface {
     OSDeclareDefaultStructors(IO80211Interface);
 
 public:
+    // IO80211.framework and wifid find an 802.11 interface's service by IOPropertyMatch on IOInterfaceName, which
+    // Apple's IO80211 interfaces publish beside the "BSD Name" IONetworkStack sets before this attach.
+    IOReturn attachToDataLinkLayer(IOOptionBits options, void *parameter) override
+    {
+        const IOReturn r = IOEthernetInterface::attachToDataLinkLayer(options, parameter);
+        if (r != kIOReturnSuccess)
+            return r;
+        if (OSObject *name = OSDynamicCast(OSString, getProperty(kIOBSDNameKey)))
+            setProperty("IOInterfaceName", name);
+        ifnet_t ifp = getIfnet();
+        IOLog("SwitchWLAN: %s%u attached by IONetworkStack (IO80211Interface on IOEthernetInterface)\n",
+              ifnet_name(ifp), ifnet_unit(ifp));
+        return r;
+    }
+
     // wifid's Apple80211 requests and the 802.11 media come as ioctls on the interface; the rest are the family's.
     SInt32 performCommand(IONetworkController *controller, unsigned long cmd, void *arg0, void *arg1) override
     {
-        // The first request comes once IONetworkStack attached the interface to the stack (configd's interface namer
-        // asked for it): the line that shows en0 is the family's.
-        if (!__atomic_exchange_n(&announced_, true, __ATOMIC_RELAXED)) {
-            ifnet_t ifp = static_cast<ifnet_t>(arg0);
-            IOLog("SwitchWLAN: %s%u attached by IONetworkStack (IO80211Interface on IOEthernetInterface)\n",
-                  ifnet_name(ifp), ifnet_unit(ifp));
-        }
         switch (cmd) {
         case SIOCGA80211:
         case SIOCSA80211:
@@ -155,9 +165,6 @@ public:
             return IOEthernetInterface::performCommand(controller, cmd, arg0, arg1);
         }
     }
-
-private:
-    bool announced_ = false;
 };
 
 OSDefineMetaClassAndStructors(IO80211Interface, IOEthernetInterface);
