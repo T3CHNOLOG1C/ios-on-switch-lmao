@@ -126,7 +126,7 @@ BY_IOS: dict[str, dict[str, bool]] = {
 }
 
 
-def test_check(test_id: str, interactive: bool, ios: str = '') -> Check:
+def test_check(test_id: str, interactive: bool, ios: str) -> Check:
     return Check(
         f'hwtest.{test_id}',
         OWNER,
@@ -204,6 +204,6 @@ HWTEST = [
         source=SOURCE,
         note='frames missed per scene: the display link (app) and the probe layer (display); hist 1/2/3/4+ periods',
     ),
-    *[test_check(test_id, interactive) for test_id, interactive in TESTS.items()],
+    *[test_check(test_id, interactive, '') for test_id, interactive in TESTS.items()],
     *[test_check(test_id, interactive, ios) for ios, tests in BY_IOS.items() for test_id, interactive in tests.items()],
 ]
