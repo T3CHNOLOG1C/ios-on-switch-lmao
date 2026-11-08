@@ -24,11 +24,6 @@ struct TegraNVENCBlock {
 // Resolves a submit's buffer handle; every user client supplies its own.
 typedef bool (*TegraNVENCResolve)(void *context, uint32_t handle, TegraNVENCBlock *block);
 
-// How NVENC reads its input and addresses chroma (TegraNVENCInfo's input_layout, chroma_mode, p_frames).
-struct TegraNVENCProven {
-    uint32_t inputLayout, chromaMode, pFrames;
-};
-
 extern "C" {
 // NVENC's address space (E1): its tables, the firmware, setup slots and scratch identity-mapped, the swgroup translated.
 // 0, or -1 with one line in `line`. Detach puts the swgroup back in bypass (sleep); attach undoes it.
@@ -49,12 +44,9 @@ void tegra_nvenc_cache_flush(const void *va, size_t size);  // dc civac: the nex
 // or a negative errno-style value.
 int tegra_nvenc_run(const TegraNVENCSubmit *submit, TegraNVENCResolve resolve, void *context, uint32_t *fence,
                     const char **why);
-const char *tegra_nvenc_falcon_dump(void);  // the falcon's state without its debugger (a job's own line has PC/SP)
-// Sleeps until the fence is reached (syncpoint interrupt), bounded per queued job. Past that bound: a one-line panic
-// once published (E3), else -60 and the engine refuses work.
+// Sleeps until the fence is reached (syncpoint interrupt), bounded per queued job. Past that bound: a one-line panic.
 int tegra_nvenc_wait(uint32_t fence);
 bool tegra_nvenc_ready(void);
-const TegraNVENCProven *tegra_nvenc_proven(void);
 
 int tegra_nvenc_publish(void);  // E3
 }

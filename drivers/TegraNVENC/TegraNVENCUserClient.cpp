@@ -222,10 +222,9 @@ IOReturn AppleAVE2UserClient::run(uint32_t method, const void *in, uint32_t inSi
         info->codecs = 1u << TEGRA_NVENC_CODEC_H264;
         info->max_width = info->max_height = 4096;
         info->max_mbs = 36864;
-        const TegraNVENCProven *proven = tegra_nvenc_proven();
-        info->input_layout = proven->inputLayout;
-        info->chroma_mode = proven->chromaMode;
-        info->p_frames = proven->pFrames;
+        info->input_layout = TEGRA_NVENC_LAYOUT_TILED16;
+        info->chroma_mode = TEGRA_NVENC_CHROMA_OFFSET;
+        info->p_frames = 1;
         tegra_nvenc_memory_usage(&info->memory_limit, &info->memory_free);
         break;
     }
@@ -390,11 +389,10 @@ extern "C" int tegra_nvenc_publish(void)
     uint64_t limit = 0;
     uint64_t free = 0;
     tegra_nvenc_memory_usage(&limit, &free);
-    const TegraNVENCProven *proven = tegra_nvenc_proven();
     IOLog("TegraNVENC: E3 ok service published (user client AppleAVE2UserClient, ABI %u, input layout %u, chroma mode "
-          "%u, %s; buffers of any pages behind the SMMU, %llu MiB at most)\n",
-          TEGRA_NVENC_ABI_VERSION, proven->inputLayout, proven->chromaMode,
-          proven->pFrames ? "P pictures" : "intra only", limit >> 20);
+          "%u, P pictures; buffers of any pages behind the SMMU, %llu MiB at most)\n",
+          TEGRA_NVENC_ABI_VERSION, static_cast<unsigned>(TEGRA_NVENC_LAYOUT_TILED16),
+          static_cast<unsigned>(TEGRA_NVENC_CHROMA_OFFSET), limit >> 20);
     service->release();  // the attachment keeps it
     return 0;
 }
