@@ -573,7 +573,7 @@ int main(int argc, char **argv)
         // after it in its command buffer) drawing, three times, the first corpus state whose line holds <text> (a multisampled
         // one: iOS 17's Pride poster lightsMesh, samples=2 RG11B10Float; FRAME_MSAA_CORPUS: the corpus, else the frame's) from
         // the library at FRAME_MSAA_LIB into memoryless multisampled targets of its count (FRAME_MSAA_SAMPLES: of that many
-        // instead) and formats, neither loaded nor stored (FRAME_MSAA_STORE: its first target resolved into a texture of its size)
+        // instead) and formats (FRAME_MSAA_FORMAT: target 0 of that MTLPixelFormat instead), neither loaded nor stored (FRAME_MSAA_STORE: its first target resolved into a texture of its size)
         id<MTLRenderPipelineState> msaa = nil;
         id<MTLTexture> msaaTargets[8] = {}, msaaResolved = nil;
         if (const char *pick = getenv("FRAME_MSAA")) {
@@ -598,6 +598,8 @@ int main(int argc, char **argv)
             MTLRenderPipelineDescriptor *md = lib && !found.empty() ? descriptor(lib, found) : nil;
             if (const char *n = getenv("FRAME_MSAA_SAMPLES"); n && md)
                 md.rasterSampleCount = NSUInteger(atoi(n));
+            if (const char *f = getenv("FRAME_MSAA_FORMAT"); f && md)
+                md.colorAttachments[0].pixelFormat = MTLPixelFormat(atoi(f));
             msaa = md ? [dev newRenderPipelineStateWithDescriptor:md error:&libError] : nil;
             if (!msaa) {
                 fprintf(stderr, "FRAME_MSAA %s: no state (%s)\n", pick,

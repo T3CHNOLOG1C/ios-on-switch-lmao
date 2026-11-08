@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 // raw GM20B path: pack/resolve.metal's resolves, run on this Mac's own GPU, against this Mac's Metal resolving the same multisampled
 // textures (MTLStoreActionMultisampleResolve) of random samples, every format the pack resolves at 2 and 4 samples. A format and
-// count with Metal's measured rule must be Metal's in every byte; RG11B10Float and a half past 2 samples take the device's average
-// (m2v's resolve on the GM20B), so only their mismatches are counted. An 8-bit sRGB resolve writes its codes into the format's
+// count whose rule is closed must be Metal's in every byte; four halves (and RG11B10Float's channels, rounded from them) follow
+// the nearest form measured, whose differing texels are counted only. An 8-bit sRGB resolve writes its codes into the format's
 // UNORM twin, as the raw path renders it. usage: resolveoracle <pack/resolve.metal>
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
@@ -33,7 +33,7 @@ NSString *const kSamples =
 struct Case {
     MTLPixelFormat format, written;  // the resolve texture's format, and the one the resolve state writes
     const char *function, *samples;
-    bool metalRule2, metalRule4;  // the rule is Metal's at 2 and at 4 samples
+    bool closed2, closed4;  // the rule at 2 and at 4 samples is closed
 };
 
 const Case kCases[] = {
@@ -41,7 +41,7 @@ const Case kCases[] = {
     {MTLPixelFormatRGBA8Unorm_sRGB, MTLPixelFormatRGBA8Unorm, "resolve_rgba8_srgb_frag", "unorm_samples", true, true},
     {MTLPixelFormatBGRA8Unorm, MTLPixelFormatBGRA8Unorm, "resolve_bgra8_frag", "unorm_samples", true, true},
     {MTLPixelFormatBGRA8Unorm_sRGB, MTLPixelFormatBGRA8Unorm, "resolve_bgra8_srgb_frag", "unorm_samples", true, true},
-    {MTLPixelFormatRG11B10Float, MTLPixelFormatRG11B10Float, "resolve_rg11b10f_frag", "small_float_samples", false,
+    {MTLPixelFormatRG11B10Float, MTLPixelFormatRG11B10Float, "resolve_rg11b10f_frag", "small_float_samples", true,
      false},
     {MTLPixelFormatRGBA16Float, MTLPixelFormatRGBA16Float, "resolve_rgba16f_frag", "half_samples", true, false},
 };
@@ -154,9 +154,9 @@ int main(int argc, char **argv)
                 size_t differ = 0;
                 for (size_t i = 0; i < want.size(); i += texel)
                     differ += memcmp(&want[i], &got[i], texel) != 0;
-                const bool rule = n == 2 ? c.metalRule2 : c.metalRule4;
+                const bool rule = n == 2 ? c.closed2 : c.closed4;
                 printf("%-24s x%lu: %zu of %lu texels differ from Metal's resolve%s\n", c.function, (unsigned long)n,
-                       differ, (unsigned long)(kWidth * kHeight), rule ? "" : " (the device's average: counted only)");
+                       differ, (unsigned long)(kWidth * kHeight), rule ? "" : " (not closed: counted only)");
                 failed += rule && differ;
             }
         printf("resolveoracle: %u case(s) failed\n", failed);

@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: MIT
 // raw GM20B path: a multisampled color attachment's resolve (MTLStoreActionMultisampleResolve), drawn one pixel a fragment over
-// the pass's render area into the resolve texture, by the rules m2v resolves it by on this GPU, so a resolve is the same pixels
-// whichever path draws it (metal2vulkan-runtime color_resolve.rs exact, metal2vulkan bind/color_resolve.rs):
-//  - Metal's measured rule where it has one: an 8-bit unorm channel's codes summed with half the count, over the count; an 8-bit
-//    sRGB channel's code (the nearest to its decoded value) as a 12-bit linear value (resolve_srgb.h), those averaged so and
-//    encoded by Metal's thresholds, written as the code through the target's UNORM twin; a half channel at two samples, the
-//    exact mean rounded to a half with a tie toward +infinity;
-//  - else the device's average, as NVK resolves (vk_meta_resolve_rendering AVERAGE): the samples summed in order, times one
-//    over their count.
+// the pass's render area into the resolve texture, by Metal's measured rules (metal2vulkan bind/color_resolve.rs; RG11B10Float
+// and four halves measured on an M1, raw/test/resolveoracle.mm):
+//  - an 8-bit unorm channel: its codes summed with half the count, over the count;
+//  - an 8-bit sRGB channel: its code (the nearest to its decoded value) as a 12-bit linear value (resolve_srgb.h), those averaged
+//    so and encoded by Metal's thresholds, written as the code through the target's UNORM twin;
+//  - a half channel: the mean rounded to a half with a tie toward +infinity (halfMean);
+//  - an RG11B10Float channel: that half mean rounded to the channel's float, ties to even.
 // One function a target format: the pack keys an own state by its function's name. The sample count comes in buffer 0, as the
 // attachment's (the shader does not query the texture). Built without fast math (rawpack.py), so the sums keep their order and
 // the bit tests their NaNs.
@@ -47,14 +46,6 @@ static uint codeOfLinear(uint x)
     return lo;
 }
 
-static float4 deviceAverage(Samples s, uint n, uint2 at)
-{
-    float4 sum = s.read(at, 0);
-    for (uint k = 1; k < n; k++)
-        sum += s.read(at, k);
-    return sum * (1.0 / float(n));
-}
-
 static float4 unorm8(Samples s, uint n, uint2 at)
 {
     uint4 sum = uint4(n / 2);
@@ -76,17 +67,19 @@ static float4 srgb8(Samples s, uint n, uint2 at)
     return float4(codeOfLinear(sum.x), codeOfLinear(sum.y), codeOfLinear(sum.z), sum.w) * as_type<float>(0x3b808081u);
 }
 
-// Two halves' resolve: a NaN counts 0 and an infinity 65536 of its sign; the mean rounded to the half grid with a tie toward
-// +infinity as floor(x / u + 1/2) u, u the grid's step at x (each step exact); 65536 or more an infinity, a zero +0
-static float counted(float x)
+// A half resolve: each sample's value (a NaN counts 0, an infinity 65536 of its sign) summed, times one over the count, rounded
+// to the half grid with a tie toward +infinity as floor(x / u + 1/2) u, u the grid's step at x (each step exact); 65536 or more
+// an infinity, a zero +0. Two samples sum exactly (Metal's rule). Four sum as Metal's adder comes nearest of the forms measured
+// on an M1: each sample floored to a sixteenth of the half step at the largest one's exponent, which leaves about one random
+// half texel in 26 a step off Metal's (resolveoracle), so that rule is not closed.
+static float4 counted(float4 x)
 {
-    const uint bits = as_type<uint>(x), m = bits & 0x7fffffffu;
-    return as_type<float>(m > 0x7f800000u ? 0u : m == 0x7f800000u ? (bits & 0x80000000u) | 0x47800000u : bits);
+    const uint4 bits = as_type<uint4>(x), m = bits & 0x7fffffffu;
+    return as_type<float4>(select(select(bits, (bits & 0x80000000u) | 0x47800000u, m == 0x7f800000u), uint4(0), m > 0x7f800000u));
 }
 
-static float halfMean(float a, float b)
+static float halfGrid(float x)
 {
-    const float x = (counted(a) + counted(b)) * 0.5;
     const uint field = max((as_type<uint>(x) & 0x7fffffffu) >> 23, 127u - 14u) - 10u;
     const float units = floor(x * as_type<float>((254u - field) << 23) + 0.5);
     const uint rounded = as_type<uint>(units * as_type<float>(field << 23));
@@ -94,12 +87,41 @@ static float halfMean(float a, float b)
     return as_type<float>(rm == 0 ? 0u : rm >= 0x47800000u ? (rounded & 0x80000000u) | 0x7f800000u : rounded);
 }
 
-static float4 halfResolve(Samples s, uint n, uint2 at)
+static uint4 magnitude(float4 x)
 {
-    if (n != 2)
-        return deviceAverage(s, n, at);
-    const float4 a = s.read(at, 0), b = s.read(at, 1);
-    return float4(halfMean(a.x, b.x), halfMean(a.y, b.y), halfMean(a.z, b.z), halfMean(a.w, b.w));
+    return as_type<uint4>(x) & 0x7fffffffu;
+}
+
+static float4 halfMean(Samples s, uint n, uint2 at)
+{
+    const float4 a = counted(s.read(at, 0)), b = counted(s.read(at, 1));
+    float4 sum = a + b;
+    if (n == 4) {
+        const float4 c = counted(s.read(at, 2)), d = counted(s.read(at, 3));
+        const uint4 top = max(max(magnitude(a), magnitude(b)), max(magnitude(c), magnitude(d)));
+        const uint4 field = max(top >> 23, uint4(127u - 14u)) - 14u;
+        const float4 g = as_type<float4>(field << 23), inv = as_type<float4>((254u - field) << 23);
+        sum = floor(a * inv) * g + floor(b * inv) * g + floor(c * inv) * g + floor(d * inv) * g;
+    }
+    const float4 x = sum * (1.0 / float(n));
+    return float4(halfGrid(x.x), halfGrid(x.y), halfGrid(x.z), halfGrid(x.w));
+}
+
+// An unsigned float of `m` fraction bits and a five-bit exponent (RG11B10Float's channels) nearest a half, ties to even, as
+// the exact float the target stores: Metal's resolve rounds the half mean so
+static float smallFloat(float x, uint m)
+{
+    if (!(x > 0.0))
+        return 0.0;
+    const uint field = max(as_type<uint>(x) >> 23, 127u - 14u) - m;
+    const float rounded = rint(x * as_type<float>((254u - field) << 23)) * as_type<float>(field << 23);
+    return rounded >= 65536.0 ? INFINITY : rounded;
+}
+
+static float4 smallFloats(Samples s, uint n, uint2 at)
+{
+    const float4 h = halfMean(s, n, at);
+    return float4(smallFloat(h.x, 6), smallFloat(h.y, 6), smallFloat(h.z, 5), 1.0);
 }
 
 fragment float4 resolve_rgba8_frag(Out in [[stage_in]], Samples s [[texture(0)]], constant uint &n [[buffer(0)]])
@@ -124,10 +146,10 @@ fragment float4 resolve_bgra8_srgb_frag(Out in [[stage_in]], Samples s [[texture
 
 fragment float4 resolve_rg11b10f_frag(Out in [[stage_in]], Samples s [[texture(0)]], constant uint &n [[buffer(0)]])
 {
-    return deviceAverage(s, n, uint2(in.position.xy));
+    return smallFloats(s, n, uint2(in.position.xy));
 }
 
 fragment float4 resolve_rgba16f_frag(Out in [[stage_in]], Samples s [[texture(0)]], constant uint &n [[buffer(0)]])
 {
-    return halfResolve(s, n, uint2(in.position.xy));
+    return halfMean(s, n, uint2(in.position.xy));
 }
