@@ -65,6 +65,16 @@ uint32_t dispatches()
     return n ? std::max(1u, uint32_t(atoi(n))) : 1;
 }
 
+// FRAME_BLIT_FIRST: a fill before the compute encoder, in the same command buffer (over the facade, a refused compute
+// encoder sends only its own segment to m2v: the rates line's sp=)
+void blitFirst(id<MTLDevice> dev, id<MTLCommandBuffer> cb)
+{
+    id<MTLBuffer> b = [dev newBufferWithLength:4096 options:MTLResourceStorageModeShared];
+    id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
+    [blit fillBuffer:b range:NSMakeRange(0, 4096) value:0x5a];
+    [blit endEncoding];
+}
+
 uint32_t bigBuffer()
 {
     const char *bytes = getenv("FRAME_BIG_BUFFER");
@@ -117,13 +127,8 @@ int runNvk(char **argv)
     }
     id<MTLCommandQueue> q = [dev newCommandQueue];
     id<MTLCommandBuffer> cb = [q commandBuffer];
-    if (getenv("FRAME_BLIT_FIRST")) {
-        // a raw encoder before the compute one: a refused compute encoder sends only its own segment to m2v
-        id<MTLBuffer> b = [dev newBufferWithLength:4096 options:MTLResourceStorageModeShared];
-        id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
-        [blit fillBuffer:b range:NSMakeRange(0, 4096) value:0x5a];
-        [blit endEncoding];
-    }
+    if (getenv("FRAME_BLIT_FIRST"))
+        blitFirst(dev, cb);
     id<MTLComputeCommandEncoder> enc = [cb computeCommandEncoder];
     [enc setComputePipelineState:ps];
     for (uint32_t s = 0; s < kSlots; s++)
