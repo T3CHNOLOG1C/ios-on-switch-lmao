@@ -148,9 +148,9 @@ size_t bcm_actframe_request(uint8_t *out, size_t size, const uint8_t *frame, siz
     if ((fc & 0x00fc) != 0x00d0)  // type management, subtype action
         return 0;
     const size_t body = len - BCM_80211_MGMT_HDR_LEN;
-    const size_t total = sizeof(name) + BCM_AF_PARAMS_HDR_LEN + body;
-    if (total > size)
+    if (size < BCM_ACTFRAME_REQUEST_LEN)
         return 0;
+    memset(out, 0, BCM_ACTFRAME_REQUEST_LEN);
     uint8_t *p = out;
     memcpy(p, name, sizeof(name));
     p += sizeof(name);
@@ -170,7 +170,7 @@ size_t bcm_actframe_request(uint8_t *out, size_t size, const uint8_t *frame, siz
     for (unsigned i = 0; i < 4; ++i)
         *p++ = (uint8_t)(packet_id >> (8 * i));
     memcpy(p, frame + BCM_80211_MGMT_HDR_LEN, body);
-    return total;
+    return BCM_ACTFRAME_REQUEST_LEN;
 }
 
 void bcm_probe_record(struct bcm_awdl_probe *p, unsigned item, int status, const uint8_t *reply, size_t length)
@@ -448,11 +448,21 @@ uint16_t bcm_chanspec_of(struct awdl_chan c)
         return 0;
     if (p <= 14)
         return (uint16_t)(0x1000 | p);  // 2.4 GHz, 20 MHz
-    if (c.opclass == 0x80 && c.number >= 6 && p >= c.number - 6) {
-        const unsigned sb = (unsigned)(p - (c.number - 6)) / 4;  // which 20 MHz of the block is primary
-        return (uint16_t)(0xc000u | 0x2000u | (sb << 8) | c.number);
+    const uint8_t centre = awdl_chan_centre80(p);
+    if ((c.opclass == 0x80 || c.opclass == 0x81) && centre) {
+        const unsigned sb = (unsigned)(p - (centre - 6)) / 4;  // which 20 MHz of the block is primary
+        return (uint16_t)(0xc000u | 0x2000u | (sb << 8) | centre);
     }
     return (uint16_t)(0xc000u | 0x1000u | p);  // 5 GHz, 20 MHz
+}
+
+uint16_t bcm_chanspec20(uint8_t channel, int d11n)
+{
+    if (!channel)
+        return 0;
+    if (d11n)  // brcmu_d11n_encchspec: band 2G 0x2000 / 5G 0x1000, BW_20 0x0800, no sideband 0x0300
+        return (uint16_t)((channel <= 14 ? 0x2000u : 0x1000u) | 0x0800u | 0x0300u | channel);
+    return (uint16_t)((channel <= 14 ? 0x0000u : 0xc000u) | 0x1000u | channel);  // d11ac: band, BW_20
 }
 
 uint8_t bcm_chanspec_primary(uint16_t chanspec)

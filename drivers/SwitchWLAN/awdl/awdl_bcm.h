@@ -144,10 +144,13 @@ enum {
     BCM_WLC_SET_MONITOR = 108,  // 1: the radio delivers 802.11 frames (msgbuf rx flag BCM_MSGBUF_RX_FRAME_802_11)
 };
 
-// A msgbuf rx completion's flags (brcmfmac msgbuf.c BRCMF_MSGBUF_PKT_FLAGS_*): the frame is 802.11, not 802.3.
+// A msgbuf rx completion's frame type: the le16 flags at offset 18 of msgbuf_rx_complete, masked (brcmfmac msgbuf.c
+// BRCMF_MSGBUF_PKT_FLAGS_FRAME_*). 802.3 for the station's frames, 802.11 for monitor mode's.
 enum {
-    BCM_MSGBUF_RX_FRAME_802_11 = 0x01,
+    BCM_MSGBUF_RX_FRAME_802_3 = 0x01,
+    BCM_MSGBUF_RX_FRAME_802_11 = 0x02,
     BCM_MSGBUF_RX_FRAME_MASK = 0x07,
+    BCM_MSGBUF_RX_FLAGS_OFFSET = 18,
 };
 
 // The soft backend's transmit path on firmware without injection: one action frame through the "actframe" iovar on a
@@ -159,11 +162,14 @@ enum {
     BCM_AF_PARAMS_HDR_LEN = 28,  // channel, dwell, BSSID, pad, DA, length, packet id
     BCM_AF_BODY_MAX = 1800,      // BRCMF_FIL_ACTION_FRAME_SIZE
     BCM_80211_MGMT_HDR_LEN = 24,
+    BCM_ACTFRAME_REQUEST_LEN = 9 + BCM_AF_PARAMS_HDR_LEN + BCM_AF_BODY_MAX,  // the whole brcmf_fil_af_params_le
 };
 
-// The iovar request "actframe\0<params>" into `out`: its length, or 0 when the frame is not a management action frame,
-// its body is over BCM_AF_BODY_MAX, or `size` is too small. `chanspec` is the channel to send on (bcm_chanspec_of),
-// `dwell_ms` how long the radio stays there for an answer (0 for none).
+// The iovar request "actframe\0<params>" into `out`, the whole structure as brcmfmac sends it (the body zero-padded to
+// BCM_AF_BODY_MAX; msgbuf carries only its first 1518 bytes and declares the rest): BCM_ACTFRAME_REQUEST_LEN, or 0 when
+// the frame is not a management action frame, its body is over BCM_AF_BODY_MAX, or `size` is too small. `chanspec` is
+// the channel to send on (bcm_chanspec20), `dwell_ms` how long the radio stays there afterwards (0 for none). The
+// firmware writes the header itself: the source is its interface's own address, whatever `frame` names.
 size_t bcm_actframe_request(uint8_t *out, size_t size, const uint8_t *frame, size_t len, uint16_t chanspec,
                             uint32_t dwell_ms, uint32_t packet_id);
 
@@ -292,6 +298,8 @@ size_t bcm_awdl_chan_seq(uint8_t *out, size_t size, const struct awdl_chan *seq,
 size_t bcm_slot_bss(uint8_t *out, uint16_t slots44);
 // The d11ac chanspec of an AWDL channel (0 for an empty slot): 2.4 GHz 20 MHz, 5 GHz 20 or 80 MHz.
 uint16_t bcm_chanspec_of(struct awdl_chan c);
+// A 20 MHz chanspec of a channel number in the firmware's layout (d11n != 0: WLC_GET_VERSION's iotype 1), 0 for 0.
+uint16_t bcm_chanspec20(uint8_t channel, int d11n);
 // The primary channel number of a Broadcom chanspec (bits 0-7 for 20 MHz; the primary inside a 40/80 MHz block).
 uint8_t bcm_chanspec_primary(uint16_t chanspec);
 
