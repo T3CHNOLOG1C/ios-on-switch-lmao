@@ -48,7 +48,8 @@ public:
     bool import(void *addr, uint64_t bytes, Bo &bo, uint32_t kind = 0, uint32_t surfaceId = 0);
     // The same in two steps, for a caller that serialises the VA list itself: the kernel's BoImport (the wiring: the slow part,
     // safe beside the other calls) and then the VA and its bind (bindImport, under the caller's lock).
-    bool importPages(void *addr, uint64_t bytes, Bo &bo, uint32_t surfaceId = 0);
+    // `gpuReads`: the GPU never writes it (TegraGM20BImportGpuReads), so no submission marks it GPU-dirty
+    bool importPages(void *addr, uint64_t bytes, Bo &bo, uint32_t surfaceId = 0, bool gpuReads = false);
     // The GPU may write the IOSurface from now on (BoImport took it as only sampled): before its first render or store.
     bool surfaceGpuWrites(uint32_t surfaceId);
     // SurfaceLayout (method 16) for the import `bo` of a surface: its layout, decided by the kernel once for every process

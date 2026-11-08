@@ -12,6 +12,7 @@ import shutil
 from collections.abc import Callable
 from pathlib import Path
 
+from tools.common import files
 from tools.install import disks, host, progress
 
 MIB = 1 << 20
@@ -101,7 +102,7 @@ def fit(image: Path, apfs_tool: str, check: Callable[[Path], None], log: host.Lo
     blocks, minimum, _, _ = map(int, host.run(apfs_tool, str(image), '0', log=log).split())
     if minimum >= blocks:
         return blocks * BLOCK
-    clone = image.with_name(image.name + '-fit')
+    clone = files.partial(image)
     clone.unlink(missing_ok=True)
     host.run('cp', '-c', image, clone, log=log)
     try:

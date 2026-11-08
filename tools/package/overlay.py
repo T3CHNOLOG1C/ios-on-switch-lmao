@@ -35,6 +35,7 @@ from pathlib import Path
 
 from boot_config import portrait_native
 
+from tools.common import macho
 from tools.trustcache.trustcache import trust_module
 
 OVERLAY_ROOT = '/private/var/Switch/overlay'
@@ -93,26 +94,23 @@ def cdhash(image: bytes) -> bytes:
     The first 20 bytes of the SHA-256 of its SHA-256 CodeDirectory (what codesign -dvvv prints as CDHash and what a
     trust cache entry holds).
     """
-    magic, _, _, _, ncmds = struct.unpack_from('<IiiII', image)
-    if magic != 0xFEEDFACF:
-        raise SystemExit('overlay: not a thin 64-bit Mach-O')
-    at = 32
-    for _ in range(ncmds):
-        cmd, size = struct.unpack_from('<II', image, at)
-        if cmd == 0x1D:  # LC_CODE_SIGNATURE
-            offset = struct.unpack_from('<I', image, at + 8)[0]
-            blob_magic, _, count = struct.unpack_from('>III', image, offset)
-            if blob_magic != 0xFADE0CC0:  # embedded signature SuperBlob
-                break
-            for index in range(count):
-                slot, start = struct.unpack_from('>II', image, offset + 12 + 8 * index)
-                if slot != 0 and not 0x1000 <= slot < 0x1005:  # CodeDirectory and its alternates
-                    continue
-                directory = offset + start
-                cd_magic, length = struct.unpack_from('>II', image, directory)
-                if cd_magic == 0xFADE0C02 and image[directory + 37] == 2:  # hashType SHA-256
-                    return hashlib.sha256(image[directory : directory + length]).digest()[:20]
-        at += size
+    try:
+        parsed = macho.macho(image, subtypes=None)
+    except ValueError as error:
+        raise SystemExit(f'overlay: not a thin 64-bit ARM64 Mach-O ({error})') from None
+    for at, _ in macho.commands_of(parsed, macho.LC_CODE_SIGNATURE)[:1]:
+        offset = struct.unpack_from('<I', image, at + 8)[0]
+        blob_magic, _, count = struct.unpack_from('>III', image, offset)
+        if blob_magic != 0xFADE0CC0:  # embedded signature SuperBlob
+            break
+        for index in range(count):
+            slot, start = struct.unpack_from('>II', image, offset + 12 + 8 * index)
+            if slot != 0 and not 0x1000 <= slot < 0x1005:  # CodeDirectory and its alternates
+                continue
+            directory = offset + start
+            cd_magic, length = struct.unpack_from('>II', image, directory)
+            if cd_magic == 0xFADE0C02 and image[directory + 37] == 2:  # hashType SHA-256
+                return hashlib.sha256(image[directory : directory + length]).digest()[:20]
     raise SystemExit('overlay: no SHA-256 CodeDirectory (sign it with codesign -s -)')
 
 

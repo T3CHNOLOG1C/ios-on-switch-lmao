@@ -12,7 +12,8 @@
 //   10       aks_wrap_key(key, len, class, bag)     in [bag, class] + key; out [class] + RFC 3394 blob (len + 8)
 //   11       aks_unwrap_key(blob, len, class, bag)  in [bag, class] + blob; out key (len - 8); a blob that fails the integrity
 //            check answers e00002bc, which securityd turns into "can't be decrypted on this device, ever"
-//   14       aks_get_system                         out [system keybag handle 0] (keybagd then needs no systembag.kb)
+//   14       aks_get_system                         out [system keybag handle 0] (keybagd then needs no systembag.kb); the
+//            first answer is the bag's first unlock: messageClients(e3ffd00f, &handle, 4), once per boot
 //   17, 35   aks_get_(extended_)device_state        struct out: DER SET{ SEQUENCE{ UTF8String key, INTEGER value } ... }
 //            keys ss sls sb sfa sgs sas sgpe srcd sms bh; ss = 4, sls = lock state: 3 = MobileKeyBag's "no passcode" (default;
 //            lockdownd and SpringBoard read "has passcode" as sls != 3), sheng-aks-sls=<n> overrides (KeyStoreProbe.cpp)
@@ -43,6 +44,7 @@ constexpr uint32_t kSelLockState = 7, kSelWrapKey = 10, kSelUnwrapKey = 11, kSel
 constexpr uint64_t kUnlockedSinceBoot = 4;
 constexpr uint32_t kStateFlags = 4;
 constexpr uint64_t kSystemHandle = 0;
+constexpr uint32_t kMessageFirstUnlock = 0xe3ffd00f;
 constexpr uint64_t kMaxKeyClass = 31;  // protection classes are small integers (securityd's "class 11" is dku)
 constexpr IOReturn kAksError =
     static_cast<IOReturn>(aks::kReturnError);  // also what libaks reports itself when the connection is missing
@@ -164,6 +166,19 @@ static size_t structureCapacity(const IOExternalMethodArguments *args)
     return args->structureOutput ? args->structureOutputSize : 0;
 }
 
+// AppleSEPKeyStore sends this once per boot when the SEP first unlocks a keybag, with the bag's handle (24B119 and 21H461:
+// "Sending First Unlock notification for handle %d"); with no passcode that is when the system bag is set up, here the
+// first aks_get_system, from keybagd --init. launchd registers its interest before any boot task runs, and on iOS 27
+// reboots on a critical process's crash loop unless this arrived more than five minutes before.
+static void sendFirstUnlock(IOService *store)
+{
+    static volatile UInt32 sent;
+    if (!store || !OSCompareAndSwap(0, 1, &sent))
+        return;
+    uint32_t handle = static_cast<uint32_t>(kSystemHandle);
+    store->messageClients(kMessageFirstUnlock, &handle, sizeof handle);
+}
+
 // Selectors 10 and 11: [bag, class] in, the key or blob inline (wrapped keys stay far below the 4 KiB inline limit).
 static IOReturn keyOperation(uint32_t selector, IOExternalMethodArguments *args)
 {
@@ -241,6 +256,7 @@ OSDeclareDefaultStructors(AppleKeyStoreUserClient) public : IOReturn clientClose
                 args->scalarOutput[0] = kSystemHandle;
                 args->scalarOutputCount = 1;
                 rc = kIOReturnSuccess;
+                sendFirstUnlock(getProvider());
                 break;
             case kSelLockState:
                 rc = (args->scalarInputCount == 1 && args->scalarOutputCount == 1 && args->scalarOutput)

@@ -616,28 +616,14 @@ pub unsafe extern "C" fn nmb_device_answer_selector(index: usize, kind: *mut u32
     selector.as_ptr()
 }
 
-/// The GPU families of the target hardware (iPad7,1, A10X: MTLGPUFamilyApple3 and the families below it), which the target OS was built
-/// against and which `supportsFamily:` answers true even where rows of Apple's tables are not exact here. The OS takes its only working path
-/// through them: Core Image's Metal context needs Apple2 (`CIMetalDeviceIsSupported`), and without it falls back to an OpenGL ES context
-/// this device has none of (iconservicesagent crashed in `CI::GLContext::init`, int-155); QuartzCore splits a frame into command buffers of
-/// 128 draws where Apple3 is false (`MetalContext::flush`). Each waived row stays the runtime's own refusal where it is used, and
-/// `nmb_device_family_waivers` names them for the journal.
-const TARGET_FAMILIES: [GpuFamily; 5] = [
-    GpuFamily::Apple1,
-    GpuFamily::Apple2,
-    GpuFamily::Apple3,
-    GpuFamily::Common1,
-    GpuFamily::Common2,
-];
-
-/// The rows of Apple's tables the device does not meet in the target families `supportsFamily:` answers true (`TARGET_FAMILIES`), one
+/// The rows of Apple's tables the device does not meet in the target families `supportsFamily:` answers true (`target::FAMILIES`), one
 /// family per line ("Apple2 4: <row> ..."), into `out` (NUL-terminated); the length the whole text needs.
 #[unsafe(no_mangle)]
 pub extern "C" fn nmb_device_family_waivers(device: *const NmbDevice, out: *mut c_char, size: usize) -> usize {
     guard(0, || {
         let d = &get(device)?.0;
         let mut text = String::new();
-        for family in TARGET_FAMILIES {
+        for &family in crate::target::FAMILIES {
             let blockers = d.family_blockers(family);
             text += &format!("{family:?} {}:", blockers.len());
             for r in &blockers {
@@ -733,7 +719,7 @@ fn runtime_answer(device: &NmbDevice, selector: &str, arg: u64) -> Result<u64, S
         "supportsVertexAmplificationCount:" => gap(p.supports_vertex_amplification_count(arg))?,
         "supportsRasterizationRateMapWithLayerCount:" => gap(p.supports_rasterization_rate_map_with_layer_count(arg))?,
         "supportsFamily:" => {
-            (d.supports_family(arg as i64) || TARGET_FAMILIES.iter().any(|f| f.raw() == arg as i64)) as u64
+            (d.supports_family(arg as i64) || crate::target::FAMILIES.iter().any(|f| f.raw() == arg as i64)) as u64
         }
         "supportsPrimitiveType:" => p.supports_primitive_type(arg) as u64,
         "supportsTextureWriteRoundingMode:" => p.supports_texture_write_rounding_mode(arg) as u64,
@@ -2270,6 +2256,26 @@ pub extern "C" fn nmb_command_buffer_wait_completed_for(command_buffer: *mut Nmb
 pub extern "C" fn nmb_command_buffer_commit(command_buffer: *mut NmbCommandBuffer) -> bool {
     guard(false, || {
         get(command_buffer)?.0.commit().map_err(e("commit"))?;
+        Ok(true)
+    })
+}
+
+/// The `VkCommandBuffer` handles the command buffer's encoders recorded, in order, each to `each(ctx, handle)`, instead of a
+/// commit: a capture never submitted (`CommandBuffer::capture`). The command buffer cannot be committed after.
+///
+/// # Safety
+/// `each` is a valid function for `ctx` for the call's length.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nmb_command_buffer_capture(
+    command_buffer: *mut NmbCommandBuffer,
+    each: unsafe extern "C" fn(ctx: *mut c_void, command_buffer: u64),
+    ctx: *mut c_void,
+) -> bool {
+    guard(false, || {
+        get(command_buffer)?
+            .0
+            .capture(|raw| unsafe { each(ctx, raw) })
+            .map_err(e("capture"))?;
         Ok(true)
     })
 }

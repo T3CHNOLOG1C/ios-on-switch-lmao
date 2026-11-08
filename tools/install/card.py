@@ -15,16 +15,19 @@ entry under the project's former names (renamed.py) and the icon's former name (
 to the paths the caller names.
 """
 
+import argparse
 import contextlib
 import hashlib
 import os
 import re
 import shutil
+import sys
 import tempfile
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
+from tools.common import files, hashing
 from tools.install import disks, gpt, host, renamed, target as targets
 
 LINUX_MBR = 0x83
@@ -38,7 +41,6 @@ USER_FILES = ('bootargs.txt',)
 # The installer's image parts beside the boot files (folder.py writes them, install-ios.bin reads them): never a
 # boot package's, so a deploy keeps them.
 INSTALL_PART = re.compile(r'([A-Z0-9]+)\.SII\.([0-9]{3})')
-HASH_CHUNK = 8 << 20
 
 
 class RefusedError(Exception):
@@ -88,6 +90,20 @@ def resolve(argument: str) -> Card:
     if not info.get('WritableMedia', True):
         raise RefusedError(f'{name} is read-only media (SD lock switch?)')
     return Card(name, info, int(info['TotalSize']), image)
+
+
+def confirm(args: argparse.Namespace, disk: str, warning: str) -> None:
+    """Have the user type `disk` after `warning` (or pass --confirm=disk), and keep it in args.confirm for sudo."""
+    if args.confirm:
+        if args.confirm != disk:
+            raise RefusedError(f'--confirm={args.confirm} does not name the target {disk}')
+        return
+    if not sys.stdin.isatty():
+        raise RefusedError(f'type-to-confirm needs a terminal (or pass --confirm={disk})')
+    answer = input(f'{warning} Type {disk} to continue: ')
+    if answer.strip() != disk:
+        raise RefusedError('not confirmed')
+    args.confirm = disk
 
 
 def read_table(card: Card) -> gpt.Table:
@@ -260,17 +276,6 @@ def mounted(identifier: str, log: host.Log, read_only: bool = False, owners: boo
             disks.unmount(identifier, log)
 
 
-def sha256_file(path: Path, advance: Callable[[int], None] | None = None) -> str:
-    """Return the file's sha256; `advance` (progress.advance) counts the bytes as they are read."""
-    digest = hashlib.sha256()
-    with open(path, 'rb') as f:
-        while chunk := f.read(HASH_CHUNK):
-            digest.update(chunk)
-            if advance:
-                advance(len(chunk))
-    return digest.hexdigest()
-
-
 def boot_entry_files(package: str | Path) -> dict[str, Path]:
     """{relative path on the FAT: source} of the boot package: switchroot/ios/*, the hekate ini and its icon."""
     package = Path(package)
@@ -329,15 +334,13 @@ def _copy_changed(fat_root: Path, wanted: dict[str, Path], dry_run: bool) -> lis
         if (
             target.is_file()
             and target.stat().st_size == source.stat().st_size
-            and sha256_file(target) == sha256_file(source)
+            and hashing.sha256_file(target) == hashing.sha256_file(source)
         ):
             continue
         changed.append(relative)
         if not dry_run:
             target.parent.mkdir(parents=True, exist_ok=True)
-            partial = target.with_name('.switch-partial-' + target.name)
-            shutil.copyfile(source, partial)
-            os.replace(partial, target)
+            files.copy(source, target)
     return changed
 
 
@@ -369,17 +372,18 @@ def _remove_stale(fat_root: Path, wanted: dict[str, Path], dry_run: bool) -> lis
 
 def tree_digest(root: Path) -> str | None:
     root = Path(root)
-    digest = hashlib.sha256()
     if not root.is_dir():
         return None
-    for path in sorted(root.rglob('*')):
-        if path.name.startswith('._'):
-            continue
+    paths = [p for p in sorted(root.rglob('*')) if not p.name.startswith('._')]
+    files = [p for p in paths if not p.is_dir()]
+    hashes = dict(zip(files, hashing.sha256_files(files), strict=True))
+    digest = hashlib.sha256()
+    for path in paths:
         relative = path.relative_to(root).as_posix()
-        if path.is_dir():
-            digest.update(b'd ' + relative.encode() + b'\n')
+        if path in hashes:
+            digest.update(f'f {relative} {path.stat().st_mode & 0o777 | 0o200:o} {hashes[path]}\n'.encode())
         else:
-            digest.update(f'f {relative} {path.stat().st_mode & 0o777 | 0o200:o} {sha256_file(path)}\n'.encode())
+            digest.update(b'd ' + relative.encode() + b'\n')
     return digest.hexdigest()
 
 

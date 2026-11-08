@@ -4,14 +4,17 @@
 // PhotosUICore's texture converter takes its largest image from 0x84/0x88 (-[PXGMetalTextureConverter
 // createTextureFromCGImage:transform:alpha:options:], PXGCreateMetalTextureFromBytesInCGImage); with them 0 every image is
 // "too large", is redrawn to fit 0x0 and PXGCreateContext asserts. CoreRE reads minBufferNoCopyAlignmentBytes at 0x7c. The
-// offsets are those accessors' loads (the 61 integer fields; maxLineWidth and maxPointSize are floats, not filled).
+// offsets are those accessors' loads (the 62 integer fields, maxBufferLength's 64 bits at 0x100 the last; maxLineWidth and
+// maxPointSize are floats, not filled). The same layout in 21H461 and 24B119.
 #pragma once
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 
 struct LimitField {
     const char *selector;
     uint16_t offset;
+    uint8_t bytes = 4;
 };
 
 inline constexpr LimitField kLimitFields[] = {{"maxFramebufferStorageBits", 0x0},
@@ -74,11 +77,23 @@ inline constexpr LimitField kLimitFields[] = {{"maxFramebufferStorageBits", 0x0}
                                               {"maxIOCommandsInFlight", 0xf0},
                                               {"maxPredicatedNestingDepth", 0xf4},
                                               {"maxAccelerationStructureLevels", 0xf8},
-                                              {"maxConstantBufferArguments", 0xfc}};
+                                              {"maxConstantBufferArguments", 0xfc},
+                                              {"maxBufferLength", 0x100, 8}};
+
+// The table's extent: the bytes from its start through its last field
+inline constexpr size_t limitsTableBytes()
+{
+    size_t end = 0;
+    for (const LimitField &field : kLimitFields)
+        end = field.offset + field.bytes > end ? field.offset + field.bytes : end;
+    return end;
+}
+
+inline constexpr size_t kLimitsTableBytes = limitsTableBytes();
 
 enum class LimitFill : uint8_t {
     Filled,
-    Overflow,  // the answer does not fit the table's 32 bits
+    Overflow,  // the answer does not fit the field's 32 bits
     NotRead,   // the base class's accessor does not read the field there: it is left as it was
 };
 
@@ -93,16 +108,20 @@ void fillLimitsTable(uint8_t *table, Answer answer, ReadBack readBack, Report re
         uint64_t value = 0;
         if (!answer(field, value))
             continue;
-        if (value > UINT32_MAX) {
+        if (field.bytes == 4 && value > UINT32_MAX) {
             report(field, LimitFill::Overflow);
             continue;
         }
-        uint32_t was;
-        memcpy(&was, table + field.offset, 4);
-        const uint32_t word = uint32_t(value);
-        memcpy(table + field.offset, &word, 4);
+        uint8_t was[8];
+        memcpy(was, table + field.offset, field.bytes);
+        if (field.bytes == 8) {
+            memcpy(table + field.offset, &value, 8);
+        } else {
+            const uint32_t word = uint32_t(value);
+            memcpy(table + field.offset, &word, 4);
+        }
         if (readBack(field) != value) {
-            memcpy(table + field.offset, &was, 4);
+            memcpy(table + field.offset, was, field.bytes);
             report(field, LimitFill::NotRead);
             continue;
         }

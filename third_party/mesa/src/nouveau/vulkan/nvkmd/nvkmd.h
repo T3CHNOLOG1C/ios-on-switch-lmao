@@ -433,6 +433,9 @@ bool nvkmd_darwin_ctx_lost(struct nvkmd_ctx *ctx);
 VkResult MUST_CHECK
 nvkmd_darwin_ctx_reopen(struct nvkmd_ctx *ctx, struct vk_object_base *log_obj);
 uint32_t nvkmd_darwin_sync_failure(struct vk_sync *sync, uint64_t value);
+
+/* The caller's pages a host import is of, NULL for any other memory. */
+const void *nvkmd_darwin_mem_host_ptr(const struct nvkmd_mem *mem);
 #endif
 
 static inline void

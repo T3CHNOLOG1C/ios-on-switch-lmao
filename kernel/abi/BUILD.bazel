@@ -15,7 +15,7 @@ py_library(
         "kernel_image.py",
         "kernel_tables.py",
     ],
-    deps = ["//translate/arm64e:prelink26"],
+    deps = ["//tools/common:macho"],
 )
 
 py_test(

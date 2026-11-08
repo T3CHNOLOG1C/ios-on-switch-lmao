@@ -31,6 +31,7 @@
 #include <map>
 #include <tuple>
 #include <vector>
+#include <IOKit/IOReturn.h>
 #include <mach/kern_return.h>
 #include "raw_kernel.h"
 #include "raw_pack.h"
@@ -254,7 +255,21 @@ struct Pipeline {
     uint8_t readBits = 0;      // colors its draws read as they were: blended into, or written through a partial mask
     uint8_t fetchBits = 0;     // colors it reads by framebuffer fetch
     uint32_t depthFormat = 0;  // its key's depth and stencil attachment format (ds=<format>/<format>; 0: none)
+    // push words setting back the registers outside the pack's varying ones its methods set (a state the runtime made:
+    // raw_record.h extras), to their value in every pack state: emitted before the next state's methods
+    std::vector<uint32_t> restore;
 };
+
+// A program in the heap: its record, its SET_PIPELINE_PROGRAM value, its shader data's GPU address (0: none) and its header
+struct PlacedProgram {
+    const PackProgram *record = nullptr;
+    uint32_t program = 0;
+    uint64_t data = 0;
+    const uint8_t *header = nullptr;  // its shader header, as the CPU holds it
+};
+
+struct RuntimeRecord;
+struct CapturedProgram;
 
 // A render pass's attachments (Core Animation: color 0 the target, color 1 a memoryless attachment, writeMask 0 or 15)
 struct ColorAttachment {
@@ -360,6 +375,7 @@ private:
     Device *dev_ = nullptr;
     PassDesc pass_;
     Push p_;
+    const Pipeline *extrasAtBegin_ = nullptr;  // set back by the pass's prologue, before its clears
     uint32_t *bodyStart_ = nullptr;
     std::vector<std::pair<uint32_t *, uint32_t *>> bodies_;  // the pass body's push segments, in order
     void reserve();
@@ -530,9 +546,13 @@ private:
     BlitEncoder blit_;
     uint64_t pushStart_ = 0, uploadStart_ = 0;
     uint32_t rootPush_[32] = {};
-    uint32_t restart_ = 0;  // SET_DA_PRIMITIVE_RESTART_INDEX as the GPU will hold it
-    DepthStencilRegs ds_;   // and its depth/stencil registers
-    bool drawn_ = false;    // a draw was encoded (NVK resets the restart index at a command buffer's first)
+    uint32_t restart_ = 0;                  // SET_DA_PRIMITIVE_RESTART_INDEX as the GPU will hold it
+    DepthStencilRegs ds_;                   // and its depth/stencil registers
+    const Pipeline *extrasLive_ = nullptr;  // and the state whose extras it holds (Pipeline::restore)
+    bool drawn_ = false;  // a draw was encoded (NVK resets the restart index at a command buffer's first)
+    // the prologue's INVALIDATE_SHADER_CACHES_NO_WFI data word, which commit gives the INSTRUCTION bit when programs were placed
+    // in the heap since the last submission that invalidated the instruction cache
+    uint32_t *shaderInvalidate_ = nullptr;
     void segment(uint32_t *from, uint32_t *to);
 };
 
@@ -571,6 +591,9 @@ public:
     // A pack pipeline by its state key's FNV-1a (RawMetal.mm rawPipelineKey); null: not in the pack.
     // caTransform: its vertex function is Core Animation's fixed_vert_l?h_spc (Pipeline::caTransform)
     Pipeline *pipeline(uint64_t keyHash, PackForm form = PackForm::Default, bool caTransform = false);
+    // A state the runtime made a record of (raw_record.h), drawn from then on as the pack's are; null: its programs find no room
+    // in the heap or its samplers none in the header pool (`why`)
+    Pipeline *addRecord(const RuntimeRecord &r, bool caTransform, std::string &why);
 
     // Resources (thread safe). All textures are 2D, one level, one sample, pitch-linear.
     // pool memory, rows 256-byte aligned; `wc`: write-combined GPU-pool memory (a texture the CPU writes with replaceRegion:
@@ -748,19 +771,29 @@ public:
         return k_.canOrder();
     }
 
+    // A channel the kernel killed is made again first (between command buffers, as begin() would), so one GPU fault does not
+    // leave the process ordered on the CPU for good
     int orderAfterOthers(uint32_t &waits)
     {
         if (!ensureChannel())
             return KERN_FAILURE;
-        return k_.order(channel_, TegraGM20BOrderAfterTask, 0, waits);
+        for (int attempt = 0;; attempt++) {
+            if (k_.lost(channel_) && !reopen())
+                return KERN_FAILURE;
+            const int kr = k_.order(channel_, TegraGM20BOrderAfterTask, 0, waits);
+            if (kr != kIOReturnNotResponding || attempt)
+                return kr;
+        }
     }
 
+    // A killed channel's fence is released and nothing it had runs any more: there is nothing of it to order after
     int orderOthersAfter(uint32_t &waits)
     {
         waits = 0;
-        if (!channelReady_.load(std::memory_order_acquire))
-            return KERN_SUCCESS;  // nothing submitted to order after
-        return k_.order(channel_, TegraGM20BOrderBeforeTask, lastSeqno_, waits);
+        if (!channelReady_.load(std::memory_order_acquire) || k_.lost(channel_))
+            return KERN_SUCCESS;
+        const int kr = k_.order(channel_, TegraGM20BOrderBeforeTask, lastSeqno_, waits);
+        return kr == kIOReturnNotResponding ? KERN_SUCCESS : kr;
     }
 
     struct Stats {
@@ -893,11 +926,41 @@ private:
     std::unordered_map<uint32_t, Pipeline> pipelines_;
     std::vector<uint32_t> placed_;  // each pack program's heap offset, ~0u: not placed
     uint64_t heapPlaced_ = 0;
+    // heapPlaced_ as of the last submission whose prologue invalidated the SMs' instruction caches, ~0: none on this channel.
+    // The instruction cache prefetches past a program's end, where heapPlace puts the next program.
+    uint64_t heapInvalidated_ = ~0ull;
     uint32_t ctWrite_[8] = {};  // SET_CT_WRITE(i) as the baseline leaves it
     bool place(uint32_t prog, uint32_t &program, uint64_t &data);
     bool heapGrow(uint64_t end);
     bool heapPlace(const uint8_t *bytes, uint32_t size, uint64_t &offset);
+    void build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs, const PlacedProgram &fs,
+               const uint32_t *blob, const char *keyString, bool caTransform);
     std::vector<uint32_t> constexprTsc_;
+
+    // the states the runtime made (addRecord), never removed: Pipeline::rec points into them
+    struct Completed {
+        PackPipeline record;
+        std::string keyString;
+        std::vector<uint32_t> blob;
+        PackProgram programs[2];
+        Pipeline pipeline;
+    };
+
+    std::deque<Completed> completedStore_;
+    std::unordered_map<uint64_t, Pipeline *> completed_;
+    std::map<std::array<uint32_t, 8>, uint8_t>
+        completedSamplers_;  // their constexpr samplers' headers, by constexprTsc_ index
+
+    struct CompletedProgram {
+        PackProgram info;
+        PlacedProgram placed;
+        uint8_t header[80];
+    };
+
+    std::map<std::string, CompletedProgram> completedPrograms_;  // by program id
+    bool placeCompleted(const CapturedProgram &p, PlacedProgram &out);
+    bool takeTsc(uint32_t &tsc);
+    const Pipeline *extrasLive_ = nullptr;  // the state whose extras (Pipeline::restore) the channel holds
     CommandBuffer cb_;
     uint32_t rootPush_[32] = {};  // what the GPU's root table holds at [0x700, 0x780) after everything submitted
     uint32_t restart_ = 0;        // and its primitive restart index

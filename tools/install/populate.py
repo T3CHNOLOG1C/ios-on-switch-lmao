@@ -13,7 +13,8 @@ import shutil
 import sys
 from pathlib import Path
 
-from tools.install import card as cards, host, owners as ownership, progress
+from tools.common import files, hashing
+from tools.install import host, owners as ownership, progress
 
 SKIP = ('.fseventsd', '.Spotlight-V100', '.Trashes')
 
@@ -99,18 +100,17 @@ def stage_cryptexes(
         if Path(relative).name != source.name:
             raise host.HostError('{}: the kernel opens {}, the image is {}'.format(member, item['path'], source))
         target = preboot / relative
-        if target.is_file() and target.stat().st_size == source.stat().st_size and cards.sha256_file(target) == want:
+        if target.is_file() and target.stat().st_size == source.stat().st_size and hashing.sha256_file(target) == want:
             log(f'preboot: {relative} unchanged')
             continue
         target.parent.mkdir(parents=True, exist_ok=True)
-        partial = target.with_name('.partial-' + target.name)
-        with progress.step(f'preboot: staging {source.name}', 2 * source.stat().st_size):
+        with (
+            files.replacing(target) as partial,
+            progress.step(f'preboot: staging {source.name}', 2 * source.stat().st_size),
+        ):
             host.copy_file_parallel(source, partial)
-            digest = cards.sha256_file(partial, progress.advance)
-        if digest != want:
-            partial.unlink()
-            raise host.HostError(f'{relative}: copy does not match its sha256')
-        os.replace(partial, target)
+            if hashing.sha256_file(partial, progress.advance) != want:
+                raise host.HostError(f'{relative}: copy does not match its sha256')
         target.chmod(0o644)
         if owners:
             owners.set(preboot, 0, 0, 0o755)

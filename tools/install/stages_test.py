@@ -74,6 +74,7 @@ class CleanTest(unittest.TestCase):
         (scratch / 'delta-os/f').write_bytes(b'x')
         (scratch / '141-10410-227.dmg').write_bytes(b'rebuilt')
         (scratch / '.partial-composed.img').write_bytes(b'half')
+        (scratch / 'populated.img.partial').write_bytes(b'half')
         (scratch / stages.COMPOSED).write_bytes(b'kept')
         args = SimpleNamespace(scratch=str(scratch), system_cryptex='/ipsw/141-10410-227.dmg', app_cryptex=None)
         lines = []
@@ -92,6 +93,7 @@ class CleanTest(unittest.TestCase):
             work.clean()
         self.assertFalse((scratch / 'delta-os').exists())
         self.assertFalse((scratch / '.partial-composed.img').exists())
+        self.assertFalse((scratch / 'populated.img.partial').exists())
         self.assertTrue((scratch / stages.COMPOSED).exists())
         self.assertTrue(any('sudo rm -rf' in line and '141-10410-227.dmg' in line for line in lines), lines)
 

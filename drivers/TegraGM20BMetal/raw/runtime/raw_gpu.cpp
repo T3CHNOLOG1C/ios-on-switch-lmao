@@ -105,6 +105,8 @@ constexpr size_t kDedicatedSpares = 2;
 // programs, of which the render server uses a few hundred. Bound in steps as they are placed, with room after the last one
 // for the GPU's instruction prefetch past a program's end.
 constexpr uint64_t kHeapCap = 8 << 20, kHeapStep = 256 << 10, kHeapSlack = 0x1000;
+// INVALIDATE_SHADER_CACHES_NO_WFI (cla097.h): INSTRUCTION bit 0, CONSTANT bit 12
+constexpr uint32_t kInvalidateInstruction = 1u << 0, kInvalidateConstant = 1u << 12;
 constexpr uint32_t kMaxSegments = TegraGM20BMaxPushes;
 // NVK's copies of pitch memory (nouveau_copy_rect: LAUNCH_DMA PIPELINED, FLUSH_ENABLE, SRC/DST_MEMORY_LAYOUT PITCH, MULTI_LINE_ENABLE)
 constexpr uint32_t kLaunchPitch = 1u | 1u << 2 | 1u << 7 | 1u << 8 | 1u << 9;
@@ -268,48 +270,9 @@ void Device::emitContext(Push &p)
 {
     const uint32_t initCount = uint32_t(pack_.bytes(PackInit) / sizeof(PackInitMethod));
     const PackInitMethod *im = pack_.section<PackInitMethod>(PackInit);
+    const InitAddresses here = {heap_.va, zero_.va, root_.va, tic_.va, tsc_.va, kTicCount - 1, kTscCount - 1};
     for (uint32_t i = 0; i < initCount; i++) {
-        uint32_t d = im[i].data;
-        switch (im[i].reloc) {
-        case RelocHeapHi:
-            d = uint32_t(heap_.va >> 32);
-            break;
-        case RelocHeapLo:
-            d = uint32_t(heap_.va);
-            break;
-        case RelocZeroHi:
-            d = uint32_t(zero_.va >> 32);
-            break;
-        case RelocZeroLo:
-            d = uint32_t(zero_.va);
-            break;
-        case RelocRootHi:
-            d = uint32_t(root_.va >> 32);
-            break;
-        case RelocRootLo:
-            d = uint32_t(root_.va);
-            break;
-        case RelocTicHi:
-            d = uint32_t(tic_.va >> 32);
-            break;
-        case RelocTicLo:
-            d = uint32_t(tic_.va);
-            break;
-        case RelocTicMax:
-            d = kTicCount - 1;
-            break;
-        case RelocTscHi:
-            d = uint32_t(tsc_.va >> 32);
-            break;
-        case RelocTscLo:
-            d = uint32_t(tsc_.va);
-            break;
-        case RelocTscMax:
-            d = kTscCount - 1;
-            break;
-        default:
-            break;
-        }
+        const uint32_t d = relocated(im[i], here);
         p.m(im[i].mthd, d, im[i].subc);
     }
     const uint32_t *base = pack_.section<uint32_t>(PackBaseline);
@@ -470,8 +433,8 @@ bool Device::openChannel(std::string &err)
 // lock_ held: program `prog`'s slot in the heap, copied out of the pack the first time a state uses it, its
 // SET_PIPELINE_PROGRAM value and its shader data's GPU address (0: none). A slot is a few KiB copied once per process from the
 // pack's pages, so the CPU copies it (the copy engine would want the pack's pages imported, wired, for the whole process); the
-// next submission's prologue invalidates the shader and constant caches before any draw reads it. False: the heap is full (that
-// state stays m2v's).
+// prologue of the next submission committed after it invalidates the instruction caches too (CommandBuffer::commit), and every
+// prologue the constant cache, before any draw reads it. False: the heap is full (that state stays m2v's).
 bool Device::place(uint32_t prog, uint32_t &program, uint64_t &data)
 {
     const PackProgram &p = pack_.section<PackProgram>(PackPrograms)[prog];
@@ -497,7 +460,8 @@ bool Device::heapGrow(uint64_t end)
         const uint64_t step = std::min(heap_.bytes - heapBound_, (end - heapBound_ + kHeapStep - 1) & ~(kHeapStep - 1));
         Bo part;
         uint8_t *cpu = heap_.cpu + heapBound_;
-        if (!k_.importPages(cpu, step, part) || !k_.bindImportAt(cpu, part, heap_.va + heapBound_, kPteKindPitch))
+        if (!k_.importPages(cpu, step, part, 0, true) ||
+            !k_.bindImportAt(cpu, part, heap_.va + heapBound_, kPteKindPitch))
             return false;
         heapParts_.push_back(part);
         heapBound_ += step;
@@ -505,16 +469,19 @@ bool Device::heapGrow(uint64_t end)
     return true;
 }
 
-// lock_ held: `size` bytes of programs at the heap's end, their offset in `offset`, with the prefetch slack after them bound.
-// The heap is cached host memory: what the CPU copies there is cleaned to memory before the GPU can read it. False: no room.
+// lock_ held: a program slot of `size` bytes at the heap's end, its offset in `offset`, with the prefetch slack after it bound.
+// A slot starts 256-aligned as NVK's uploads do: its code at +0x80 and its shader data at a 256-aligned offset in it, while the
+// slot before may end anywhere after its shader data. The heap is cached host memory: what the CPU copies there is cleaned to
+// memory before the GPU can read it. False: no room.
 bool Device::heapPlace(const uint8_t *bytes, uint32_t size, uint64_t &offset)
 {
-    const uint64_t end = heapPlaced_ + size;
+    const uint64_t at = (heapPlaced_ + 0xFF) & ~uint64_t(0xFF);
+    const uint64_t end = at + size;
     if (!heapGrow(end + kHeapSlack))
         return false;
-    memcpy(heap_.cpu + heapPlaced_, bytes, size);
-    cleanToMemory(heap_.cpu + heapPlaced_, size);
-    offset = heapPlaced_;
+    memcpy(heap_.cpu + at, bytes, size);
+    cleanToMemory(heap_.cpu + at, size);
+    offset = at;
     heapPlaced_ = end;
     return true;
 }
@@ -537,31 +504,44 @@ static uint8_t bindProgramCbufs(Push &w, const PackProgram &prog, uint32_t group
 }
 
 // A state of the pack, made the first time it is looked up (most of the pack's states never are in a process): its registers
-// as push words with its programs placed in the heap
+// as push words with its programs placed in the heap. Else one the runtime made (addRecord).
 Pipeline *Device::pipeline(uint64_t keyHash, PackForm form, bool caTransform)
 {
     const PackPipeline *rec = pack_.find(keyHash, form);
-    if (!rec)
-        return nullptr;
     std::lock_guard<std::mutex> l(lock_);
+    if (!rec) {
+        const auto made = completed_.find(keyHash);
+        return form == PackForm::Default && made != completed_.end() ? made->second : nullptr;
+    }
     Pipeline &pl = pipelines_[rec - pack_.section<PackPipeline>(PackPipelines)];
     if (pl.rec)
         return &pl;
     const PackPipeline &pp = *rec;
     const PackProgram *progs = pack_.section<PackProgram>(PackPrograms);
-    const uint32_t *blob = pack_.section<uint32_t>(PackBlob);
-    uint32_t vs = 0, fs = 0;
-    uint64_t vsData = 0, fsData = 0;
-    if (!place(pp.vs, vs, vsData) || !place(pp.fs, fs, fsData)) {
+    PlacedProgram vs, fs;
+    if (!place(pp.vs, vs.program, vs.data) || !place(pp.fs, fs.program, fs.data)) {
         stats.heapFull++;
         return nullptr;
     }
+    vs.record = &progs[pp.vs];
+    fs.record = &progs[pp.fs];
+    vs.header = pack_.section<uint8_t>(PackHeap) + progs[pp.vs].program;
+    fs.header = pack_.section<uint8_t>(PackHeap) + progs[pp.fs].program;
+    build(pl, pp, vs, fs, pack_.section<uint32_t>(PackBlob) + pp.blob, pack_.string(pp.keyString), caTransform);
+    return &pl;
+}
+
+// lock_ held: `pl` of record `pp`, whose programs are placed at `vs` and `fs`, whose registers are `blob` (method, value pairs)
+// and whose key's attachment and vertex fields are `keyString`
+void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs, const PlacedProgram &fs,
+                   const uint32_t *blob, const char *keyString, bool caTransform)
+{
     std::vector<uint32_t> words(64 + 16 + pp.blobDwords * 2);
     Push w{words.data(), words.data() + words.size()};
     uint32_t writes[8];
     memcpy(writes, ctWrite_, sizeof writes);
     for (uint32_t k = 0; k < pp.blobDwords; k += 2) {
-        const uint32_t m = blob[pp.blob + k], v = blob[pp.blob + k + 1];
+        const uint32_t m = blob[k], v = blob[k + 1];
         if (m >= CT_WRITE && m < CT_WRITE + 32)
             writes[(m - CT_WRITE) / 4] = v;
         w.m(m, v);
@@ -572,18 +552,18 @@ Pipeline *Device::pipeline(uint64_t keyHash, PackForm form, bool caTransform)
     // TILE_COALESCER_MODE: conflicts by sample or pixel
     bool interlocked = false;
     for (uint32_t k = 0; k < pp.blobDwords; k += 2)
-        if (blob[pp.blob + k] == PIXEL_SHADER_INTERLOCK_CONTROL)
-            interlocked = blob[pp.blob + k + 1] & 3;
-    w.m(0x2044, vs);  // SET_PIPELINE_PROGRAM(VERTEX)
-    w.m(0x2144, fs);  // SET_PIPELINE_PROGRAM(PIXEL)
-    pl.setSlot[0] = bindProgramCbufs(w, progs[pp.vs], 0, vsData, root_.va);
-    pl.setSlot[1] = bindProgramCbufs(w, progs[pp.fs], 4, fsData, root_.va);
+        if (blob[k] == PIXEL_SHADER_INTERLOCK_CONTROL)
+            interlocked = blob[k + 1] & 3;
+    w.m(0x2044, vs.program);  // SET_PIPELINE_PROGRAM(VERTEX)
+    w.m(0x2144, fs.program);  // SET_PIPELINE_PROGRAM(PIXEL)
+    pl.setSlot[0] = bindProgramCbufs(w, *vs.record, 0, vs.data, root_.va);
+    pl.setSlot[1] = bindProgramCbufs(w, *fs.record, 4, fs.data, root_.va);
     pl.methods.assign(words.data(), w.at);
     memcpy(pl.push, pp.pushWords, sizeof pl.push);
     pl.pushMask = pp.pushMask;
     // the color formats of its key ("c<i>=<format>:<writeMask>:<blending>:..."), and which colors its draws read as they
     // were (m2v linear_attachment::writes: a written color blended into, or written through a mask that keeps channels)
-    for (const char *at = pack_.string(pp.keyString); (at = strstr(at, " c")); at += 2) {
+    for (const char *at = keyString; (at = strstr(at, " c")); at += 2) {
         unsigned c = 0, f = 0, mask = 0, blend = 0, factor[6] = {};
         const int n = sscanf(at, " c%u=%u:%u:%u:%u:%u:%*u:%u:%u", &c, &f, &mask, &blend, &factor[0], &factor[1],
                              &factor[2], &factor[3]);
@@ -601,34 +581,32 @@ Pipeline *Device::pipeline(uint64_t keyHash, PackForm form, bool caTransform)
     // attribute 0 ("a0=<MTLVertexFormat>:<offset>:<buffer>:<stride>:<step function>:..."): MTLVertexFormatFloat2, Float3
     // or Float4, per vertex, from the stream's buffer
     unsigned format = 0, offset = 0, buffer = 0, stride = 0, step = 0;
-    if (const char *a0 = strstr(pack_.string(pp.keyString), " a0=");
+    if (const char *a0 = strstr(keyString, " a0=");
         a0 && sscanf(a0, " a0=%u:%u:%u:%u:%u", &format, &offset, &buffer, &stride, &step) == 5 && format >= 29 &&
         format <= 31 && buffer == pp.vertexSlot && stride == pp.vertexStride && step == 1) {
         pl.positionComponents = uint8_t(format - 27);
         pl.positionOffset = uint16_t(offset);
     }
     pl.caTransform = caTransform;
-    if (const char *ds = strstr(pack_.string(pp.keyString), "ds="))
+    if (const char *ds = strstr(keyString, "ds="))
         sscanf(ds, "ds=%u", &pl.depthFormat);
     // SPH word 0 bit 15 KILLS_PIXELS, bit 608 OMAP_SAMPLE_MASK (cla097sph.h); SET_DEPTH_TEST, SET_STENCIL_TEST and
     // SET_ANTI_ALIAS_ALPHA_CONTROL's alpha to coverage in bit 0
     uint32_t sph[20];
-    memcpy(sph, pack_.section<uint8_t>(PackHeap) + progs[pp.fs].program, sizeof sph);
+    memcpy(sph, fs.header, sizeof sph);
     bool tests = false;
     for (uint32_t k = 0; k < pp.blobDwords; k += 2) {
-        const uint32_t m = blob[pp.blob + k], v = blob[pp.blob + k + 1];
+        const uint32_t m = blob[k], v = blob[k + 1];
         tests |= (m == DEPTH_TEST || m == STENCIL_TEST || m == ANTI_ALIAS_ALPHA_CONTROL) && (v & 1);
     }
-    const char *key = pack_.string(pp.keyString);
-    pl.dropsPixels =
-        (sph[0] >> 15 & 1) || (sph[19] & 1) || tests || strncmp(key, "samples=1 ", 10) || !strstr(key, " ds=0/0 ");
+    pl.dropsPixels = (sph[0] >> 15 & 1) || (sph[19] & 1) || tests || strncmp(keyString, "samples=1 ", 10) ||
+                     !strstr(keyString, " ds=0/0 ");
     for (uint32_t k = 0; k < pp.entries; k++)
         if (pp.entry[k].kind == EntryFetch && pp.entry[k].slot < 8)
             pl.fetchBits |= uint8_t(1u << pp.entry[k].slot);
     if (interlocked)
         pl.storageBits = pl.fetchBits;
-    pl.rec = rec;
-    return &pl;
+    pl.rec = &pp;
 }
 
 // ---- device: memory ----
@@ -1671,20 +1649,28 @@ void samplerHeader(const SamplerDesc &d, uint32_t w[8])
     setField(w + 2, 23, 12, lodField(maxLod));
 }
 
+// lock_ held: a free entry of the sampler header pool
+bool Device::takeTsc(uint32_t &tsc)
+{
+    if (!freeTsc_.empty()) {
+        tsc = freeTsc_.back();
+        freeTsc_.pop_back();
+        return true;
+    }
+    if (nextTsc_ >= kTscCount)
+        return false;
+    tsc = nextTsc_++;
+    return true;
+}
+
 bool Device::createSampler(const SamplerDesc &d, Sampler &s)
 {
     uint32_t w[8];
     samplerHeader(d, w);
     s.desc = d;
     std::lock_guard<std::mutex> l(lock_);
-    if (!freeTsc_.empty()) {
-        s.tsc = freeTsc_.back();
-        freeTsc_.pop_back();
-    } else if (nextTsc_ < kTscCount) {
-        s.tsc = nextTsc_++;
-    } else {
+    if (!takeTsc(s.tsc))
         return false;
-    }
     memcpy(tsc_.cpu + 32 * s.tsc, w, 32);
     return true;
 }
@@ -1724,14 +1710,8 @@ bool Device::samplerVariant(Sampler &s, uint8_t map)
     samplerHeader(d, w);
     std::lock_guard<std::mutex> l(lock_);
     uint32_t tsc = 0;
-    if (!freeTsc_.empty()) {
-        tsc = freeTsc_.back();
-        freeTsc_.pop_back();
-    } else if (nextTsc_ < kTscCount) {
-        tsc = nextTsc_++;
-    } else {
+    if (!takeTsc(tsc))
         return false;
-    }
     memcpy(tsc_.cpu + 32 * tsc, w, 32);
     s.mapped[map] = tsc;
     return true;
@@ -2004,6 +1984,7 @@ bool Device::reopen()
         std::lock_guard<std::mutex> l(lock_);
         for (Backing *b : backings_)
             b->lastUse = 0;
+        heapInvalidated_ = ~0ull;
     }
     memset(rootPush_, 0, sizeof rootPush_);
     restart_ = 0;
@@ -2076,19 +2057,22 @@ CommandBuffer *Device::begin()
     memcpy(cb.rootPush_, rootPush_, sizeof rootPush_);
     cb.restart_ = restart_;
     cb.ds_ = ds_;
+    cb.extrasLive_ = extrasLive_;
     cb.drawn_ = false;
     {
         std::lock_guard<std::mutex> l(lock_);
         if (commitCount_ % 64 == 0)
             trimBackings();
     }
-    // submission prologue, as NVK opens each submission: header/sampler caches (headers written since), shader and texture caches
+    // submission prologue, as NVK opens each submission: header/sampler caches (headers written since), constant, shader data and
+    // texture caches, and the instruction caches where commit finds the heap grew
     uint64_t va;
     uint32_t *start = reinterpret_cast<uint32_t *>(alloc(push_, 64 * 4, 256, va));
     Push p{start, start + 64};
     p.m(INVALIDATE_SAMPLER_CACHE_NO_WFI, 0);
     p.m(INVALIDATE_TEXTURE_HEADER_CACHE_NO_WFI, 0);
-    p.m(INVALIDATE_SHADER_CACHES_NO_WFI, 0x1000);
+    p.inc(INVALIDATE_SHADER_CACHES_NO_WFI, {kInvalidateConstant});
+    cb.shaderInvalidate_ = p.at - 1;
     p.m(INVALIDATE_SHADER_CACHES, 0x14);
     p.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
     p.m(INVALIDATE_SHADER_CACHES_NO_WFI, 0x10);
@@ -2208,6 +2192,8 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
     e.reserve();
     e.setViewport(0, 0, e.areaW_, e.areaH_, 0, 1);
     e.setScissor(0, 0, e.areaW_, e.areaH_);
+    e.extrasAtBegin_ = extrasLive_;
+    extrasLive_ = nullptr;
     passes++;
     return &e;
 }
@@ -2231,6 +2217,13 @@ BlitEncoder *CommandBuffer::blit()
 bool CommandBuffer::commit(uint32_t &seqno)
 {
     Device &d = *dev_;
+    {
+        std::lock_guard<std::mutex> l(d.lock_);
+        if (shaderInvalidate_ && d.heapPlaced_ != d.heapInvalidated_) {
+            *shaderInvalidate_ = kInvalidateConstant | kInvalidateInstruction;
+            d.heapInvalidated_ = d.heapPlaced_;
+        }
+    }
     // CPU writes the GPU reads: to memory, by address (no set/way operation, nothing global)
     uint64_t cleaned = 0;
 #if defined(__aarch64__)
@@ -2264,6 +2257,7 @@ bool CommandBuffer::commit(uint32_t &seqno)
     memcpy(d.rootPush_, rootPush_, sizeof rootPush_);
     d.restart_ = restart_;
     d.ds_ = ds_;
+    d.extrasLive_ = extrasLive_;
     {
         std::lock_guard<std::mutex> l(d.lock_);
         for (Texture *b : backings_)
@@ -2516,12 +2510,31 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
     readBits_ |= pl->fetchBits;
     if (!count || !instances)
         return true;
-    if (!ib || (indexSize != 2 && indexSize != 4) || offset % indexSize ||
-        offset + uint64_t(count) * indexSize > ib->length) {
+    if (!ib || (indexSize != 2 && indexSize != 4) || !ib->cpu) {
         *why = "an indexed draw the raw path does not take";
         cb_->refusal = {RefIndexedRange, uint32_t(offset), indexSize,
                         ib ? uint32_t(std::min<uint64_t>(ib->length, ~0u)) : 0};
         return false;
+    }
+    // Metal's fetch (m2v render.rs draw_indexed_primitives, measured): the offset's low 32 bits rounded down to the index size,
+    // indices read up to the length rounded up to 4 bytes, index 0 at every position past that: drawn from a zero-padded copy
+    offset = uint32_t(offset);
+    offset -= offset % indexSize;
+    const uint64_t fetchEnd = offset < ib->length ? (ib->length + 3) & ~uint64_t(3) : ib->length,
+                   inside = fetchEnd > offset ? (fetchEnd - offset) / indexSize : 0;
+    Buffer padded;
+    if (count > inside) {
+        const uint64_t bytes = uint64_t(count) * indexSize;
+        uint8_t *m =
+            dev_->alloc(dev_->upload_, (bytes + kUboChunk - 1) & ~uint64_t(kUboChunk - 1), kUboChunk, padded.va);
+        memcpy(m, ib->cpu + offset, inside * indexSize);
+        memset(m + inside * indexSize, 0, bytes - inside * indexSize);
+        padded.cpu = m;
+        padded.length = bytes;
+        padded.wc = true;
+        dev_->stats.uploadBytes += bytes;
+        ib = &padded;
+        offset = 0;
     }
     // the vertices it reads: up to its largest index (the indices are CPU-written, as the vertices). A restart (the all-ones
     // index) reads as 0, which never raises the largest: branch-free per index size, so clang vectorizes it (UMAXV; r9-simd)
@@ -2627,7 +2640,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         cb_->refusal = {RefDepthStencil, pl->depthFormat, zeta ? kZetaFormat : 0, ds_.active()};
         return false;
     }
-    if (p_.room() < 1024)
+    if (p_.room() < 1024 + pl->methods.size() + (cb_->extrasLive_ ? cb_->extrasLive_->restore.size() : 0))
         reserve();
     Device &d = *dev_;
     Push &p = p_;
@@ -2740,7 +2753,13 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     if (pl != emitted_ || residualMask || residualsPushed_) {
         if (pl != emitted_) {
             blendColorDirty_ |= pl->constantBlend;
+            if (cb_->extrasLive_ && cb_->extrasLive_ != pl) {
+                p.raw(cb_->extrasLive_->restore.data(), uint32_t(cb_->extrasLive_->restore.size()));
+                cb_->extrasLive_ = nullptr;
+            }
             p.raw(pl->methods.data(), uint32_t(pl->methods.size()));
+            if (!pl->restore.empty())
+                cb_->extrasLive_ = pl;
         }
         // the state's push words into the root table, as m2v's vkCmdPushConstants ranges reach it through NVK: the words its
         // ranges cover (the rest keep what an earlier state wrote), the draw's residuals in theirs, one LOAD_CONSTANT_BUFFER per
@@ -3184,10 +3203,13 @@ void RenderEncoder::end()
     d.push_.head = uint64_t(reinterpret_cast<uint8_t *>(p_.at) - d.push_.bo.cpu);  // give back the unused reservation
     // pass prologue: the full barrier m2v puts between passes, the targets, then the clears
     const std::vector<Clear> cl = clears();
-    const uint32_t room = 160 + 8 * 32 + uint32_t(cl.size()) * 48 + kZetaTargetWords + kZetaClearWords + 16;
+    const std::vector<uint32_t> &restore = extrasAtBegin_ ? extrasAtBegin_->restore : std::vector<uint32_t>();
+    const uint32_t room =
+        160 + 8 * 32 + uint32_t(cl.size()) * 48 + kZetaTargetWords + kZetaClearWords + 16 + uint32_t(restore.size());
     uint64_t va;
     uint32_t *start = reinterpret_cast<uint32_t *>(d.alloc(d.push_, room * 4, 256, va));
     Push p{start, start + room};
+    p.raw(restore.data(), uint32_t(restore.size()));
     p.m(WAIT_FOR_IDLE, 0);
     p.m(INVALIDATE_SHADER_CACHES, 0x14);
     p.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);

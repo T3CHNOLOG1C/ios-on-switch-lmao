@@ -41,6 +41,7 @@ from pathlib import Path
 
 if __package__ in (None, ''):
     sys.path.insert(0, str(Path(os.path.abspath(__file__)).parents[2]))
+from tools.common import paths
 from tools.deploy import (
     joycon_pairing,
     poster_snapshots,
@@ -53,11 +54,6 @@ from tools.install import (
     progress,
     renamed,
 )
-
-try:
-    from python.runfiles import runfiles
-except ImportError:
-    runfiles = None
 
 # Logging profiles put on Data by hand during bring-up, which nothing else removes: com.apple.SystemConfiguration at
 # Debug, persisted, writes ~8 Debug lines/s to the persisted log (configd SCDynamicStore/IPMonitor, wifid
@@ -85,12 +81,6 @@ def set_awdl(data_root: Path, on: bool, log: host.Log) -> None:
     elif flag.exists():
         flag.unlink()
     log('awdl: {} ({})'.format('on' if flag.exists() else 'off', AWDL_FLAG))
-
-
-def located(path: str | None) -> str | None:
-    if path and not os.path.isabs(path) and runfiles:
-        path = runfiles.Create().Rlocation(path) or path
-    return os.path.abspath(path) if path else None
 
 
 def launchd_check(data: Path, labels: list[str], log: host.Log) -> bool:
@@ -202,7 +192,7 @@ def _stage_gpu(args: argparse.Namespace, data_root: Path, log: host.Log) -> None
 def _write(args: argparse.Namespace, data_root: Path, fat: object, pairing: dict | None, log: host.Log) -> bool:
     """Write the deploy to the mounted Data volume (and the FAT); False when the launchd check fails."""
     renamed.migrate_data(data_root, log)
-    out = Path(args.logs_out or pull_logs.state_dir() / 'device-logs' / time.strftime('boot-%m%d-%H%M'))
+    out = Path(args.logs_out or paths.state_dir() / 'device-logs' / time.strftime('boot-%m%d-%H%M'))
     if args.pull_logs:
         what = pull_logs.Pull(csstore=not args.no_csstore, launchd=not args.no_launchd_log, kcdata=args.kcdata)
         pull_logs.pull(data_root, out, log, what)
@@ -236,10 +226,8 @@ def _eject(card: cards.Card, target: object, log: host.Log) -> None:
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     for name in ('boot_package', 'spec', 'ipsw', 'gpu_bundle', 'stager', 'kcdata'):
-        setattr(args, name, located(getattr(args, name)))
-    log = host.Log(
-        args.log or Path.home() / 'Library/Logs/switch-ios-install/deploy-{}.log'.format(time.strftime('%Y%m%d-%H%M%S'))
-    )
+        setattr(args, name, paths.located(getattr(args, name)))
+    log = host.Log(args.log or paths.run_log('deploy', 'switch-ios-install'))
     try:
         with progress.step(f'deploy: checking {args.disk}', unit=None):
             card, spec, fat, target, data = _checked(args, log)

@@ -86,6 +86,16 @@ class Identity(unittest.TestCase):
         self.assertEqual(product['model'], properties(self.apple)['model'])
         self.assertEqual(product['artwork-display-gamut'], b'sRGB\0')
 
+    def test_audio_is_apples_acoustic_design(self):
+        audio, apple = properties(find(self.tree, 'product', 'audio')), properties(find(self.apple, 'product', 'audio'))
+        for key in self.adt_edit.AUDIO_IDENTITY:
+            self.assertEqual(audio.get(key), apple.get(key), key)
+        if properties(self.apple)['model'] == b'iPad12,1\0':
+            self.assertEqual(audio['acoustic-id'], struct.pack('<I', 2003))
+        else:
+            self.assertNotIn('acoustic-id', audio)
+        self.assertEqual(audio['wireless-splitter'], struct.pack('<I', 1))
+
 
 class Capabilities(unittest.TestCase):
     def test_buttons_and_maps(self):

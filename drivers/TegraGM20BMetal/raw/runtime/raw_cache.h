@@ -12,6 +12,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <vector>
 #include <mutex>
 #include <string>
 #include "raw_record.h"
@@ -64,7 +65,8 @@ RecordCache::Found decodeEntry(const std::string &bytes, const CacheKey &k, Runt
 
 // The states this process completes: each asked state made once, by the disk cache or `make` (the probe and record), one at a
 // time on a background-QoS serial queue, never on the asker's thread. A later ask of a state answers its result or that it is
-// still being made.
+// still being made. A refusal sticks; a probe that could not run is tried again by a later ask, kRetries times at most, each
+// after a wait four times the last's (the first `retryUs`).
 class Compiler {
 public:
     enum class Outcome : uint8_t {
@@ -77,17 +79,23 @@ public:
     // Called on the queue once the state is made (`record` null: refused, `why`)
     using Done = std::function<void(const RuntimeRecord *record, const std::string &why)>;
 
-    Compiler(RecordCache *cache, Make make);
+    static constexpr uint32_t kRetries = 3;
+
+    Compiler(RecordCache *cache, Make make, uint64_t retryUs = 1000000);
     ~Compiler();
 
     enum class State : uint8_t {
         Pending,
         Ready,
-        Refused
+        Refused,
+        Failed
     };
 
-    // The state's result so far; the first ask of it queues its making and calls `done` once made
+    // The state's result so far; the first ask of it queues its making. Every ask made while it is being made has its `done`
+    // called once it is
     State ask(const CacheKey &k, Done done, const RuntimeRecord **record = nullptr);
+    // A state whose probe failed and may be tried again: true, and in *us how long until an ask tries it
+    bool retryAfter(const CacheKey &k, uint64_t &us) const;
     void drain();  // host tests: waits for everything asked so far
 
     struct Stats {
@@ -101,12 +109,16 @@ private:
         State state = State::Pending;
         std::unique_ptr<RuntimeRecord> record;
         std::string why;
+        uint32_t failures = 0;
+        uint64_t failedUs = 0;
+        std::vector<Done> waiters;  // the asks made while it was being made
     };
 
     struct Job;
 
     RecordCache *cache_;
     Make make_;
+    uint64_t retryUs_;
     void *queue_;
     mutable std::mutex lock_;
     std::condition_variable idle_;
@@ -114,6 +126,8 @@ private:
     std::map<uint64_t, Entry> entries_;
     Stats stats_;
     static void run(void *job);
+    void queue(const CacheKey &k);
+    bool retryable(const Entry &e, uint64_t &wait) const;
 };
 
 }  // namespace raw
