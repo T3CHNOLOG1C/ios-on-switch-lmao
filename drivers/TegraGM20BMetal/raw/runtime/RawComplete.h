@@ -11,7 +11,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
-#include "raw_cache.h"
+#include "raw_compiler.h"
 #include "raw_metallib.h"
 
 namespace raw {
