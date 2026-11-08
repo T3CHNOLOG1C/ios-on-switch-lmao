@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 from types import ModuleType
 
+import native_oled_adt
 from python.runfiles import runfiles
 
 
@@ -95,6 +96,30 @@ class Identity(unittest.TestCase):
         else:
             self.assertNotIn('acoustic-id', audio)
         self.assertEqual(audio['wireless-splitter'], struct.pack('<I', 1))
+
+
+class FramebufferFormat27(unittest.TestCase):
+    """iOS 27's Core Animation renders into a BGRA8 framebuffer, the raw pack's states, only while three inputs hold.
+
+    TegraVIC answers IOSurfaceAcceleratorCapabilitiesHDR 0, the booted tree has no /defaults/vmm-present, and /arm-io
+    soc-generation is H12. If one changes, the framebuffer format changes and every iOS 27 Core Animation state
+    misses the pack.
+    """
+
+    def test_inputs(self):
+        adt_edit = load_adt_edit()
+        apple = apple_tree()
+        if properties(adt_edit.adt_parse(apple)[0])['model'] != b'iPad12,1\0':
+            self.skipTest('the iOS 27 kind (J181, iPad12,1) only')
+        booted = native_oled_adt.generate_adt(
+            bytes(native_oled_adt.SEED_BYTES),
+            native_oled_adt.Profile(storage_probe=True, root_boot=True, full_ram=True),
+        )
+        tree, _ = adt_edit.adt_parse(adt_edit.with_ipad_identity(adt_edit.ipad_adt(booted), apple))
+        self.assertNotIn('vmm-present', properties(find(tree, 'defaults')))
+        self.assertEqual(properties(find(tree, 'arm-io'))['soc-generation'], b'H12\0')
+        vic = Path(runfiles.Create().Rlocation('_main/drivers/TegraVIC/TegraVICUserClient.cpp')).read_text()
+        self.assertIn('putNumber(d, "IOSurfaceAcceleratorCapabilitiesHDR", 0);', vic)
 
 
 class Capabilities(unittest.TestCase):

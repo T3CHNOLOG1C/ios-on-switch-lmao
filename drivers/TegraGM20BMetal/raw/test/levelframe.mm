@@ -8,6 +8,7 @@
 // usage: levelframe <pack> <cache> <nvk dylib>
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
+#include <cstring>
 #include <string>
 #include <vector>
 #include "../fx/fx_mip.h"
@@ -34,22 +35,25 @@ struct Chain {
     id<MTLTexture> tex;
     std::vector<unsigned> w, h;
     std::vector<Bytes> model;
+    MTLPixelFormat format = MTLPixelFormatBGRA8Unorm;
+    unsigned bpp = 4;
 };
 
-static Chain makeChain(id<MTLDevice> dev, unsigned width, unsigned height, unsigned levels)
+static Chain makeChain(id<MTLDevice> dev, unsigned width, unsigned height, unsigned levels,
+                       MTLPixelFormat format = MTLPixelFormatBGRA8Unorm, unsigned bpp = 4)
 {
-    MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+    MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:format
                                                                                  width:width
                                                                                 height:height
                                                                              mipmapped:levels > 1];
     d.mipmapLevelCount = levels;
     d.storageMode = MTLStorageModePrivate;
     d.usage = MTLTextureUsageShaderRead | MTLTextureUsageRenderTarget;
-    Chain c{[dev newTextureWithDescriptor : d], {}, {}, {}};
+    Chain c{[dev newTextureWithDescriptor : d], {}, {}, {}, format, bpp};
     for (unsigned l = 0; l < levels; l++) {
         c.w.push_back(std::max(1u, width >> l));
         c.h.push_back(std::max(1u, height >> l));
-        c.model.emplace_back(size_t(c.w[l]) * c.h[l] * 4);
+        c.model.emplace_back(size_t(c.w[l]) * c.h[l] * bpp);
     }
     return c;
 }
@@ -103,7 +107,7 @@ struct Run {
         std::vector<id<MTLTexture>> texels(levels);
         for (size_t l = 0; l < levels; l++) {
             out[l] = [dev newBufferWithLength:c.model[l].size() options:MTLResourceStorageModeShared];
-            MTLTextureDescriptor *o = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+            MTLTextureDescriptor *o = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:c.format
                                                                                          width:c.w[l]
                                                                                         height:c.h[l]
                                                                                      mipmapped:NO];
@@ -120,7 +124,7 @@ struct Run {
                                       sourceSize:size
                                         toBuffer:out[l]
                                destinationOffset:0
-                          destinationBytesPerRow:c.w[l] * 4
+                          destinationBytesPerRow:c.w[l] * c.bpp
                         destinationBytesPerImage:0];
                     [b copyFromTexture:c.tex
                               sourceSlice:0
@@ -140,7 +144,7 @@ struct Run {
             Bytes got((uint8_t *)out[l].contents, (uint8_t *)out[l].contents + c.model[l].size());
             check(at + " to a buffer", got, c.model[l]);
             [texels[l] getBytes:got.data()
-                    bytesPerRow:c.w[l] * 4
+                    bytesPerRow:c.w[l] * c.bpp
                      fromRegion:MTLRegionMake2D(0, 0, c.w[l], c.h[l])
                     mipmapLevel:0];
             check(at + " to a texture", got, c.model[l]);
@@ -287,6 +291,80 @@ static void levels(Run &run, unsigned width, unsigned height, unsigned count)
               Bytes((uint8_t *)part.contents, (uint8_t *)part.contents + into2.size()), into2);
 }
 
+// A chain of a format the 2D engine does not filter (raw::fx::twodFormat 0): every level written from a buffer and read back
+// (into a buffer and into a texture of the level's size: the copy engine's, as are the writes), then its generateMipmaps, which
+// m2v makes in the chain's own memory under its own predicate (mipmaps.fmt)
+static void formatLevels(Run &run, MTLPixelFormat format, unsigned bpp, const char *name)
+{
+    Chain t = makeChain(run.dev, 96, 40, 5, format, bpp);
+    if (!raw_metal_texture_kept(t.tex)) {
+        printf("FAIL %s: not a raw chain\n", name);
+        run.failed++;
+        return;
+    }
+    for (unsigned l = 0; l < t.model.size(); l++) {
+        t.model[l] = pattern(t.model[l].size(), 11 + l);
+        id<MTLBuffer> src = run.buffer(t.model[l]);
+        run.blit("a level in", [&](id<MTLBlitCommandEncoder> b) {
+            [b copyFromBuffer:src
+                       sourceOffset:0
+                  sourceBytesPerRow:t.w[l] * bpp
+                sourceBytesPerImage:0
+                         sourceSize:MTLSizeMake(t.w[l], t.h[l], 1)
+                          toTexture:t.tex
+                   destinationSlice:0
+                   destinationLevel:l
+                  destinationOrigin:MTLOriginMake(0, 0, 0)];
+        });
+    }
+    run.readBack(name, t);
+    char rates[1024];
+    raw_metal_rates(rates, sizeof rates);
+    run.blit("generate", [&](id<MTLBlitCommandEncoder> b) {
+        [b generateMipmapsForTexture:t.tex];
+    });
+    const bool counted = raw_metal_rates(rates, sizeof rates) && strstr(rates, "mipmaps.fmt");
+    printf("%s %s generateMipmaps: m2v's, counted as mipmaps.fmt\n", counted ? "OK  " : "FAIL", name);
+    run.failed += !counted;
+}
+
+// A later level into rows 192 bytes apart (a texture over a buffer): the copy engine's copy, so the command buffer stays raw
+static void unalignedRows(Run &run)
+{
+    Chain t = makeChain(run.dev, 96, 40, 5);
+    upload(run, t, 21);
+    generated(t);
+    run.blit("generate", [&](id<MTLBlitCommandEncoder> b) {
+        [b generateMipmapsForTexture:t.tex];
+    });
+    const unsigned w = t.w[1], h = t.h[1], row = w * 4;
+    id<MTLBuffer> backing = [run.dev newBufferWithLength:size_t(row) * h options:MTLResourceStorageModeShared];
+    MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                                                 width:w
+                                                                                height:h
+                                                                             mipmapped:NO];
+    d.storageMode = MTLStorageModeShared;
+    id<MTLTexture> rows = [backing newTextureWithDescriptor:d offset:0 bytesPerRow:row];
+    char rates[1024];
+    raw_metal_rates(rates, sizeof rates);
+    run.blit("level 1 into rows", [&](id<MTLBlitCommandEncoder> b) {
+        [b copyFromTexture:t.tex
+                  sourceSlice:0
+                  sourceLevel:1
+                 sourceOrigin:MTLOriginMake(0, 0, 0)
+                   sourceSize:MTLSizeMake(w, h, 1)
+                    toTexture:rows
+             destinationSlice:0
+             destinationLevel:0
+            destinationOrigin:MTLOriginMake(0, 0, 0)];
+    });
+    const bool raw = raw_metal_rates(rates, sizeof rates) && strstr(rates, " m2v=0 ");
+    run.check("96x40 level 1 into rows 192 bytes apart",
+              Bytes((uint8_t *)backing.contents, (uint8_t *)backing.contents + size_t(row) * h), t.model[1]);
+    printf("%s 96x40 level 1 into rows 192 bytes apart: %s\n", raw ? "OK  " : "FAIL", raw ? "raw" : "m2v");
+    run.failed += !raw;
+}
+
 int main(int argc, char **argv)
 {
     @autoreleasepool {
@@ -309,6 +387,9 @@ int main(int argc, char **argv)
         Run run{dev, [dev newCommandQueue]};
         levels(run, 96, 40, 5);
         levels(run, 33, 17, 4);
+        unalignedRows(run);
+        formatLevels(run, MTLPixelFormat(43), 2, "96x40 BGR5A1Unorm");
+        formatLevels(run, MTLPixelFormatBGRA8Unorm_sRGB, 4, "96x40 BGRA8Unorm_sRGB");
         char rates[1024];
         if (raw_metal_rates(rates, sizeof rates))
             printf("RATES %s\n", rates);

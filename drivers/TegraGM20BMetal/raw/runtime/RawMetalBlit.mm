@@ -109,15 +109,10 @@ static bool sameSizeLevels(id<MTLTexture> s, id<MTLTexture> d, NSUInteger &sl, N
 {
     RMTexture *a = (RMTexture *)s, *b = (RMTexture *)d;
     const bool both = [(id)a isKindOfClass:[RMTexture class]] && [(id)b isKindOfClass:[RMTexture class]];
-    // a level below the first into rows is the 2D engine's 1:1 copy out of the chain (raw::BlitEncoder::copyFromLevel), which
-    // converts between formats and takes rows 128-byte aligned; every other copy is the copy engine's, of bytes
-    const bool twoD = both && sl && !dl && !b->_raw.blockLinear;
+    // the copy engine's, of bytes, between pitch and block-linear sides as each side is laid out
     const bool ok = both && !ss && !ds && size.depth == 1 && a->_raw.bpp == b->_raw.bpp &&
                     copySideOk(a, sl, so.x, so.y, size.width, size.height) &&
-                    copySideOk(b, dl, dorg.x, dorg.y, size.width, size.height) &&
-                    (!twoD || (b->_raw.format == a->_raw.format && !((b->_raw.va | b->_raw.pitch) & 127)));
-    if (both && (a->_raw.chain || b->_raw.chain))
-        _cb->_chains = true;
+                    copySideOk(b, dl, dorg.x, dorg.y, size.width, size.height);
     if (!ok) {
         [_cb takeReason:WhyTexture why:@"a texture copy the raw path does not do (levels, slices, formats)"];
         hit(_cb, PredBlitTexCopy, ss | sl << 8 | ds << 16 | dl << 24,
@@ -241,8 +236,6 @@ static bool sameSizeLevels(id<MTLTexture> s, id<MTLTexture> d, NSUInteger &sl, N
 {
     RMBuffer *a = (RMBuffer *)s;
     RMTexture *b = (RMTexture *)d;
-    if ([(id)b isKindOfClass:[RMTexture class]] && b->_raw.chain)
-        _cb->_chains = true;
     BufferRows rows;
     const bool ok =
         [(id)a isKindOfClass:[RMBuffer class]] && [(id)b isKindOfClass:[RMTexture class]] && !ds && size.depth == 1 &&
@@ -308,8 +301,6 @@ static bool sameSizeLevels(id<MTLTexture> s, id<MTLTexture> d, NSUInteger &sl, N
 {
     RMTexture *a = (RMTexture *)s;
     RMBuffer *b = (RMBuffer *)d;
-    if ([(id)a isKindOfClass:[RMTexture class]] && a->_raw.chain)
-        _cb->_chains = true;
     BufferRows rows;
     const bool ok =
         [(id)a isKindOfClass:[RMTexture class]] && [(id)b isKindOfClass:[RMBuffer class]] && !ss && size.depth == 1 &&
@@ -366,11 +357,12 @@ static bool sameSizeLevels(id<MTLTexture> s, id<MTLTexture> d, NSUInteger &sl, N
     RMTexture *x = [(id)t isKindOfClass:[RMTexture class]] ? (RMTexture *)t : nil;
     if (x)
         declareGpuWrites(x);
-    if (x && x->_rawOk && x->_raw.chain)  // a chain's levels, on the 2D engine (raw::BlitEncoder::generate)
-        _cb->_chains = true;
-    else {
+    if (!x || !x->_rawOk || !x->_raw.chain) {  // a chain's levels are the 2D engine's (raw::BlitEncoder::generate)
         [_cb takeReason:WhyMipmaps why:@"generateMipmapsForTexture"];
         hit(_cb, PredMipmaps, t.pixelFormat, t.mipmapLevelCount);
+    } else if (!x->_raw.chain->fmt2d) {  // m2v generates them, into the same chain (its in-place twin)
+        [_cb takeReason:WhyMipmaps why:@"generateMipmapsForTexture of a format the 2D engine does not filter"];
+        hit(_cb, PredMipmapsFormat, t.pixelFormat, t.mipmapLevelCount);
     }
     setBinding(_cb, OpMipmaps, 0, 0, t, 0);
 }

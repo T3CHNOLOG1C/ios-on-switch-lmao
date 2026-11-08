@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// The record cache's and compile table's checks (runtime/raw_cache.h), over any records: raw/test/cachecheck's, a bucket's real
+// The record cache's and compile table's checks (runtime/raw_cache.h, raw_compiler.h), over any records: raw/test/cachecheck's, a bucket's real
 // ones, and //drivers/TegraGM20BMetal/test:raw_cache_test's made up ones.
 //  - every record and a refusal come back from an entry as they went in, and an entry of another key, stack or AIR, a truncated
 //    one and one with a byte changed come back as none;
@@ -14,6 +14,7 @@
 #include <sys/time.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
@@ -22,7 +23,7 @@
 #include <thread>
 #include <utility>
 #include <vector>
-#include "../runtime/raw_cache.h"
+#include "../runtime/raw_compiler.h"
 
 namespace cachechecks {
 
@@ -163,8 +164,10 @@ inline void run(const std::vector<std::pair<std::string, raw::RuntimeRecord>> &r
         const std::string capped = scratch + "/cachecheck-cap";
         system(("rm -rf '" + capped + "'").c_str());
         mkdir(capped.c_str(), 0700);
-        const uint64_t one = raw::encodeEntry(keyOf(stack, records[0].first, 7), &records[0].second, "").size();
-        const uint64_t cap = one * 3;
+        uint64_t largest = 0;
+        for (const auto &[key, rec] : records)
+            largest = std::max<uint64_t>(largest, raw::encodeEntry(keyOf(stack, key, 7), &rec, "").size());
+        const uint64_t cap = largest * 3;
         raw::RecordCache cache;
         cache.open(capped, stack, cap);
         for (const auto &[key, rec] : records)

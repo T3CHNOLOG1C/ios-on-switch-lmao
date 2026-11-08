@@ -104,31 +104,14 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
     // a planar texture's image (4:2:0 converted, 4:4:4 codes) holds its surface at this seed (_imageCurrent): converted
     // again only once the surface's seed moves (r8a: a YouTube page's thumbnails converted again at every command buffer)
     uint32_t _imageSeed;
+    uint64_t _imageWrites;  // and its surface's writes the seed does not show (surfaceWrites)
     bool _imageCurrent;
     RMTexture *_parent;  // a view's
     RMBuffer *_buffer;   // a texture over a buffer's
-    // A mipmapped texture's (raw::Texture::chain): _twin is m2v's in-place texture over level 0 (one level: where m2v renders and
-    // copies level 0), _mipTwin m2v's own texture of every level (where m2v samples, copies other levels and generates), kept
-    // as the chain holds them by the replay (syncMipTwin): _mipL0 its level 0 holds level 0, _mipLevels its later levels the last
-    // generateMipmaps (the submit lock: the GPU's order)
-    id _mipTwin;
-    bool _mipL0, _mipLevels;
-    // Per later level (index = level), a pool texture of the level's size (rmMirror). Neither driver can read the other's
-    // copy of the later levels (the chain is the raw path's block-linear memory, _mipTwin m2v's own image), so a level one of
-    // them rendered reaches the other through its mirror: the raw path copies its chain's levels in before an m2v command
-    // buffer needs them (mirrorsForM2v); m2v copies a level it rendered in, which the raw path copies into the chain before it
-    // next reads the chain (raw::Texture::Chain::mirrorLevels).
-    NSMutableArray *_mirrors;
-    bool
-        _mirrored;  // the mirrors hold the chain's later levels, for the m2v command buffer being replayed (mirrorsForM2v)
     NSUInteger _offset, _rowBytes;
     std::atomic<bool> _gpuDirty;
     MTLPurgeableState _purgeable;
     uint8_t _pred;  // why the raw path does not keep it (RMPred; 0: it does)
-    // A shared mipmapped texture's CPU writes the chain's states do not show yet (foldCpuLevels, at the next submission, under
-    // the submit lock): bit l, level l written where the raw path holds it (level 0: its pages, later: the chain); bit 16 + l,
-    // later level l written into its mirror (m2v held it)
-    std::atomic<uint32_t> _cpuLevels;
 }
 @end
 
@@ -249,7 +232,6 @@ struct RMSegment {
     NSError *_segError;  // an m2v segment's error, reported at completion
     bool
         _sampledShadows;  // it binds a texture sampled through a pool image (raw::Texture::sampled): encodeRaw refreshes them
-    bool _chains;         // it uses a mipmapped texture (raw::Texture::chain): encodeRaw and the replay keep its levels
     bool _standIns;  // it binds an extended-range texture (raw::Texture::standIn): encodeRaw draws its stand-in
     std::vector<Cmd> _tape;
     std::vector<uint8_t> _bytes;
@@ -262,6 +244,8 @@ struct RMSegment {
     NSError *_error;
     RMQueue *_queue;
     bool _committed, _scheduledDone, _completedDone, _m2v;
+    bool
+        _partial;  // the kernel refused its raw submission after part of it ran (raw::CommandBuffer::partial): never replayed
     // scheduled() and finish() ran (their handlers taken): a handler added after goes at once, and scheduled() runs once (a
     // command buffer held for a shared event is scheduled at its commit, eventHeld)
     bool _scheduledSent, _completedSent;
@@ -338,11 +322,6 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
     [cb record:m];
 }
 
-@interface RMTexture ()
-- (id)rmMipTwin;
-- (RMTexture *)rmMirror:(NSUInteger)level;
-@end
-
 @interface RMEncoder ()
 - (void)endEncoding;
 - (void)updateFence:(id<MTLFence>)fence;
@@ -398,19 +377,3 @@ static inline float extraFloat(RMCommandBuffer *cb, uint64_t i)
     memcpy(&f, &u, 4);
     return f;
 }
-
-// A mipmapped texture in a replay (raw::Texture::chain): level 0 is the raw texture's own pages (m2v renders, copies and reads
-// level 0 through its in-place twin), every other use is m2v's texture of every level (rmMipTwin), which the replay makes hold
-// what the raw path's chain holds before an encoder uses it (mipSync); what m2v writes moves the raw path's states.
-static inline bool chained(void *o)
-{
-    return o && [(__bridge id)o isKindOfClass:[RMTexture class]] && ((__bridge RMTexture *)o)->_raw.chain;
-}
-
-static inline id mipTwinOf(void *o, bool level0)
-{
-    RMTexture *t = (__bridge RMTexture *)o;
-    return chained(o) && !level0 ? [t rmMipTwin] : twinOf((__bridge id)o);
-}
-
-using MirrorWrites = std::vector<std::pair<RMTexture *, uint32_t>>;

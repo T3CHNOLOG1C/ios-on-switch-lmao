@@ -212,12 +212,9 @@ void Decoder::twod(uint32_t subc, uint32_t mthd, uint32_t data)
     auto *sim = static_cast<twodsim::Sim *>(twod_);
     if (!sim) {
         twod_ = sim = new twodsim::Sim;
-        // NVDEC_TWOD_QUIRK: the engine as r7q's GM20B measured it ("integer": bilinear taps from the position's own
-        // fraction) or with no half-texel origin ("nohalf"): the self-test's sweep must find the sampling that undoes it
-        if (const char *q = getenv("NVDEC_TWOD_QUIRK")) {
-            sim->quirkIntegerCentres = !strcmp(q, "integer");
-            sim->quirkNoHalfTexel = !strcmp(q, "nohalf");
-        }
+        // NVDEC_TWOD_QUIRK=gm20b: the engine as the device measured it (its centre origin half a texel off, fx::kGm20bSampling)
+        if (const char *q = getenv("NVDEC_TWOD_QUIRK"))
+            sim->quirkCentreHalfTexel = !strcmp(q, "gm20b");
         sim->host = [this](uint64_t va, uint64_t bytes) {
             return const_cast<uint8_t *>(map_ ? map_(va, bytes) : nullptr);
         };

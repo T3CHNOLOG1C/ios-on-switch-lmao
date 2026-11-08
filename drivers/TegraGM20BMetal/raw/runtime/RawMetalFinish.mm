@@ -14,17 +14,17 @@ static void markDirty(void *o)
         ((RMTexture *)object)->_gpuDirty = true;
 }
 
-static void markWritten(RMCommandBuffer *cb)
+void forEachWritten(RMCommandBuffer *cb, size_t from, size_t to, void (*written)(void *))
 {
     bool compute = false;
-    for (const Cmd &c : cb->_tape) {
+    for (size_t at = from; at < to; at++) {
+        const Cmd &c = cb->_tape[at];
         switch (c.op) {
         case OpRender: {
             MTLRenderPassDescriptor *pass = (__bridge MTLRenderPassDescriptor *)c.obj;
             for (unsigned j = 0; j < 8; j++)
-                if (RMTexture *t = (RMTexture *)pass.colorAttachments[j].texture)
-                    if ([t isKindOfClass:[RMTexture class]])
-                        t->_gpuDirty = true;
+                if (id<MTLTexture> t = pass.colorAttachments[j].texture)
+                    written((__bridge void *)t);
             break;
         }
         case OpCompute:
@@ -39,20 +39,20 @@ static void markWritten(RMCommandBuffer *cb)
         case OpCopyTexture:
         case OpCopyBufferToTexture:
         case OpMipmaps:
-            markDirty(c.op == OpMipmaps ? c.obj : c.obj2);
+            written(c.op == OpMipmaps ? c.obj : c.obj2);
             break;
         case OpCopyBuffer:
         case OpCopyTextureToBuffer:
-            markDirty(c.obj2);
+            written(c.obj2);
             break;
         case OpBuffer:
         case OpTexture:
             if (compute)
-                markDirty(c.obj);
+                written(c.obj);
             break;
         case OpInvocation:  // compute and other recorded calls: every buffer and texture they name
-            raw::forEachObject((__bridge NSInvocation *)c.obj, [](id o) {
-                markDirty((__bridge void *)o);
+            raw::forEachObject((__bridge NSInvocation *)c.obj, [written](id o) {
+                written((__bridge void *)o);
             });
             break;
         default:
@@ -106,7 +106,7 @@ void finish(RMCommandBuffer *cb, NSError *error)
 {
     gRM->stats.finished.fetch_add(1, std::memory_order_relaxed);
     unhold(cb);
-    markWritten(cb);
+    forEachWritten(cb, 0, cb->_tape.size(), markDirty);
     if (!cb->_m2v)
         for (const Cmd &c : cb->_tape)
             if (c.op == OpSignalEvent)
@@ -123,6 +123,9 @@ void finish(RMCommandBuffer *cb, NSError *error)
             scheduledHandlers = cb->_scheduledHandlers;
             cb->_scheduledHandlers = nil;
             cb->_gpuStart = hostSeconds();
+#if SWITCH_FRAME_TIMELINE
+            gRM->stats.scheduledByFinish++;
+#endif
         } else {
             behindScheduled = !cb->_scheduledDone;
         }

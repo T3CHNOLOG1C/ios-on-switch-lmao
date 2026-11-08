@@ -74,10 +74,18 @@ static void noteReplay(const switch_frame::Stamps &f, uint64_t returned)
 
 static bool submitSegments(RMCommandBuffer *cb);
 
+// A command buffer part of whose raw submission ran before the kernel refused the rest: replayed on m2v, that part would run
+// twice. It completes with an error, as Metal's does when its GPU work fails.
+static void finishPartial(RMCommandBuffer *cb)
+{
+    once(@"a command buffer whose raw submission the kernel refused after part of it ran completes with an error (not "
+         @"replayed: that part would run twice)");
+    finish(cb, [NSError errorWithDomain:MTLCommandBufferErrorDomain code:MTLCommandBufferErrorInternal userInfo:nil]);
+}
+
 static bool submitLocked(RMCommandBuffer *cb)
 {
     RawState &r = *gRM;
-    foldCpuLevels();
     if (!cb->_segs.empty())
         return submitSegments(cb);
     const char *why = nullptr;
@@ -121,6 +129,10 @@ static bool submitLocked(RMCommandBuffer *cb)
         }
         r.stats.aborted++;
         r.stats.abortUs += nowUs() - began;
+        if (cb->_partial) {
+            finishPartial(cb);
+            return true;
+        }
         cb->_reason = WhyEncode;
         cb->_why = [NSString stringWithUTF8String:why ?: "?"];
     }
@@ -137,8 +149,6 @@ static bool submitLocked(RMCommandBuffer *cb)
     switch_frame::trace(switch_frame::kReplay, switch_frame::kStart, cb->_frame.seq);
     tTwinTicks = 0;
 #endif
-    if (r.fallback)
-        mirrorsForM2v(cb, 0, cb->_tape.size());
     id<MTLCommandBuffer> m = r.fallback ? replay(cb, 0, cb->_tape.size(), false) : nil;
 #if SWITCH_FRAME_TIMELINE
     cb->_frame.mark(switch_frame::ReplayEnd);
@@ -218,18 +228,14 @@ static bool submitLocked(RMCommandBuffer *cb)
 }
 
 // A command buffer some of whose encoders go to m2v and some do not, with no refusal of its own and no shared event: its segments
-// (each run of encoders of one driver), else none (it goes whole, as its reason says).
-// Off since r7p8 (a freeze 20 s after the home screen whose cause the logs did not name; the split was active just before it):
-// every command buffer goes whole, as before r12. It comes back once the stall line (rawStall) or m2v's bounded queue slot wait
-// names the cause.
-static constexpr bool kSplit = false;
-
+// (each run of encoders of one driver), else none (it goes whole, as its reason says). m2v replays only the encoders it must: a
+// replayed draw costs m2v's encode (~0.28 ms each on the device, 11-06), so a whole frame for one refused pass cost tens of ms.
 static void planSegments(RMCommandBuffer *cb)
 {
     cb->_segs.clear();
     cb->_segNext = 0;
     [cb closeEncoder];
-    if (!kSplit || cb->_reason == WhyRaw || cb->_whole)
+    if (cb->_reason == WhyRaw || cb->_whole)
         return;
     bool raw = false, m2v = false;
     for (size_t at = 0; at < cb->_tape.size(); at++) {
@@ -298,6 +304,10 @@ static bool submitSegments(RMCommandBuffer *cb)
             const char *why = nullptr;
             const uint64_t began = nowUs();
             if (!encodeRaw(cb, s.from, s.to, &why)) {
+                if (cb->_partial) {
+                    finishPartial(cb);
+                    return true;
+                }
                 s.raw = false;  // the kernel refused it: this segment on m2v
                 continue;
             }
@@ -315,9 +325,15 @@ static bool submitSegments(RMCommandBuffer *cb)
         } else {
             r.stats.splitM2v++;
             const uint64_t began = nowUs();
-            if (r.fallback)
-                mirrorsForM2v(cb, s.from, s.to);
+#if SWITCH_FRAME_TIMELINE
+            cb->_frame.mark(switch_frame::ReplayStart);
+            tTwinTicks = 0;
+#endif
             id<MTLCommandBuffer> m = r.fallback ? replay(cb, s.from, s.to, true) : nil;
+#if SWITCH_FRAME_TIMELINE
+            cb->_frame.mark(switch_frame::ReplayEnd);
+            cb->_frame.set(switch_frame::Twins, tTwinTicks);
+#endif
             if (!m) {
                 cb->_segError = [NSError errorWithDomain:MTLCommandBufferErrorDomain
                                                     code:MTLCommandBufferErrorInternal
@@ -375,6 +391,9 @@ static bool submitSegments(RMCommandBuffer *cb)
             }];
             [m commit];
             r.stats.replayUs += nowUs() - began;
+#if SWITCH_FRAME_TIMELINE
+            noteReplay(cb->_frame, cb->_frame.mark(switch_frame::Returned));
+#endif
         }
         cb->_segNext++;
     }

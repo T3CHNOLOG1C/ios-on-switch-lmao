@@ -3774,7 +3774,7 @@ nvk_flush_ms_state(struct nvk_cmd_buffer *cmd)
          sl = vk_standard_sample_locations_state(samples);
       }
 
-      struct nak_sample_location push_sl[NVK_MAX_SAMPLES];
+      struct nak_sample_location push_sl[NVK_MAX_SAMPLES] = {};
       for (uint32_t i = 0; i < sl->per_pixel; i++)
          push_sl[i] = vk_to_nak_sample_location(sl->locations[i]);
 
