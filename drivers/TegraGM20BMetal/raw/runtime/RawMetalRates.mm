@@ -17,7 +17,7 @@ bool raw_metal_texture_kept(id<MTLTexture> texture)
 
 bool raw_metal_chains_on(void)
 {
-    return gRM && gRM->raw->chains();
+    return gRM != nullptr;
 }
 
 const void *raw_metal_texture_image(id<MTLTexture> texture, size_t *pitch)

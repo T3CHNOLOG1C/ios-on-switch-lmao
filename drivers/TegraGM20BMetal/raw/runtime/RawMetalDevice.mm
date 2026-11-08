@@ -166,7 +166,7 @@
 
 - (id<MTLTexture>)rmNewTexture:(MTLTextureDescriptor *)d tiled:(bool)tiled
 {
-    if (chainShape(d) && gRM->raw->chains()) {  // mipmapped: level 0 a pool texture, the levels a chain (raw/fx)
+    if (chainShape(d)) {  // mipmapped: level 0 a pool texture, the levels a chain (raw/fx)
         RMTexture *t = [RMTexture new];
         t->_device = self;
         t->_descriptor = [d copy];

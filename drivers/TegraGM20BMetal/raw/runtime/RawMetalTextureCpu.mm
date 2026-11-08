@@ -148,16 +148,15 @@ void cpuLevel(RMTexture *t, MTLRegion r, NSUInteger level, uint8_t *bytes, NSUIn
         return;
     }
     uint8_t *chain = c.span.cpu;
-    const bool fermi = gRM->raw->selfTestFermiView;
     const uint64_t at = lv.offset, span = uint64_t(lv.rowBytes) * lv.rows;
     if (write) {
         raw::fx::writeLevel(c.layout, chain, uint32_t(level), uint32_t(r.origin.x), uint32_t(r.origin.y),
-                            uint32_t(r.size.width), uint32_t(r.size.height), bytes, row, fermi);
+                            uint32_t(r.size.width), uint32_t(r.size.height), bytes, row);
         cacheLines(chain + at, span, false);
         noteCpuLevels(t, bit);
     } else {
         cacheLines(chain + at, span, true);
         raw::fx::readLevel(c.layout, chain, uint32_t(level), uint32_t(r.origin.x), uint32_t(r.origin.y),
-                           uint32_t(r.size.width), uint32_t(r.size.height), bytes, row, fermi);
+                           uint32_t(r.size.width), uint32_t(r.size.height), bytes, row);
     }
 }
