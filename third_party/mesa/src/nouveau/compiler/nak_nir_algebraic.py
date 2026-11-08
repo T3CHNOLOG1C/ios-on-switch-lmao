@@ -81,6 +81,8 @@ algebraic_lowering += [
 # half are their half sum or product (24 >= 2 x 11 + 2 bits make the double
 # rounding innocuous; checked exhaustively against native f16 arithmetic), so
 # metal2vulkan's f32 emulation of half arithmetic runs as SM53's HADD2/HMUL2.
+# Each stays exact, as metal2vulkan's sum is: fused into an HFMA2 a product
+# would skip the rounding metal2vulkan gave it.
 half_denorms_kept = '!nir_is_denorm_flush_to_zero(info->float_controls_execution_mode, 16)'
 half_exact = 'nak->sm >= 53 && ' + half_denorms_kept
 for op in ['fadd', 'fmul']:
@@ -90,7 +92,7 @@ for op in ['fadd', 'fmul']:
             y = ('fneg', ('f2f32', 'b@16')) if nb else ('f2f32', 'b@16')
             algebraic_lowering += [
                 (('f2f16_rtne', (op, x, y)),
-                    (op, ('fneg', a) if na else a, ('fneg', b) if nb else b), half_exact),
+                    ('!' + op, ('fneg', a) if na else a, ('fneg', b) if nb else b), half_exact),
             ]
 
 # ios-on-switch-lmao: metal2vulkan rounds a half sum (or difference) as
@@ -105,7 +107,7 @@ for na in [False, True]:
         s = ('fadd', x, y)
         algebraic_lowering += [
             (('bcsel', ('feq', ('fquantize2f16', s), 0.0), s, ('fquantize2f16', s)),
-                ('f2f32', ('fadd', ('fneg', a) if na else a, ('fneg', b) if nb else b)), half_exact),
+                ('f2f32', ('!fadd', ('fneg', a) if na else a, ('fneg', b) if nb else b)), half_exact),
         ]
 
 # ios-on-switch-lmao: on a device without Float16 metal2vulkan moves a half
