@@ -5446,7 +5446,7 @@ static void finish(RMCommandBuffer *cb, NSError *error)
         for (const Cmd &c : cb->_tape)
             if (c.op == OpSignalEvent)
                 [(id<MTLSharedEvent>)(__bridge id)c.obj setSignaledValue:c.c];
-    NSArray *handlers;
+    NSArray *handlers, *unscheduled = nil;
     {
         std::lock_guard<std::mutex> l(cb->_lock);
         cb->_status = error ? MTLCommandBufferStatusError : MTLCommandBufferStatusCompleted;
@@ -5455,9 +5455,17 @@ static void finish(RMCommandBuffer *cb, NSError *error)
         handlers = cb->_completedHandlers;
         cb->_completedHandlers = nil;
         cb->_completedSent = true;
-        cb->_scheduledSent = true;  // a completed command buffer is scheduled; its own scheduled() runs no more
+        // a completed command buffer is scheduled: its scheduled handlers scheduled() never took run here, first (one that
+        // completes before its submit thread schedules it, or that never reaches a GPU), and scheduled() runs no more
+        if (!cb->_scheduledSent) {
+            unscheduled = cb->_scheduledHandlers;
+            cb->_scheduledHandlers = nil;
+        }
+        cb->_scheduledSent = true;
     }
     void (^run)(void) = ^{
+        for (MTLCommandBufferHandler h in unscheduled)
+            h((id<MTLCommandBuffer>)cb);
         for (MTLCommandBufferHandler h in handlers)
             h((id<MTLCommandBuffer>)cb);
         {
