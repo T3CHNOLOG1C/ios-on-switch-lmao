@@ -160,8 +160,8 @@ void planeDecide(const OriginalLegacySwapRequest *request, PlaneDecision &d)
             if (stats)
                 ++stPlaneDropped;
         } else if (native_planes::imageOf(r.layer, width, height, image) && image.visible) {
-            const int slot =
-                planeSlotFor(native_legacy_surface_descriptor(r.surface), image.readLow, image.readHigh, !image.yuv);
+            const int slot = planeSlotFor(native_legacy_surface_descriptor(r.surface), image.readLow, image.readHigh,
+                                          !image.yuv, r.surface);
             if (slot >= 0) {
                 want = {true, slot, image, 0};
             } else if (stats) {
@@ -186,11 +186,12 @@ bool planeSlotBusy(int k) const
     return false;
 }
 
-// The slot holding [low, high) of memory (mapped now into the least recently used slot no set uses, if not yet): -1 when
-// every slot is in use or the pages cannot be had. A surface the CPU may have written (RGB: an image decoded in software)
-// is cleaned to DRAM once when it is mapped: DC A does not snoop the CPU's caches. Video comes from VIC (or a CPU copy that
-// cleans) already in DRAM [V: r17-video TegraVICPresent].
-int planeSlotFor(IOMemoryDescriptor *memory, uint64_t low, uint64_t high, bool clean)
+// The slot holding [low, high) of the surface's memory (mapped now into the least recently used slot no set uses, if not
+// yet): -1 when every slot is in use or the pages cannot be had, or the GPU renders the surface block-linear (window B
+// scans rows). A surface the CPU may have written (RGB: an image decoded in software) is cleaned to DRAM once when it is
+// mapped: DC A does not snoop the CPU's caches. Video comes from VIC (or a CPU copy that cleans) already in DRAM
+// [V: r17-video TegraVICPresent]. surface: the IOSurface the memory is, held with it (none for the display's own buffers).
+int planeSlotFor(IOMemoryDescriptor *memory, uint64_t low, uint64_t high, bool clean, OSObject *surface = nullptr)
 {
     if (!memory || !memory->metaCast("IOMemoryDescriptor") || high <= low || high - low > kPlaneSlotSpan)
         return -1;
@@ -245,8 +246,18 @@ int planeSlotFor(IOMemoryDescriptor *memory, uint64_t low, uint64_t high, bool c
         }
     }
     memory->retain();
-    planeSlots[victim] = {memory, low, end, ++planeSlotUses};
+    if (surface)
+        surface->retain();
+    planeSlots[victim] = {memory, surface, nullptr, low, end, ++planeSlotUses};
     cleanDomain();
+    int tiled = 0;
+    IOByteCount length = 0;
+    const addr64_t first = memory->getPhysicalSegment(0, &length, kIOMemoryMapperNone);
+    planeSlots[victim].layout = first ? tegra_gm20b_surface_hold(first & ~0xfffULL, &tiled) : nullptr;
+    if (tiled) {
+        planeDropSlot(static_cast<unsigned>(victim));
+        return -1;
+    }
     if (stats)
         ++stPlaneMaps;
     return victim;
@@ -257,10 +268,13 @@ void planeDropSlot(unsigned k)
     PlaneSlot &slot = planeSlots[k];
     if (slot.memory) {
         probeDomain.unmap(planeSlotIova(static_cast<int>(k)), static_cast<uint32_t>((slot.high - slot.low) / 4096));
+        if (slot.layout)
+            tegra_gm20b_surface_unhold(slot.layout);
         slot.memory->complete(kIODirectionOut);
         slot.memory->release();
         cleanDomain();
     }
+    OSSafeReleaseNULL(slot.surface);
     slot = {};
 }
 

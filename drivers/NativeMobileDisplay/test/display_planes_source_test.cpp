@@ -167,6 +167,20 @@ TEST(DisplayPlanesSource, TheConsoleHoldKeepsTheScreen)
     EXPECT_THAT(Function(planes, "void kickPlaneOnly("), HasSubstr("retireUnshown(seq);"));
 }
 
+// A plane slot holds what window B scans from it as a direct slot does (the surface, its wired memory, its layout), and a
+// surface the GPU renders block-linear never goes to window B, which scans rows.
+TEST(DisplayPlanesSource, PlaneSlotsHoldTheSurfaceTheyScan)
+{
+    const std::string planes = SourceText("../NativePlanesDisplay.h");
+    const std::string make = Function(planes, "int planeSlotFor(");
+    EXPECT_THAT(make, HasSubstr("surface->retain();"));
+    ExpectBefore(make, "tegra_gm20b_surface_hold(", "if (tiled) {");
+    const std::string drop = Function(planes, "void planeDropSlot(unsigned k)");
+    ExpectBefore(drop, "probeDomain.unmap(", "tegra_gm20b_surface_unhold(slot.layout);");
+    ExpectBefore(drop, "tegra_gm20b_surface_unhold(slot.layout);", "slot.memory->release();");
+    ExpectBefore(drop, "slot.memory->release();", "OSSafeReleaseNULL(slot.surface);");
+}
+
 TEST(DisplayPlanesSource, BackboarddDetachesOnlyWhenTheDisplaySaysSo)
 {
     const std::string xnu = XnuKernExec();
