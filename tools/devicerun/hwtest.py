@@ -1,8 +1,9 @@
 """hw_test_app's results: one check per test over its `HWTEST <id> <PASS|FAIL|SKIP> <k=v...>` lines.
 
 A test's row is PASS when the suite ran (its summary line is in the log) and the test logged no FAIL, FAIL when it
-did, NO-DATA when the app never finished a run. Every check shares the literal 'HWTEST ' and the subsystem, so they add
-one clause to `log show`'s predicate; their regexes tell them apart. hwtest_test.py keeps TESTS in step with the app's
+did, NO-DATA when the app never finished a run. A test only one iOS version's app has (BY_IOS) is N/A in a log whose
+summary line names another version (ios=). Every check shares the literal 'HWTEST ' and the subsystem, so they add one
+clause to `log show`'s predicate; their regexes tell them apart. hwtest_test.py keeps the tables in step with the app's
 sources.
 """
 
@@ -103,6 +104,7 @@ TESTS: dict[str, bool] = {
     'storage.random': False,
     'cpu.single': False,
     'cpu.multi': False,
+    'a64x.self': False,
     'crypto.cryptokit': False,
     'crypto.commoncrypto': False,
     'crypto.keychain': False,
@@ -111,8 +113,20 @@ TESTS: dict[str, bool] = {
     'system.power': False,
 }
 
+# The tests only one iOS version's app runs (hw_test_app/app<version>), by that version.
+BY_IOS: dict[str, dict[str, bool]] = {
+    '27': {
+        'gpu.ca.glass': False,
+        'metal4.device': False,
+        'ui.glass': False,
+        'pacing.glass_over': False,
+        'pacing.glass_under': False,
+        'video.frame_processor': False,
+    },
+}
 
-def test_check(test_id: str, interactive: bool) -> Check:
+
+def test_check(test_id: str, interactive: bool, ios: str = '') -> Check:
     return Check(
         f'hwtest.{test_id}',
         OWNER,
@@ -121,8 +135,11 @@ def test_check(test_id: str, interactive: bool) -> Check:
         regex=rf'^HWTEST {re.escape(test_id)} FAIL(?:$| )(?:.*\bwhy=(?P<why>\S+))?',
         show=('why',),
         needs=SUITE,
+        applies=f'{SUITE} ios={ios}' if ios else '',
         source=SOURCE,
-        note='interactive: SKIP without a person' if interactive else '',
+        note='; '.join(
+            ([f'iOS {ios} only'] if ios else []) + (['interactive: SKIP without a person'] if interactive else [])
+        ),
     )
 
 
@@ -133,8 +150,11 @@ HWTEST = [
         LITERAL,
         'last(fail) == 0',
         subsystem=SUBSYSTEM,
-        regex=r'^HWTEST suite (?:PASS|FAIL) pass=(?P<pass>\d+) fail=(?P<fail>\d+) skip=(?P<skip>\d+)',
-        show=('pass', 'fail', 'skip'),
+        regex=(
+            r'^HWTEST suite (?:PASS|FAIL) pass=(?P<pass>\d+) fail=(?P<fail>\d+) skip=(?P<skip>\d+)'
+            r'(?: ios=(?P<ios>\d+))?'
+        ),
+        show=('pass', 'fail', 'skip', 'ios'),
         source=SOURCE,
         note='the last full run (Run All, or the launch run)',
     ),
@@ -185,4 +205,5 @@ HWTEST = [
         note='frames missed per scene: the display link (app) and the probe layer (display); hist 1/2/3/4+ periods',
     ),
     *[test_check(test_id, interactive) for test_id, interactive in TESTS.items()],
+    *[test_check(test_id, interactive, ios) for ios, tests in BY_IOS.items() for test_id, interactive in tests.items()],
 ]

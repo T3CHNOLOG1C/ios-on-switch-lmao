@@ -1,7 +1,7 @@
 import Foundation
 import HWTestCore
 
-enum Subsystem: String, CaseIterable, Sendable {
+public enum Subsystem: String, CaseIterable, Sendable {
     case metal = "Metal / GPU"
     case decode = "Video decode"
     case encode = "Video encode"
@@ -18,7 +18,7 @@ enum Subsystem: String, CaseIterable, Sendable {
 }
 
 /// One test. `run` is called off the main thread; anything that touches UIKit hops to the main actor itself.
-protocol HWTest: Sendable {
+public protocol HWTest: Sendable {
     var id: String { get }
     var name: String { get }
     var subsystem: Subsystem { get }
@@ -31,6 +31,6 @@ protocol HWTest: Sendable {
 }
 
 extension HWTest {
-    var interactive: Bool { false }
-    var timeout: TimeInterval { 60 }
+    public var interactive: Bool { false }
+    public var timeout: TimeInterval { 60 }
 }

@@ -57,9 +57,12 @@ final class LogLineTests: XCTestCase {
 
     func testSummaryFailsWhenAnyTestFailed() {
         let records = [record("a", .pass()), record("b", .skip("no headset")), record("c", .fail("bad"))]
-        XCTAssertEqual(LogLine.summary(records, milliseconds: 1000), "HWTEST suite FAIL pass=1 fail=1 skip=1 ms=1000.0")
         XCTAssertEqual(
-            LogLine.summary(Array(records.prefix(2)), milliseconds: 5), "HWTEST suite PASS pass=1 fail=0 skip=1 ms=5.0")
+            LogLine.summary(records, ios: 17, milliseconds: 1000),
+            "HWTEST suite FAIL pass=1 fail=1 skip=1 ios=17 ms=1000.0")
+        XCTAssertEqual(
+            LogLine.summary(Array(records.prefix(2)), ios: 27, milliseconds: 5),
+            "HWTEST suite PASS pass=1 fail=0 skip=1 ios=27 ms=5.0")
     }
 
     func testJudgedNamesTheFailedChecks() {

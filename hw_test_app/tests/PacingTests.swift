@@ -105,16 +105,26 @@ final class ShownTimes: @unchecked Sendable {
     }
 }
 
-struct PacingTest: HWTest {
-    let id: String
-    let name: String
-    let subsystem = Subsystem.compositor
+public struct PacingTest: HWTest {
+    public let id: String
+    public let name: String
+    public let subsystem = Subsystem.compositor
     let probeSize: CGFloat?
     let build: @MainActor @Sendable (UIView, CGRect) -> (Int) -> Void
 
-    var timeout: TimeInterval { 20 }
+    public init(
+        id: String, name: String, probeSize: CGFloat?,
+        build: @escaping @MainActor @Sendable (UIView, CGRect) -> (Int) -> Void
+    ) {
+        self.id = id
+        self.name = name
+        self.probeSize = probeSize
+        self.build = build
+    }
 
-    func run(_ context: TestContext) async throws -> Outcome {
+    public var timeout: TimeInterval { 20 }
+
+    public func run(_ context: TestContext) async throws -> Outcome {
         let done = Waiter<Bool>()
         let recorder = await context.onStage(fullScreen: true) { stage -> PacingRun in
             let screen = UIScreen.main.bounds

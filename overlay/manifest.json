@@ -32,8 +32,10 @@
     "union, showing an 'any' Wallpaper.plist (tools/package/wallpaper_1x.py, pinned) over the sealed one, with the sealed",
     ".ca and images beneath. No gate.",
     "SwitchHWTest.app (hw_test_app, debug packages only) is a bundle entry: the whole .app from its .ipa, every Mach-O",
-    "in the trust cache, in a union over /Applications. Deploy asks for an upgrade migration when it changes, so",
-    "LaunchServices registers it the way it registers an OS update's system apps (tools/deploy/system_apps.py)."
+    "in the trust cache, in a union over /Applications. boot/BUILD.bazel gives each kind the app built for its iOS",
+    "version; iOS 27 also gets SwitchHWTest27e.app, the same app built arm64e. Deploy asks for an upgrade migration",
+    "when they change, so LaunchServices registers them the way it registers an OS update's system apps",
+    "(tools/deploy/system_apps.py)."
   ],
   "files": [
     {
@@ -194,6 +196,15 @@
       "bundle": true,
       "union": "/Applications",
       "debug": true
+    },
+    {
+      "path": "/Applications/SwitchHWTest27e.app",
+      "source": "build/switch-hwtest/SwitchHWTest27e.ipa",
+      "trust": true,
+      "bundle": true,
+      "union": "/Applications",
+      "debug": true,
+      "kind": "24B119"
     }
   ]
 }
