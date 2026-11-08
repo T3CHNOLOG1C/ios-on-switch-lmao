@@ -38,10 +38,10 @@ index a30e52c..a39bf09 100644
      ptimer_transaction_begin(s->ptimer);
      ptimer_set_freq(s->ptimer, s->disp_refresh_rate);
 diff --git a/hw/arm/tegra2/ahb/host1x/modules/dc/scanout.c b/hw/arm/tegra2/ahb/host1x/modules/dc/scanout.c
-index 1e7a7eb..248211d 100644
+index fab084d..e8d4c28 100644
 --- a/hw/arm/tegra2/ahb/host1x/modules/dc/scanout.c
 +++ b/hw/arm/tegra2/ahb/host1x/modules/dc/scanout.c
-@@ -16,7 +16,8 @@
+@@ -18,7 +18,8 @@
   * 3:0) in blocks one GOB wide and 1 << BLOCK_HEIGHT GOBs tall, LINE_STRIDE / 64 blocks per block row.
   * Windows blend back to front by WINDOW_LAYER_DEPTH (lower is in front) over the background colour, through
   * BLEND_NOMATCH_SELECT's factors with K1 and K2 (colour keys are not modelled), or replace what is under them with
@@ -51,7 +51,7 @@ index 1e7a7eb..248211d 100644
   */
  
  #include "tegra_common.h"
-@@ -125,18 +126,32 @@ static bool dram_read(hwaddr addr, uint8_t *buf, uint32_t len)
+@@ -126,18 +127,32 @@ static bool dram_read(hwaddr addr, uint8_t *buf, uint32_t len)
      return true;
  }
  

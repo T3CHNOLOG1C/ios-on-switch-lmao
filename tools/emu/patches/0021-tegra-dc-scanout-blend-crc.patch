@@ -158,10 +158,10 @@ index 01b8d4c..a30e52c 100644
  static const GraphicHwOps tegra_dc_ops = {
 diff --git a/hw/arm/tegra2/ahb/host1x/modules/dc/scanout.c b/hw/arm/tegra2/ahb/host1x/modules/dc/scanout.c
 new file mode 100644
-index 0000000..1e7a7eb
+index 0000000..fab084d
 --- /dev/null
 +++ b/hw/arm/tegra2/ahb/host1x/modules/dc/scanout.c
-@@ -0,0 +1,481 @@
+@@ -0,0 +1,490 @@
 +/*
 + * Tegra X1 display controller scanout: windows fetched, converted and blended as the panel would get them.
 + *
@@ -175,7 +175,9 @@ index 0000000..1e7a7eb
 + * Register words and fields are Linux drivers/gpu/drm/tegra/dc.h's. Every enabled window is read from its active
 + * registers: POSITION and SIZE place it, PRESCALED_SIZE (bytes x lines) bounds what it fetches from H_OFFSET and
 + * V_OFFSET on, the 4.12 DDA increments and initial phases step through the source (nearest pixel: the H and V
-+ * filters are not modelled), H_DIRECTION and V_DIRECTION read from the last byte and line down. Block-linear
++ * filters are not modelled), H_DIRECTION and V_DIRECTION read from the last byte and line down. With SCAN_COLUMN
++ * each output line is a source column and each output pixel a source row: PRESCALED_SIZE then holds the source's
++ * height in bytes and its width in pixels, and the H and V DDAs step rows and columns (L4T window.c). Block-linear
 + * surfaces are GM20B's GOBs (64 bytes by 8 lines, 16-byte runs: x bit 5, y bits 2:1, x bit 4, y bit 0, x bits
 + * 3:0) in blocks one GOB wide and 1 << BLOCK_HEIGHT GOBs tall, LINE_STRIDE / 64 blocks per block row.
 + * Windows blend back to front by WINDOW_LAYER_DEPTH (lower is in front) over the background colour, through
@@ -226,7 +228,6 @@ index 0000000..1e7a7eb
 +
 +#define UNSUPPORTED_DEPTH  (1u << 0)
 +#define UNSUPPORTED_KIND   (1u << 1)
-+#define UNSUPPORTED_COLUMN (1u << 2)
 +
 +enum format { FORMAT_NONE, FORMAT_B8G8R8A8, FORMAT_R8G8B8A8, FORMAT_B5G6R5, FORMAT_NV21, FORMAT_NV12 };
 +
@@ -243,7 +244,7 @@ index 0000000..1e7a7eb
 +    uint32_t bpp;
 +    uint32_t options, depth;
 +    uint32_t pos_x, pos_y, out_w, out_h;
-+    uint32_t pre_bytes, pre_lines;
++    uint32_t columns, rows;
 +    uint32_t h_inc, v_inc, h_init, v_init;
 +    uint32_t h_off, v_off;
 +    uint32_t kind, block_log2;
@@ -381,11 +382,11 @@ index 0000000..1e7a7eb
 +        .start = window_active(w->regs, WINBUF_START_ADDR) |
 +                 (uint64_t)(window_active(w->regs, WINBUF_START_ADDR_HI) & 3) << 32,
 +        .stride = stride & 0xffff,
-+        .x0 = w->options & H_DIRECTION ? w->h_off + 1 - MIN(w->pre_bytes, w->h_off + 1) : w->h_off,
-+        .y0 = w->options & V_DIRECTION ? w->v_off + 1 - MIN(w->pre_lines, w->v_off + 1) : w->v_off,
++        .x0 = w->options & H_DIRECTION ? w->h_off + 1 - MIN(w->columns * w->bpp, w->h_off + 1) : w->h_off,
++        .y0 = w->options & V_DIRECTION ? w->v_off + 1 - MIN(w->rows, w->v_off + 1) : w->v_off,
 +    };
 +
-+    fetch_plane(out, w, &s, &out->plane[0], w->pre_bytes, w->pre_lines);
++    fetch_plane(out, w, &s, &out->plane[0], w->columns * w->bpp, w->rows);
 +    if (w->format == FORMAT_NV12 || w->format == FORMAT_NV21) {
 +        Source c = {
 +            .start = window_active(w->regs, WINBUF_START_ADDR_U) |
@@ -394,8 +395,8 @@ index 0000000..1e7a7eb
 +            .x0 = s.x0 & ~1u,
 +            .y0 = s.y0 / 2,
 +        };
-+        fetch_plane(out, w, &c, &out->plane[1], ROUND_UP(s.x0 + w->pre_bytes, 2) - c.x0,
-+                    (s.y0 + w->pre_lines - 1) / 2 - c.y0 + 1);
++        fetch_plane(out, w, &c, &out->plane[1], ROUND_UP(s.x0 + w->columns * w->bpp, 2) - c.x0,
++                    (s.y0 + w->rows - 1) / 2 - c.y0 + 1);
 +    }
 +}
 +
@@ -541,15 +542,14 @@ index 0000000..1e7a7eb
 +    w->block_log2 = (kind >> 4) & 7;
 +    {
 +        uint32_t why = (w->format == FORMAT_NONE ? UNSUPPORTED_DEPTH : 0) |
-+                       (w->kind != SURFACE_PITCH && w->kind != SURFACE_BLOCK ? UNSUPPORTED_KIND : 0) |
-+                       (w->options & SCAN_COLUMN ? UNSUPPORTED_COLUMN : 0);
++                       (w->kind != SURFACE_PITCH && w->kind != SURFACE_BLOCK ? UNSUPPORTED_KIND : 0);
 +
 +        if (why & ~out->unsupported[index]) {
 +            qemu_log_mask(LOG_UNIMP, "tegra.dc: window %c: COLOR_DEPTH %u, SURFACE_KIND %#x, OPTIONS %#x not modelled\n",
 +                          'A' + index, window_active(regs, WIN_COLOR_DEPTH), kind, w->options);
 +        }
 +        out->unsupported[index] |= why;
-+        if (why & (UNSUPPORTED_DEPTH | UNSUPPORTED_KIND)) {
++        if (why) {
 +            return false;
 +        }
 +    }
@@ -561,8 +561,14 @@ index 0000000..1e7a7eb
 +    w->pos_y = (pos >> 16) & 0x1fff;
 +    w->out_w = size & 0x1fff;
 +    w->out_h = (size >> 16) & 0x1fff;
-+    w->pre_bytes = prescaled & 0x7fff;
-+    w->pre_lines = (prescaled >> 16) & 0x1fff;
++    w->columns = (prescaled & 0x7fff) / w->bpp;
++    w->rows = (prescaled >> 16) & 0x1fff;
++    if (w->options & SCAN_COLUMN) {
++        uint32_t lines = w->rows;
++
++        w->rows = w->columns;
++        w->columns = lines;
++    }
 +    w->h_inc = dda & 0xffff;
 +    w->v_inc = dda >> 16;
 +    w->h_init = window_active(regs, WIN_H_INITIAL_DDA) & 0xffff;
@@ -575,20 +581,23 @@ index 0000000..1e7a7eb
 +    if (w->format == FORMAT_NV12 || w->format == FORMAT_NV21) {
 +        read_csc(w);
 +    }
-+    return w->out_w && w->out_h && w->pre_bytes >= w->bpp && w->pre_lines;
++    return w->out_w && w->out_h && w->columns && w->rows;
 +}
 +
 +static void draw_window(DcScanout *out, const Window *w)
 +{
 +    uint32_t i, j;
 +
++    bool column = w->options & SCAN_COLUMN;
++
 +    fetch_window(out, w);
 +    for (j = 0; j < w->out_h && w->pos_y + j < out->height; j++) {
-+        uint32_t sy = (w->v_init + j * w->v_inc) >> 12;
++        uint32_t v = (w->v_init + j * w->v_inc) >> 12;
 +        uint32_t *line = out->pixels + (size_t)(w->pos_y + j) * out->width;
 +
 +        for (i = 0; i < w->out_w && w->pos_x + i < out->width; i++) {
-+            uint32_t src = source_pixel(out, w, (w->h_init + i * w->h_inc) >> 12, sy);
++            uint32_t h = (w->h_init + i * w->h_inc) >> 12;
++            uint32_t src = column ? source_pixel(out, w, v, h) : source_pixel(out, w, h, v);
 +            uint32_t *dst = &line[w->pos_x + i];
 +
 +            *dst = w->blend & BLEND_BYPASS ? src : blend(w, src, *dst);

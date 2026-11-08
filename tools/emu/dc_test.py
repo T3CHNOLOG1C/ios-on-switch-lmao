@@ -159,6 +159,28 @@ class DcTest(unittest.TestCase):
                 self.dc.commit('A')
                 self.assertEqual(self.dc.frames(4)[-1], base)
 
+    def test_scan_column_turns_the_source(self) -> None:
+        columns, rows = HEIGHT, WIDTH
+        source = image(3)[: columns * rows * 4]
+        turned = bytearray(STRIDE * HEIGHT)
+        for line in range(HEIGHT):
+            for pixel in range(WIDTH):
+                at = (pixel * columns + columns - 1 - line) * 4
+                turned[line * STRIDE + pixel * 4 : line * STRIDE + pixel * 4 + 4] = source[at : at + 4]
+        self.q.write(PITCH_B, bytes(turned))
+        self.dc.w(WIN['A'][1], PITCH_B)
+        self.dc.commit('A')
+        want = self.crc_on()
+        win, buf = WIN['A']
+        self.q.write(PITCH_A, source)
+        self.dc.w(win + 0x06, columns << 16 | rows * 4)
+        self.dc.w(win + 0x0A, columns * 4)
+        self.dc.w(win, 1 << 30 | 1 << 4 | 1 << 0)
+        self.dc.w(buf, PITCH_A)
+        self.dc.w(buf + 0x06, columns * 4 - 1)
+        self.dc.commit('A')
+        self.assertEqual(self.dc.frames(4)[-1], want)
+
     def test_premultiplied_window_b_over_a(self) -> None:
         top = bytearray(image(1))
         for at in range(0, len(top), 8):

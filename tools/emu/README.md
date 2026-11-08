@@ -84,16 +84,16 @@ and SDMMC1 as an SD Host Controller 3.00 in Tegra's v4 mode.
 
 Display controller A keeps three copies of each window register. `*_UPDATE` copies the assembly copy to the armed
 one, and `*_ACT_REQ` reads 1 until the next frame end makes the armed copy active. Windows A to D scan pitch or
-block-linear surfaces in B8G8R8A8, R8G8B8A8, B5G6R5 or 4:2:0 (through the window's CSC), scale by their DDA increments
-and blend by depth. The CRC unit reads 0 at the first frame end after it is turned on and the first frame's CRC at the
-second, as the Switch's does.
+block-linear surfaces in B8G8R8A8, R8G8B8A8, B5G6R5 or 4:2:0 (through the window's CSC), scale by their DDA increments,
+turn with `SCAN_COLUMN` and blend by depth. The CRC unit reads 0 at the first frame end after it is turned on and the
+first frame's CRC at the second, as the Switch's does.
 
 Different from the hardware:
 
 - Timing. CPU speed, DRAM and every device latency are QEMU's, not the Switch's.
 - V_BLANK, FRAME_END, every latch and the CRC happen at one instant per frame, and line-counter latching
-  (`HCNTR_SEL`) takes effect on the write. V_PULSE2, underflows, the cursor, colour keys, `SCAN_COLUMN` and the
-  filters are missing; scaling takes the nearest pixel.
+  (`HCNTR_SEL`) takes effect on the write. V_PULSE2, underflows, the cursor, colour keys and the filters are
+  missing; scaling takes the nearest pixel.
 - The CRC is CRC-32C over the active pixels' 24-bit RGB, so its values differ from the device's: no public source
   gives the hardware's algorithm. Our driver only compares CRCs with each other.
 - The SMMU has no TLB, so stale-translation bugs don't show. A fault, or a read outside DRAM, reads zeros and logs one
