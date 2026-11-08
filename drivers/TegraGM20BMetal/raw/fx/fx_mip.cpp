@@ -221,7 +221,7 @@ void readLevel(const MipChain &c, const uint8_t *chainCpu, uint32_t l, uint32_t 
 }
 
 void mipChainTic(const MipChain &c, uint64_t va, uint32_t tic0, bool srgb, uint32_t baseLevel, uint32_t levelCount,
-                 uint32_t out[8])
+                 uint32_t out[8], uint32_t textureType)
 {
     memset(out, 0, 32);
     out[0] = tic0;                                // COMPONENTS, data types, X..W_SOURCE (NIL nvb097_set_th_bl_0)
@@ -242,7 +242,7 @@ void mipChainTic(const MipChain &c, uint64_t va, uint32_t tic0, bool srgb, uint3
     setField(out, 127, 124, single ? 0 : c.levels - 1);
     setField(out, 143, 128, c.width - 1);                 // WIDTH_MINUS_ONE
     setField(out, 150, 150, srgb ? 1 : 0);                // S_R_G_B_CONVERSION
-    setField(out, 154, 151, 1);                           // TEXTURE_TYPE TWO_D
+    setField(out, 154, 151, textureType);                 // TEXTURE_TYPE
     setField(out, 156, 155, 0);                           // SECTOR_PROMOTION NO_PROMOTION
     setField(out, 159, 157, 7);                           // BORDER_SIZE BORDER_SAMPLER_COLOR
     setField(out, 175, 160, c.height - 1);                // HEIGHT_MINUS_ONE
