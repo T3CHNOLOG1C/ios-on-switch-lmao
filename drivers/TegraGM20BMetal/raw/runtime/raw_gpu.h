@@ -736,6 +736,9 @@ public:
         return k_.lostFaultVa();
     }
 
+    // Which of this device's memory holds GPU VA `va` (a killed command buffer's fault VA), and where in it, for its line
+    std::string vaOwner(uint64_t va);
+
     // GPU-side order with the process's other driver (NVK's channels), through the kernel's Order (TegraGM20BInfoOrder; false:
     // it has none). orderAfterOthers: this channel's next submission starts with an acquire on what they submitted so far;
     // orderOthersAfter: their next submissions start with one on everything this channel submitted. The kern_return_t (0:

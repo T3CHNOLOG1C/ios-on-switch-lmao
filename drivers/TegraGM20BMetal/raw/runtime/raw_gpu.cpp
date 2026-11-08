@@ -1954,6 +1954,37 @@ bool Device::killed(uint32_t seqno) const
 // had in flight failed, and a new channel, named by ChannelCreate's reply, gets the context the old one took with it.
 // Between command buffers: no span of either ring is open, and every one the old channel had is done (the kernel released
 // its fence), whatever word the new channel's fence is.
+std::string Device::vaOwner(uint64_t va)
+{
+    char line[96];
+    auto in = [&](const Bo &bo, uint64_t bytes, const char *what) {
+        const uint64_t base = bo.vaBase ? bo.vaBase : bo.va;
+        if (!base || va < base || va - base >= bytes)
+            return false;
+        snprintf(line, sizeof line, "%s +0x%llx", what, (unsigned long long)(va - base));
+        return true;
+    };
+    auto chunk = [&](const std::vector<Chunk> &chunks, const char *what) {
+        for (size_t i = 0; i < chunks.size(); i++)
+            if (chunks[i].bo.handle && in(chunks[i].bo, chunks[i].bo.bytes, what))
+                return true;
+        return false;
+    };
+    std::lock_guard<std::mutex> l(lock_);
+    if (in(heap_, heapBound_, "the shader heap") || in(heap_, heap_.bytes, "the shader heap's unbound reservation") ||
+        in(push_.bo, push_.bo.bytes, "the push ring") || in(upload_.bo, upload_.bo.bytes, "the upload ring") ||
+        in(root_, root_.bytes, "the root table") || in(tic_, tic_.bytes, "the texture headers") ||
+        in(tsc_, tsc_.bytes, "the sampler headers") || in(zero_, zero_.bytes, "the zero page") ||
+        in(tickets_, tickets_.bytes, "the interlock tickets") || chunk(chunks_, "a pool chunk") ||
+        chunk(blChunks_, "a block-linear chunk") || chunk(zChunks_, "a zeta chunk") ||
+        chunk(wcChunks_, "a write-combined chunk"))
+        return line;
+    for (const auto &[key, i] : surfaces_)
+        if (in(i->bo, i->bo.bytes, i->kind == TGM_LAYOUT_KIND ? "a block-linear IOSurface" : "a pitch IOSurface"))
+            return std::string(line) + " (IOSurface " + std::to_string(i->id) + ")";
+    return "none of the raw device's memory";
+}
+
 bool Device::reopen()
 {
     noteLost();
