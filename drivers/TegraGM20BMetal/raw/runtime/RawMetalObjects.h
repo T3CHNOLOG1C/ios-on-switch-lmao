@@ -229,6 +229,15 @@ struct RMPass {
     NSUInteger width, height;
 };
 
+// A command buffer's setBytes data, written once where the GPU reads it: write-combined pool chunks the raw encode binds in place
+// (m2v's replay reads them back), each copy 256-byte aligned and zero to the next 256 bytes as an upload chunk is. The chunks go
+// with the recording (giveRecording), so they outlive every submission that reads them.
+struct RMBytes {
+    std::vector<raw::Buffer> chunks;  // va 0: heap memory (the GPU pool had none; the command buffer is m2v's)
+    size_t at = 0;                    // the chunk being filled
+    uint32_t used = 0;                // its bytes taken
+};
+
 // A part of a command buffer submitted on its own (RMCommandBuffer::_segs): tape [from, to), on the raw path or m2v
 struct RMSegment {
     uint32_t from, to;
@@ -257,7 +266,7 @@ struct RMSegment {
     bool _standIns;  // it binds an extended-range texture (raw::Texture::standIn): encodeRaw draws its stand-in
     std::vector<Cmd> _tape;
     std::vector<RMPass> _passes;  // OpRender's (Cmd::x)
-    std::vector<uint8_t> _bytes;
+    RMBytes _bytes;               // OpBytes': chunk Cmd::c, offset Cmd::a, length Cmd::b
     std::vector<uint64_t> _extra;
     std::vector<id> _owners;  // everything the tape names, retained until completion
     RMReason _reason;
