@@ -1,4 +1,4 @@
-"""The readers' decoding on known values, and every committed kind's table against itself and the frontend."""
+"""The readers' decoding on known values, and every committed kind's table against itself and its header."""
 
 import json
 import re
@@ -7,6 +7,7 @@ from pathlib import Path
 
 from drivers.NativeMetal.abi.dyld_cache import decode_pointer
 from drivers.NativeMetal.abi.extract import closure, struct_fields
+from drivers.NativeMetal.abi.gen import header
 
 HERE = Path(__file__).resolve().parent
 KINDS = sorted((HERE / 'kinds').glob('*.json'))
@@ -50,12 +51,14 @@ class Tables(unittest.TestCase):
                 self.assertEqual(device['limits_fields'][name], [offset, 'I'], f'{path.stem}: {name}')
                 self.assertIn(name, device['methods'], f'{path.stem}: {name}')
 
-    def test_limits_table_writes_each_kinds_fields_in_their_order(self):
-        header = (HERE.parent / 'LimitsTable.h').read_text()
-        written = [(name, int(offset, 16)) for name, offset in re.findall(r'\{"(\w+)", (0x[0-9a-f]+)\}', header)]
+    def test_each_kinds_header_holds_its_size_and_limits_in_order(self):
         for path in KINDS:
-            limits = json.loads(path.read_text())['MTLDevice']['limits']
-            self.assertEqual(written, list(limits.items()), path.stem)
+            table = json.loads(path.read_text())
+            text = header(table)
+            written = [(name, int(offset, 16)) for name, offset in re.findall(r'\{"(\w+)", (0x[0-9a-f]+)\}', text)]
+            self.assertEqual(written, list(table['MTLDevice']['limits'].items()), path.stem)
+            self.assertIn(f'kMTLDeviceInstanceSize = {table["MTLDevice"]["instance_size"]};', text)
+            self.assertIn(f'kMTLDeviceLimitsBytes = {table["MTLDevice"]["limits_bytes"]};', text)
 
 
 if __name__ == '__main__':

@@ -24,6 +24,9 @@ METAL = "//drivers/NativeMetal"
 
 GM20B_METAL = "//drivers/TegraGM20BMetal"
 
+# The selected IPSW kind's Metal.framework facts (drivers/NativeMetal/abi).
+METAL_ABI = METAL + "/abi:MetalABI.h"
+
 GM20B_ABI = "//drivers/TegraGM20B:TegraGM20BABI.h"
 
 GM20B_LAYOUT = "//drivers/TegraGM20B:TegraGM20BLayout.h"
@@ -138,6 +141,7 @@ metal_plugin(
     ],
     hdrs = [
         METAL + ":frontend_headers",
+        METAL_ABI,
         GM20B_METAL + ":raw_runtime_headers",
         GM20B_ABI,
         GM20B_LAYOUT,
@@ -162,6 +166,7 @@ metal_plugin(
     ],
     include_markers = [
         METAL + ":NativeBridgeMetalFrontend.h",
+        METAL_ABI,
         GM20B_METAL + ":raw/runtime/RawMetal.h",
         GM20B_ABI,
         "//kits/SwitchRefusal:SwitchRefusal.h",

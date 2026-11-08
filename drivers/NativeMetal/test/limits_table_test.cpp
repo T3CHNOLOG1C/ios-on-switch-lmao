@@ -14,7 +14,7 @@
 namespace {
 
 struct BaseModel {
-    uint8_t table[0x100] = {};
+    uint8_t table[kMTLDeviceLimitsBytes] = {};
 
     uint32_t at(uint16_t offset) const
     {
@@ -118,7 +118,7 @@ TEST(LimitsTable, OffsetsAreDistinctWordsInsideTheTable)
     std::map<uint16_t, std::string> seen;
     for (const LimitField &field : kLimitFields) {
         EXPECT_EQ(field.offset % 4, 0) << field.selector;
-        EXPECT_LE(field.offset + 4, 0x100) << field.selector;
+        EXPECT_LE(field.offset + 4, kMTLDeviceLimitsBytes) << field.selector;
         EXPECT_TRUE(seen.emplace(field.offset, field.selector).second) << field.selector;
     }
     EXPECT_EQ(seen.size(), 61u);
