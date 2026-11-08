@@ -298,6 +298,8 @@ id<MTLDevice> raw_metal_device_open(const char *packPath, uint64_t stack, id<MTL
     r->raw = dev;
     r->fallback = fallback;
     r->device = [cls new];
+    // Before the limits fill: RMDevice's answers (name, maxBufferLength) read the kernel's info through gRM
+    gRM = r;
     // The base class's limits table (_MTLDevice's own accessors read it; the frontend's fillLimits filled the m2v device's from its
     // answers): the same for this device, then this device's own answers (RMDevice's) where the base class reads them there.
     static const SEL limits = NSSelectorFromString(@"limits");
@@ -323,7 +325,6 @@ id<MTLDevice> raw_metal_device_open(const char *packPath, uint64_t stack, id<MTL
         ::once(@"CPU-ordered: the kernel has no Order (TegraGM20BInfoOrder): raw and m2v command buffers wait for each "
                @"other's "
                @"work to complete");
-    gRM = r;
     if (fallback)
         rawAliasSurfaces(dev);
     gRawRelease.start(
