@@ -129,18 +129,22 @@
 
 @end
 
-// A depth/stencil attachment the raw path renders (raw::DepthStencilAttachment): one memoryless Depth32Float_Stencil8 texture as
-// both aspects, whole (level, slice and depth plane 0, no resolve), cleared or not loaded and not stored (memoryless), a clear
-// depth that is a number (metal2vulkan refuses a NaN)
+// A depth/stencil attachment the raw path renders (raw::DepthStencilAttachment): one memoryless zeta texture (raw_zeta.h) as its
+// aspects (a stencil attachment of the same texture where its format has stencil, else none), whole (level, slice and depth
+// plane 0, no resolve), cleared or not loaded and not stored (memoryless), a clear depth that is a number (metal2vulkan refuses a
+// NaN)
 static bool rawDepthStencil(MTLRenderPassDescriptor *pass)
 {
     MTLRenderPassDepthAttachmentDescriptor *d = pass.depthAttachment;
     MTLRenderPassStencilAttachmentDescriptor *s = pass.stencilAttachment;
     RMTexture *t = (RMTexture *)d.texture;
-    if (!t || t != (RMTexture *)s.texture || ![(id)t isKindOfClass:[RMTexture class]] || !t->_rawOk || !t->_raw.zeta ||
-        !t->_raw.memoryless || std::isnan(d.clearDepth))
+    if (!t || ![(id)t isKindOfClass:[RMTexture class]] || !t->_rawOk || !t->_raw.zeta || !t->_raw.memoryless ||
+        std::isnan(d.clearDepth))
         return false;
-    for (MTLRenderPassAttachmentDescriptor *a : @[ d, s ])
+    const bool stencil = raw::zetaHasStencil(t->_raw.format);
+    if ((RMTexture *)s.texture != (stencil ? t : nil))
+        return false;
+    for (MTLRenderPassAttachmentDescriptor *a : stencil ? @[ d, s ] : @[ d ])
         if (a.level || a.slice || a.depthPlane || a.resolveTexture || a.storeAction != MTLStoreActionDontCare ||
             (a.loadAction != MTLLoadActionClear && a.loadAction != MTLLoadActionDontCare))
             return false;
@@ -245,7 +249,7 @@ static bool rawResolve(MTLRenderPassColorAttachmentDescriptor *a, RMTexture *fro
         [self retain:pass.depthAttachment.texture];
         [self retain:pass.stencilAttachment.texture];
         if (rawDepthStencil(pass))
-            e->_zeta = raw::kZetaFormat;
+            e->_zeta = ((RMTexture *)pass.depthAttachment.texture)->_raw.format;
         else {
             [self takeReason:WhyPass why:@"a depth/stencil attachment the raw path does not take"];
             hit(self, PredPassDepthStencil, pass.depthAttachment.texture.pixelFormat,

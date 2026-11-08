@@ -206,8 +206,8 @@ struct Texture {
     // A multisampled texture's samples a pixel (fx::msLayout): its memory the sample grid, height and width in pixels
     uint8_t samples = 1;
 
-    // Depth32Float_Stencil8 (raw_zeta.h): block-linear zeta memory, bound with its own PTE kind; never sampled, copied or a
-    // colour target
+    // A depth/stencil format (raw_zeta.h kZetaFormatInfo): block-linear zeta memory, bound with its format's PTE kind; never
+    // sampled, copied or a colour target
     bool zeta = false;
 
     // Device::createView's: a header of its own over its parent's memory. Whatever else it was copied from the parent with
@@ -710,7 +710,7 @@ public:
     // image is the part's first level and layer, which copies address and a pass renders into as a 2D view of one of each.
     bool createPartView(const Texture &of, uint32_t format, uint32_t type, uint32_t baseLevel, uint32_t levels,
                         uint32_t baseLayer, uint32_t layers, Texture &t);
-    // Memoryless (a pass gives it a backing); Depth32Float_Stencil8 among them, as zeta (Texture::zeta)
+    // Memoryless (a pass gives it a backing); the depth/stencil formats among them, as zeta (Texture::zeta)
     bool createMemoryless(uint32_t width, uint32_t height, uint32_t format, Texture &t, uint32_t samples = 1);
     // A 1D texture: NIL's 1D image, one block-linear row (y_log2 0) under a ONE_D header, in block-linear memory the CPU
     // writes through its tiled view (a 1D header takes no pitch layout)
@@ -1075,8 +1075,8 @@ private:
     std::vector<Spare> spares_;
     // mip chains' memory: chunks bound with PTE kind 0xFE (fx::kBlockLinearKind), made on demand, never CPU-written
     std::vector<Chunk> blChunks_;
-    // zeta memory: chunks bound with kZetaPteKind, made on demand, never CPU-written
-    std::vector<Chunk> zChunks_;
+    // zeta memory: chunks bound with each zeta format's PTE kind (kZetaFormatInfo), made on demand, never CPU-written
+    std::vector<Chunk> zChunks_[kZetaFormats];
     // write-combined buffers' memory: GPU-pool BOs (BoAlloc coherent: the CPU maps them write-combined), sub-allocated by page
     std::vector<Chunk> wcChunks_;
     bool wcAlloc(uint64_t bytes, Span &s);

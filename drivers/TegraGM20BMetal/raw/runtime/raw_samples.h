@@ -5,6 +5,7 @@
 // lowering read. Metal's default positions are Vulkan's standard ones.
 #pragma once
 #include <cstdint>
+#include "raw_gpu.h"
 
 namespace raw {
 
@@ -81,6 +82,12 @@ inline const char *resolveState(uint32_t format)
     default:
         return nullptr;
     }
+}
+
+// The rows of a multisampled target's sample grid (NIL's px_extent_sa: two down for 4 and 8 samples), as NVK's HEIGHT counts
+inline uint32_t sampleRows(const Texture &t)
+{
+    return t.samples >= 4 ? t.height * 2 : t.height;
 }
 
 inline uint32_t resolveTargetFormat(uint32_t format)

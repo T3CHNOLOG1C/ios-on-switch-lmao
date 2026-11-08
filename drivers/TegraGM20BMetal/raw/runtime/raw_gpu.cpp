@@ -384,7 +384,7 @@ void Device::emitContext(Push &p)
         DepthStencilRegs unknown;
         for (uint32_t &v : unknown.v)
             v = ~0u;
-        emitDepthStencil(p, depthStencilRegs(DepthStencilDesc(), 0, 0, false), unknown);
+        emitDepthStencil(p, depthStencilRegs(DepthStencilDesc(), 0, 0, false, false), unknown);
         ds_ = unknown;
     }
     // root table selected for LOAD_CONSTANT_BUFFER from here on (draws reselect it after binding set 0 as a cbuf); NVK's init
@@ -988,10 +988,14 @@ void Device::trim()
             poolFree_ -= ch.bytes;
             freeChunk(ch);
         }
-    for (std::vector<Chunk> *tiled : {&blChunks_, &zChunks_})
-        for (Chunk &ch : *tiled)
+    auto freeUnused = [&](std::vector<Chunk> &tiled) {
+        for (Chunk &ch : tiled)
             if (ch.memory && !ch.used)
                 freeChunk(ch);
+    };
+    freeUnused(blChunks_);
+    for (std::vector<Chunk> &z : zChunks_)
+        freeUnused(z);
     for (Chunk &ch : wcChunks_)
         if (ch.bo.handle && !ch.used) {
             k_.free(ch.bo);
@@ -1498,11 +1502,11 @@ bool Device::createPartView(const Texture &of, uint32_t format, uint32_t type, u
 bool Device::createMemoryless(uint32_t width, uint32_t height, uint32_t format, Texture &t, uint32_t samples)
 {
     uint64_t bytes, align;
-    if (format == kZetaFormat ? samples > 1 || !zetaShape(width, height, t, bytes, align)
-                              : !shape(width, height, format, t))
+    const bool zeta = zetaFormatIndex(format) < kZetaFormats;
+    if (zeta ? !zetaShape(width, height, format, samples, t, bytes, align) : !shape(width, height, format, t))
         return false;
     fx::MipChain c;
-    if (samples > 1 &&
+    if (samples > 1 && !zeta &&
         (!t.renderable || xrForm(format) != XrForm::None || !fx::msLayout(width, height, samples, t.bpp, c)))
         return false;
     t.memoryless = true;
@@ -2121,8 +2125,9 @@ Texture *Device::backing(const Texture &m, uint32_t tag, bool blockLinear)
     Texture &t = b->texture;
     if (m.zeta) {
         uint64_t bytes, align;
-        if (!zetaShape(m.width, m.height, t, bytes, align) ||
-            !tiledAlloc(zChunks_, kZetaPteKind, bytes, align, t.span)) {
+        const uint32_t z = zetaFormatIndex(m.format);
+        if (!zetaShape(m.width, m.height, m.format, m.samples, t, bytes, align) ||
+            !tiledAlloc(zChunks_[z], kZetaFormatInfo[z].kind, bytes, align, t.span)) {
             delete b;
             return nullptr;
         }
@@ -2178,7 +2183,7 @@ void Device::freeBacking(Texture &t)
         freeTic(t.tic);
     }
     if (t.zeta)
-        tiledFree(zChunks_, t.span);
+        tiledFree(zChunks_[zetaFormatIndex(t.format)], t.span);
     else if (t.blockLinear)
         blFree(t.span);
     else
@@ -2322,7 +2327,11 @@ std::string Device::vaOwner(uint64_t va)
         in(root_, root_.bytes, "the root table") || in(tic_, tic_.bytes, "the texture headers") ||
         in(tsc_, tsc_.bytes, "the sampler headers") || in(zero_, zero_.bytes, "the zero page") ||
         in(tickets_, tickets_.bytes, "the interlock tickets") || chunk(chunks_, "a pool chunk") ||
-        chunk(blChunks_, "a block-linear chunk") || chunk(zChunks_, "a zeta chunk") ||
+        chunk(blChunks_, "a block-linear chunk") ||
+        std::any_of(std::begin(zChunks_), std::end(zChunks_),
+                    [&](const std::vector<Chunk> &z) {
+                        return chunk(z, "a zeta chunk");
+                    }) ||
         chunk(wcChunks_, "a write-combined chunk"))
         return line;
     for (const auto &[key, i] : surfaces_)
@@ -2512,16 +2521,14 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
     const Texture *zeta = pass.depthStencil.texture;
     if (zeta && (!zeta->zeta || !zeta->memoryless))
         return nullptr;
-    // every attachment of one sample count (Metal's rule); the raw path's zeta has one sample
-    uint8_t samples = 0;
+    // every attachment of one sample count (Metal's rule)
+    uint8_t samples = zeta ? zeta->samples : 0;
     for (uint32_t j = 0; j < pass.count && j < 8; j++)
         if (const Texture *t = pass.color[j].texture) {
             if (samples && t->samples != samples)
                 return nullptr;
             samples = t->samples;
         }
-    if (zeta && samples > 1)
-        return nullptr;
     e.samples_ = std::max<uint8_t>(samples, 1);
     bool blockLinear = zeta != nullptr;
     for (uint32_t j = 0; j < pass.count && j < 8; j++)
@@ -3109,9 +3116,9 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     const Texture *zeta = pass_.depthStencil.texture;
     // Metal tests a state's depth and stencil against the pass's hidden attachments where it has none (metal2vulkan
     // depth_stencil.rs depth_without_attachment), which NVK's gating does not give
-    if (pl->depthFormat != (zeta ? kZetaFormat : 0) || (!zeta && ds_.active())) {
+    if (pl->depthFormat != (zeta ? zeta->format : 0) || (!zeta && ds_.active())) {
         *why = "a depth/stencil state or format the pass's depth/stencil attachment does not take";
-        cb_->refusal = {RefDepthStencil, pl->depthFormat, zeta ? kZetaFormat : 0, ds_.active()};
+        cb_->refusal = {RefDepthStencil, pl->depthFormat, zeta ? zeta->format : 0, ds_.active()};
         return false;
     }
     if (pl->samples != samples_ || pl->samplePasses > 1) {
@@ -3134,7 +3141,10 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         }
     }
     if (dsDirty_) {
-        emitDepthStencil(p, depthStencilRegs(ds_, stencilRef_[0], stencilRef_[1], zeta != nullptr), cb_->ds_);
+        emitDepthStencil(p,
+                         depthStencilRegs(ds_, stencilRef_[0], stencilRef_[1], zeta != nullptr,
+                                          zeta && zetaHasStencil(zeta->format)),
+                         cb_->ds_);
         dsDirty_ = false;
     }
     uint32_t *root = cb_->rootPush_;
@@ -3587,12 +3597,6 @@ void copyRows(Push &p, uint64_t src, uint32_t srcPitch, uint64_t dst, uint32_t d
 }
 }  // namespace
 
-// The rows of a multisampled target's sample grid (NIL's px_extent_sa: two down for 4 and 8 samples), as NVK's HEIGHT counts
-static uint32_t sampleRows(const Texture &t)
-{
-    return t.samples >= 4 ? t.height * 2 : t.height;
-}
-
 static void targetWords(Push &p, uint32_t m, const Texture &t)
 {
     ColorTargetDesc d;
@@ -3826,7 +3830,8 @@ void RenderEncoder::end()
     const DepthStencilAttachment &zs = pass_.depthStencil;
     zetaTargetWords(p, zs.texture);
     // NVK clears depth and stencil with the first color the pass clears over its render area, else on their own
-    uint32_t zsBits = zs.texture ? zetaClearBits(zs.clearDepth, zs.clearStencil) : 0;
+    uint32_t zsBits =
+        zs.texture ? zetaClearBits(zs.clearDepth, zs.clearStencil && zetaHasStencil(zs.texture->format)) : 0;
     zetaClearValues(p, zsBits & 1, zs.depth, zsBits & 2, zs.stencil);
     if (zsBits & 1)
         d.countZbc(*zs.texture, areaW_ >= zs.texture->width && areaH_ >= zs.texture->height, zbcBootDepth(zs.depth));

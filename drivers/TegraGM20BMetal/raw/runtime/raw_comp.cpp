@@ -27,7 +27,7 @@ bool backingLayout(const Texture &m, Texture &t, fx::MipChain &c, uint64_t &byte
     t = Texture();
     if (m.zeta) {
         uint64_t align = 0;
-        return zetaShape(m.width, m.height, t, bytes, align);
+        return zetaShape(m.width, m.height, m.format, m.samples, t, bytes, align);
     }
     const FormatInfo *f = formatInfo(m.format);
     if (!f || !fx::mipChainLayout(m.width, m.height, 1, m.bpp, c))
@@ -95,7 +95,7 @@ uint32_t Device::compKind(const Texture &m, uint32_t tag, bool blockLinear) cons
     if (!(k_.info().flags & TegraGM20BInfoCompression) || !blockLinear || m.samples > 1)
         return 0;
     if (m.zeta)
-        return kCompKindZeta;
+        return m.format == kZetaFormat ? kCompKindZeta : 0;
     // shadows (tags below kMemorylessTag) are filled and drained by the copy engine: uncompressed
     return tag >= kMemorylessTag ? compressedKind(m.bpp, false) : 0;
 }
