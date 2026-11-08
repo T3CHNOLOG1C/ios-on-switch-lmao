@@ -31,6 +31,7 @@
 #include <string.h>
 #include "AKSCmac.h"
 #include "../TegraSE/TegraSE.h"
+#include "../../kits/SwitchDMA/SwitchDcache.h"
 
 // Debug kernels only: nothing reads what the probe finds yet.
 #if DEVELOPMENT || DEBUG
@@ -125,18 +126,6 @@ volatile uint32_t *mapRegisters(uint64_t physical, IOMemoryMap **map)
     return *map ? reinterpret_cast<volatile uint32_t *>((*map)->getVirtualAddress()) : nullptr;
 }
 
-void cleanInvalidate(const void *va, size_t size)
-{
-    // NOLINTNEXTLINE(misc-const-correctness): written by the asm below
-    uint64_t ctr = 0;
-    __asm__ volatile("mrs %0, ctr_el0" : "=r"(ctr));
-    const uintptr_t line = static_cast<uintptr_t>(4) << ((ctr >> 16) & 15);
-    for (uintptr_t a = reinterpret_cast<uintptr_t>(va) & ~(line - 1), end = reinterpret_cast<uintptr_t>(va) + size;
-         a < end; a += line)
-        __asm__ volatile("dc civac, %0" ::"r"(a) : "memory");
-    __asm__ volatile("dsb sy" ::: "memory");
-}
-
 bool allocateDma(Dma *dma)
 {
     const IOOptionBits options = static_cast<IOOptionBits>(kIODirectionInOut) |
@@ -157,7 +146,7 @@ bool allocateDma(Dma *dma)
     }
     dma->pa = static_cast<uint32_t>(pa);
     memset(dma->va, 0, kDmaUsed);
-    cleanInvalidate(dma->va, kDmaUsed);
+    switch_dcache_clean_invalidate(dma->va, kDmaUsed);
     return true;
 }
 
@@ -166,7 +155,7 @@ void releaseDma(Dma *dma)
     if (!dma->memory)
         return;
     memset(dma->va, 0, kDmaUsed);
-    cleanInvalidate(dma->va, kDmaUsed);
+    switch_dcache_clean_invalidate(dma->va, kDmaUsed);
     dma->memory->complete();
     OSSafeReleaseNULL(dma->memory);
 }
@@ -198,7 +187,7 @@ bool ecbBlock(void *context, const uint8_t in[16], uint8_t out[16])
     memcpy(list, lists, sizeof lists);
     memcpy(dma.va + kDmaIn, in, 16);
     memset(dma.va + kDmaOut, 0, 16);
-    cleanInvalidate(dma.va, kDmaUsed);
+    switch_dcache_clean_invalidate(dma.va, kDmaUsed);
 
     se.w(kConfig, kConfigEcbEncrypt);
     se.w(kCryptoConfig, cryptoEcbEncrypt(b.slot));
@@ -237,14 +226,14 @@ bool ecbBlock(void *context, const uint8_t in[16], uint8_t out[16])
     se.w(kErrStatus, error);
     const bool ok = (error == 0u) && ((interrupt & kIntError) == 0u) && ((interrupt & kIntOpDone) != 0u);
     if (ok) {
-        cleanInvalidate(dma.va + kDmaOut, 16);
+        switch_dcache_clean_invalidate(dma.va + kDmaOut, 16);
         memcpy(out, dma.va + kDmaOut, 16);
     } else {
         b.error = error ? error : interrupt;
     }
     memset(dma.va + kDmaIn, 0, 16);
     memset(dma.va + kDmaOut, 0, 16);
-    cleanInvalidate(dma.va, kDmaUsed);
+    switch_dcache_clean_invalidate(dma.va, kDmaUsed);
     return ok;
 }
 

@@ -109,13 +109,13 @@ static int columnScanPrepare(uint8_t yLog2)
     if (!s.referenceFilled) {
         uint8_t *frame = static_cast<uint8_t *>(s.reference->getBytesNoCopy());
         native_column_scan::fillReference(frame);
-        cleanInvalidate(frame, native_column_scan::kReferenceBytes);
+        switch_dcache_clean_invalidate(frame, native_column_scan::kReferenceBytes);
         s.referenceFilled = true;
     }
     if (!s.surfaceFilled || s.filledYLog2 != yLog2) {
         uint8_t *surface = static_cast<uint8_t *>(s.surface->getBytesNoCopy());
         native_column_scan::fillSurface(surface, yLog2);
-        cleanInvalidate(surface, native_column_scan::kSurfaceBytes);
+        switch_dcache_clean_invalidate(surface, native_column_scan::kSurfaceBytes);
         s.surfaceFilled = true;
         s.filledYLog2 = yLog2;
     }

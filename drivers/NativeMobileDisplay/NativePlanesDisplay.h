@@ -237,8 +237,10 @@ int planeSlotFor(IOMemoryDescriptor *memory, uint64_t low, uint64_t high, bool c
     }
     if (clean) {
         if (IOMemoryMap *view = memory->map(kIOMapAnywhere | kIOMapReadOnly)) {
-            if (view->getVirtualAddress() && view->getLength() >= end)
-                cleanInvalidate(reinterpret_cast<const void *>(view->getVirtualAddress() + low), end - low);
+            if (view->getVirtualAddress() && view->getLength() >= end) {
+                switch_dcache_clean_invalidate(reinterpret_cast<const void *>(view->getVirtualAddress() + low),
+                                               end - low);
+            }
             view->release();
         }
     }
@@ -677,7 +679,7 @@ void planeProbeStart()
         static_cast<uint64_t>(start - tapeAddress) + kTapeWindow <= kTapeBytes && stride == kTapeStride) {
         // The console wrote the tape through its write-combined view; the cacheable alias, invalidated, reads DRAM.
         from = static_cast<const unsigned char *>(tapeBuffer->getBytesNoCopy()) + (start - tapeAddress);
-        cleanInvalidate(from, kTapeWindow);
+        switch_dcache_clean_invalidate(from, kTapeWindow);
     } else if (start == surfaceAddress(0) && stride == 2880) {
         from = reinterpret_cast<const unsigned char *>(bootMapping->getVirtualAddress());
     }
@@ -756,7 +758,7 @@ bool planeDomainAttach()
     uintptr_t low = 0;
     uintptr_t high = 0;
     if (probeDomain.takeDirty(&low, &high))
-        cleanInvalidate(reinterpret_cast<const void *>(low), high - low);
+        switch_dcache_clean_invalidate(reinterpret_cast<const void *>(low), high - low);
     if (tegra_smmu_attach(TEGRA_SMMU_ASID_DISPLAY, probeDomain.ptb(), TEGRA_SMMU_DC_ASID,
                           TEGRA_SMMU_TRANSLATION_ENABLE_0,
                           kDisplay0bTranslation | (directAttached ? kDisplay0aTranslation : 0), planeProbeLine,

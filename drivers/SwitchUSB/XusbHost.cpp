@@ -291,7 +291,7 @@ bool Controller::loadFirmware(const uint8_t *image, size_t size, char *why, size
     }
     memcpy(gFirmware.va, image, length);
     gFirmware.va[kFwHsicPorts] = 0;  // header->num_hsic_port: no HSIC on this board
-    xudc::cacheFlush(gFirmware.va, length);
+    switch_dcache_clean_invalidate(gFirmware.va, length);
     const uint32_t codeTag = le32(image + kFwCodeTag);
     const uint32_t codeSize = le32(image + kFwCodeSize);
     const uint32_t tagBlocks = (codeTag + IMEM_BLOCK - 1) / IMEM_BLOCK;
