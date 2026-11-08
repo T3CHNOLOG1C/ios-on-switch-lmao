@@ -42,10 +42,13 @@ class KindTest(unittest.TestCase):
         self.assertTrue(self.kinded())
         self.assertLessEqual(set(self.kinded()), set(KINDS))
 
+    def released(self) -> list[dict]:
+        return [e for e in self.manifest['files'] if not e.get('debug')]
+
     def test_each_kind_unions_only_its_own_bundles(self):
         for kind in KINDS:
-            mine = {e['path'].rpartition('/')[0] for e in self.manifest['files'] if e.get('kind') == kind}
-            others = {e['path'].rpartition('/')[0] for e in self.manifest['files'] if e.get('kind', kind) != kind}
+            mine = {e['path'].rpartition('/')[0] for e in self.released() if e.get('kind') == kind}
+            others = {e['path'].rpartition('/')[0] for e in self.released() if e.get('kind', kind) != kind}
             dirs = {d for d, _ in self.plan(kind)['dirs']}
             self.assertLessEqual(mine, dirs, kind)
             self.assertFalse(others & dirs, kind)
@@ -58,6 +61,16 @@ class KindTest(unittest.TestCase):
             files = self.plan(kind)['files']
             kinded = {e['path'] for e in self.manifest['files'] if e.get('kind') == kind}
             self.assertEqual({f['path'] for f in files} - kinded, unkinded, kind)
+
+    def test_a_debug_package_carries_its_kinds_test_apps(self):
+        apps = {
+            kind: sorted(f['path'] for f in self.overlay.plan(self.manifest, False, kind)['files'] if f['bundle'])
+            for kind in KINDS
+        }
+        self.assertEqual(apps['21H461'], ['/Applications/SwitchHWTest.app'])
+        self.assertEqual(apps['24B119'], ['/Applications/SwitchHWTest.app', '/Applications/SwitchHWTest27e.app'])
+        for kind in KINDS:
+            self.assertFalse([f for f in self.plan(kind)['files'] if f['bundle']], kind)
 
     def test_only_the_kinds_own_sources_are_required(self):
         for kind in self.kinded():

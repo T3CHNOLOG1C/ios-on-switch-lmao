@@ -2578,19 +2578,33 @@ private:
 
     // Under the gate, a block-linear frame complete in drawSurface(): the first one switches window A to the rotated layout (and,
     // double-buffered, to surface 1), later ones flip when double-buffered; single-buffered they are already on screen.
+    // NOLINTNEXTLINE(misc-no-recursion): kickSwapQueue's kicking flag stops re-entry; a nested kick only loops
     void presentBlock()
     {
         if (gPanicRestore.panicking)
             return;
         if (!rotated && &switch_boot_io_report)
             switch_boot_io_report();  // once; later calls return at once
-        if (!rotated && &switch_console_hold && switch_console_hold)
-            return;  // the console keeps the screen (migration)
+        if (!rotated && &switch_console_hold && switch_console_hold) {
+            holdFrame();
+            return;
+        }
         if (!rotated) {
             startRotation();
         } else if (doubleBuffer) {
             flip();
         }
+    }
+
+    // Under the gate, a frame complete in drawSurface() while the console keeps the screen (switch_console_hold, the data
+    // migration): drawn, never shown, and no flip carries it. Retiring at the latch, its swap would wait for a latch that never
+    // comes (IOMFB's swap wait cancels the queue after 5 s and Core Animation never gets a page back), so it retires as shown.
+    // NOLINTNEXTLINE(misc-no-recursion): kickSwapQueue's kicking flag stops re-entry; a nested kick only loops
+    void holdFrame()
+    {
+        if (doubleBuffer)
+            ring.release();
+        retireUnshown(seqOf(flipRequest));
     }
 
     // A frame end (atFrameEnd) or vblank while a flip is out, under the gate. Which surface window A scans (its active START_ADDR)

@@ -5,7 +5,7 @@ import os
 /// Runs tests one at a time off the main thread (benchmarks never share the machine with each other) and sends each
 /// result to the list, the log and report.json.
 @MainActor
-final class Suite: ObservableObject {
+public final class Suite: ObservableObject {
     struct Row: Identifiable {
         let test: any HWTest
         var record: TestRecord?
@@ -24,13 +24,17 @@ final class Suite: ObservableObject {
     let stage = Stage()
     let documents: URL
     private let tests: [any HWTest]
+    private let ios: Int
     private let started = Date()
     private let logger = Logger(subsystem: Suite.logSubsystem, category: "results")
     private var records: [TestRecord] = []
     private var autoRan = false
 
-    init(tests: [any HWTest]) {
+    /// `ios`: the iOS major version the app is built for, which its summary line names so a log tells which
+    /// version's tests ran.
+    public init(tests: [any HWTest], ios: Int) {
         self.tests = tests
+        self.ios = ios
         rows = tests.map { Row(test: $0) }
         documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
     }
@@ -56,8 +60,8 @@ final class Suite: ObservableObject {
         guard !running else { return }
         running = true
         let context = TestContext(
-            media: Bundle.main.resourceURL!.appendingPathComponent("media"), documents: documents, prompter: prompter,
-            stage: stage)
+            media: Bundle.main.resourceURL!.appendingPathComponent("media"), documents: documents, ios: ios,
+            prompter: prompter, stage: stage)
         Task.detached(priority: .userInitiated) { [weak self] in
             let start = CFAbsoluteTimeGetCurrent()
             for test in batch {
@@ -120,7 +124,7 @@ final class Suite: ObservableObject {
     private func done(summarize: Bool, milliseconds: Double) {
         running = false
         let latest = rows.compactMap(\.record)
-        let line = LogLine.summary(latest, milliseconds: milliseconds)
+        let line = LogLine.summary(latest, ios: ios, milliseconds: milliseconds)
         if summarize { logger.notice("\(line, privacy: .public)") }
         summary = line
     }

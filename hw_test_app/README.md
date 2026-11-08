@@ -2,16 +2,30 @@
 
 A SwiftUI app that tests the Switch's hardware through public iOS APIs: Metal, the hardware video decoders and
 encoders, images, audio, display, sensors, input, networking, storage, CPU and crypto. It runs the whole suite once
-at launch. Debug images only: the debug `//:boot` puts it in `/Applications` through the overlay, and
-`bazel run //deploy:sd` leaves datamigrator's migration sentinel when it changes, so LaunchServices registers it on the
-next boot the way it registers an OS update's apps. `bazel build //hw_test_app:SwitchHWTest` builds it with
-rules_apple, signed ad hoc. The test clips and images are pinned in `bazel/pinned/hw_test_app/media`; every frame
-carries a barcode with its frame number and a CRC, so the app checks lossy decoder output exactly.
+at launch.
+
+One library, `HWTestKit` (`kit/` and `tests/`), holds the tests, the runner, the log lines and the report. Each iOS
+version has an app that wraps it and adds the tests only that version has: `SwitchHWTest17` (`app17/`, built for iOS
+17.4) and `SwitchHWTest27` (`app27/`, built for iOS 27, adding Liquid Glass, QuartzCore 27's glass states, Metal 4 and
+VideoToolbox's frame processors). The apps use the compiler's default CPU for their deployment target. From iOS 26 on
+that is an A12, so the 27 app carries LSE and FP16 code the A57 lacks, as any app built for iOS 27 does, and
+`a64x.self` checks that the a64x loader translated it.
+
+The apps only go on debug images. A kind's debug `//:boot` puts its app in `/Applications/SwitchHWTest.app` through
+the overlay, so the manifest and `//tools/devicerun` name a single app. A debug iOS 27 image also gets
+`SwitchHWTest27e.app`, the same app built for arm64e, which a64x translates whole. When the apps change,
+`bazel run //deploy:sd` leaves datamigrator's migration sentinel, and LaunchServices registers them on the next boot
+the way it registers an OS update's apps. `bazel build //hw_test_app:SwitchHWTest17` (or `:SwitchHWTest27`,
+`:SwitchHWTest27e`) builds an app with rules_apple, signed ad hoc.
+
+The test clips and images are pinned in `bazel/pinned/hw_test_app/media`; every frame carries a barcode with its frame
+number and a CRC, so the app checks lossy decoder output exactly.
 `bazel run //hw_test_app:media_tool -- <dir>` remakes them (VideoToolbox on the Mac for H.264 and HEVC, libvpx for
 VP9, libjpeg-turbo for the JPEGs) and prints the SHA256SUMS lines to pin; the Mac's 4K encodes differ from run to run,
 which is why the files are pinned rather than built. Each test logs one `HWTEST <id> <PASS|FAIL|SKIP> <k=v ...>` line
 to os_log under `com.brunostjohn.switch.hwtest` (`//tools/devicerun` checks them) and lands in `report.json` in the
-app's Documents folder. Tapping a test in the list reruns it.
+app's Documents folder. The summary line at the end of a run names the app's iOS version (`ios=`); devicerun reports
+a test that only the other version's app has as N/A. Tapping a test in the list reruns it.
 
 ## GPU, compositor and pacing scenes
 

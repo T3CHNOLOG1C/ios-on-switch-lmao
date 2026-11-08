@@ -53,7 +53,7 @@ alias(
     }),
 )
 
-# fetchform and the hardware test app are a debug build's, so never in a package composed from the release (release
+# fetchform and the hardware test apps are a debug build's, so never in a package composed from the release (release
 # builds), which also keeps rules_apple, Swift and the Metal toolchain out of the Xcode-free image path.
 selects.config_setting_group(
     name = "local_debug",
@@ -62,6 +62,19 @@ selects.config_setting_group(
         "//install:from_local",
     ],
 )
+
+# Each IPSW kind's debug image carries the hardware test app built for its iOS version (hw_test_app/BUILD.bazel).
+[
+    selects.config_setting_group(
+        name = "local_debug_" + kind,
+        match_all = [
+            "//bazel:debug",
+            "//install:from_local",
+            "//ipsw:" + kind,
+        ],
+    )
+    for kind in ("21H461", "24B119")
+]
 
 filegroup(
     name = "no_gpu",
@@ -171,9 +184,13 @@ boot_package(
         "//install:from_release": {"@switch_release//:overlay/" + source: source for source in OVERLAY_BINARIES.values()},
         "//conditions:default": OVERLAY_BINARIES,
     }) | select({
-        ":local_debug": {
-            "//drivers/TegraGM20BMetal:fetchform": "build/switch-gpu/fetchform",
-            "//hw_test_app:SwitchHWTest": "build/switch-hwtest/SwitchHWTest.ipa",
+        ":local_debug": {"//drivers/TegraGM20BMetal:fetchform": "build/switch-gpu/fetchform"},
+        "//conditions:default": {},
+    }) | select({
+        ":local_debug_21H461": {"//hw_test_app:SwitchHWTest17": "build/switch-hwtest/SwitchHWTest.ipa"},
+        ":local_debug_24B119": {
+            "//hw_test_app:SwitchHWTest27": "build/switch-hwtest/SwitchHWTest.ipa",
+            "//hw_test_app:SwitchHWTest27e": "build/switch-hwtest/SwitchHWTest27e.ipa",
         },
         "//conditions:default": {},
     }),
