@@ -135,6 +135,29 @@ TEST(DisplayPlanesSource, DriverFollowsTheRules)
         HasSubstr(": OSMetaClass(\"AppleCLCD\", NativeLegacyDisplay::superClass, sizeof(NativeLegacyDisplay))"));
 }
 
+// Retiring at the latch, a frame no flip carries retires with whatever is still out, or at once. The first-boot data
+// migration keeps the console on screen: presentBlock then flips nothing, and the GPU copy's completion (presentGpuCopy,
+// which leaves retirement to the latch) would otherwise hold the swap until IOMFB cancels the queue.
+TEST(DisplayPlanesSource, FramesTheConsoleHoldsBackRetire)
+{
+    const std::string source = SourceText("../NativeLegacyDisplay.cpp");
+    const std::string planes = SourceText("../NativePlanesDisplay.h");
+    const std::string present = Method(source, "    void presentBlock()\n");
+    ExpectBefore(present, "if (!rotated && &switch_console_hold && switch_console_hold) {\n            holdFrame();",
+                 "startRotation();");
+    const std::string hold = Method(source, "    void holdFrame()\n");
+    EXPECT_THAT(hold, HasSubstr("ring.release();"));
+    EXPECT_THAT(hold, HasSubstr("retireUnshown(seqOf(flipRequest));"));
+    for (const char *caller : {"    void presentGpuCopy()\n", "    void presentCopied()\n"})
+        EXPECT_THAT(Method(source, caller), HasSubstr("presentBlock();")) << caller;
+    const std::string unshown = Function(planes, "void retireUnshown(uint64_t seq)\n");
+    ExpectBefore(unshown, "if (!latchRetire)", "retireThrough(seq, mach_absolute_time());");
+    for (const char *outstanding : {"planeSetOf(planeLatch.armed).seq = seq;", "planeHeld.seq = seq;",
+                                    "entrySeq[ring.held] = seq;", "entrySeq[ring.pending] = seq;"})
+        ExpectBefore(unshown, outstanding, "retireThrough(seq, mach_absolute_time());");
+    EXPECT_THAT(Function(planes, "void kickPlaneOnly("), HasSubstr("retireUnshown(seq);"));
+}
+
 TEST(DisplayPlanesSource, BackboarddDetachesOnlyWhenTheDisplaySaysSo)
 {
     const std::string xnu = XnuKernExec();
