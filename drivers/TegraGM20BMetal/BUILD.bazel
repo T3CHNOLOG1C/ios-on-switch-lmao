@@ -29,23 +29,27 @@ filegroup(
     ]),
 )
 
+# What the runtime's capture of a state compiles beside it: pack/nvdec (the generator's decoder) and Mesa's MME simulator
+filegroup(
+    name = "raw_capture_headers",
+    srcs = glob([
+        "raw/pack/*.h",
+        "raw/pack/mesa/**/*.h",
+    ]) + ["raw/fx/test/twod_sim.h"],
+)
+
 # Not a hand run's leftovers: a .pyc of the modules (the host Python's) in a checkout would change the raw pack's action key
 # there and nowhere else, so that checkout's pack never hits the disk cache another checkout filled, and the other way round.
 filegroup(
     name = "raw_pack_generator",
     srcs = glob(
-        [
-            "raw/pack/**",
-            # the mock's capture mode (pack/cap.cpp) and the methods the raw path owns (pack/mkpack.py)
-            "raw/runtime/raw_capture.*",
-            "raw/runtime/raw_pack.*",
-        ],
+        ["raw/pack/**"],
         exclude = [
             "**/__pycache__/**",
             "**/*.pyc",
             "**/.DS_Store",
         ],
-    ) + ["raw/runtime/raw_owned.h"],
+    ) + ["raw/runtime/raw_owned.h"],  # the methods the raw path owns (pack/mkpack.py reads them)
 )
 
 filegroup(
@@ -139,14 +143,13 @@ py_binary(
     main = "raw/test/ordercheck.py",
 )
 
-# The raw path's capture and shader-data checks against the pack (they read it with the pack generator's modules).
+# The raw path's shader-data and target checks against the pack (they read it with the pack generator's modules).
 [py_binary(
     name = check,
     srcs = ["raw/test/%s.py" % check],
     main = "raw/test/%s.py" % check,
     deps = [":raw_pack"],
 ) for check in [
-    "capturecheck",
     "datacheck",
     "targetcheck",
 ]]

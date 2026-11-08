@@ -387,6 +387,8 @@ int Kernel::order(uint32_t channel, uint32_t flags, uint32_t seqno, uint32_t &wa
     const TegraGM20BAbiOrder in = {channel, flags, seqno, 0};
     TegraGM20BAbiOrderReply r = {};
     const int kr = call(TegraGM20BMethodOrder, &in, sizeof in, &r, sizeof r);
+    if (kr == kIOReturnNotResponding)
+        markLost(channel);
     waits = kr == KERN_SUCCESS ? r.waits : 0;
     return kr;
 }
@@ -431,10 +433,10 @@ void Kernel::markLost(uint32_t channel)
 {
     const TegraGM20BAbiChannel in = {channel, 0};
     TegraGM20BAbiStatus st = {};
-    if (call(TegraGM20BMethodGetStatus, &in, sizeof in, &st, sizeof st) == KERN_SUCCESS && st.error) {
-        lostFaultVa_.store(st.fault_va, std::memory_order_relaxed);
-        lostError_.store(st.error, std::memory_order_relaxed);
-    }
+    if (call(TegraGM20BMethodGetStatus, &in, sizeof in, &st, sizeof st) != KERN_SUCCESS)
+        st = {};  // the channel already destroyed (another thread's reopen): the cause unknown, not an earlier kill's
+    lostFaultVa_.store(st.fault_va, std::memory_order_relaxed);
+    lostError_.store(st.error, std::memory_order_relaxed);
     lostChannel_.store(channel, std::memory_order_relaxed);
 }
 

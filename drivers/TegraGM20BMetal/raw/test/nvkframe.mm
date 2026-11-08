@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <mach/mach.h>
 #include "../test/frame.h"
+#include "state_desc.h"
 #include "NativeBridgeMetalFrontend.h"
 #include "bridge/NativeMetalObjects.h"
 #ifdef RAW_FACADE  // the same frames through the raw path's Metal facade (runtime/RawMetal.mm) instead of the frontend + m2v + NVK
@@ -29,6 +30,16 @@ static void caCommandBuffer(id<MTLCommandBuffer> cb)
         ((void (*)(id, SEL, uint64_t))objc_msgSend)(cb, protection, 0);
 }
 
+// FRAME_STATES_OUT=<file>: the frame's states' corpus lines appended to it (the corpus of a pack of just them)
+static void statesOut(const frame::State &s)
+{
+    if (const char *out = getenv("FRAME_STATES_OUT"))
+        if (FILE *f = fopen(out, "a")) {
+            fprintf(f, "%s\n", s.line.c_str());
+            fclose(f);
+        }
+}
+
 static void missing(const char *cls, const char *sel)
 {
     fprintf(stderr, "MISSING -[%s %s]\n", cls, sel);
@@ -46,92 +57,7 @@ static uint64_t threadNs()
            1000;
 }
 
-static MTLFunctionConstantValues *constants(const std::vector<std::string> &items)
-{
-    MTLFunctionConstantValues *v = [MTLFunctionConstantValues new];
-    for (const std::string &item : items) {
-        size_t a = item.rfind(':'), b = a == std::string::npos ? a : item.rfind(':', a - 1);
-        if (a == std::string::npos || b == std::string::npos)
-            continue;
-        std::string name = item.substr(0, b), type = item.substr(b + 1, a - b - 1), hex = item.substr(a + 1);
-        uint8_t bytes[64] = {};
-        for (size_t i = 0; i + 1 < hex.size() && i / 2 < sizeof bytes; i += 2)
-            bytes[i / 2] = (uint8_t)strtoul(hex.substr(i, 2).c_str(), nullptr, 16);
-        if (name[0] == '#')
-            [v setConstantValue:bytes
-                           type:(MTLDataType)atoi(type.c_str())
-                        atIndex:strtoul(name.c_str() + 1, nullptr, 10)];
-        else
-            [v setConstantValue:bytes type:(MTLDataType)atoi(type.c_str()) withName:@(name.c_str())];
-    }
-    return v;
-}
-
-static id<MTLFunction> function(id<MTLLibrary> qc, const std::vector<std::string> &stage)
-{
-    if (stage.empty())
-        return nil;
-    if (stage.size() == 1)
-        return [qc newFunctionWithName:@(stage[0].c_str())];
-    NSError *e = nil;
-    return [qc newFunctionWithName:@(stage[0].c_str())
-                    constantValues:constants(std::vector<std::string>(stage.begin() + 1, stage.end()))
-                             error:&e];
-}
-
-static MTLRenderPipelineDescriptor *descriptor(id<MTLLibrary> qc, const std::string &line)
-{
-    size_t bar1 = line.find(" | v "), bar2 = line.find(" | f "), bar3 = line.find(" | ", bar2 + 5);
-    MTLRenderPipelineDescriptor *d = [MTLRenderPipelineDescriptor new];
-    MTLVertexDescriptor *vd = nil;
-    for (const std::string &h : frame::split(line.substr(0, bar1))) {
-        if (h.rfind("label=", 0) == 0) {
-            if (h != "label=-")
-                d.label = @(h.substr(6).c_str());
-        } else if (h.rfind("samples=", 0) == 0)
-            d.rasterSampleCount = strtoul(h.c_str() + 8, nullptr, 10);
-        else if (h.rfind("topo=", 0) == 0)
-            d.inputPrimitiveTopology = (MTLPrimitiveTopologyClass)strtoul(h.c_str() + 5, nullptr, 10);
-        else if (h.rfind("ds=", 0) == 0) {
-            unsigned depth = 0, stencil = 0;
-            sscanf(h.c_str() + 3, "%u/%u", &depth, &stencil);
-            d.depthAttachmentPixelFormat = MTLPixelFormat(depth);
-            d.stencilAttachmentPixelFormat = MTLPixelFormat(stencil);
-        } else if (h[0] == 'c' && isdigit(h[1])) {
-            unsigned i, x[9] = {};
-            if (sscanf(h.c_str(), "c%u=%u:%u:%u:%u:%u:%u:%u:%u:%u", &i, x, x + 1, x + 2, x + 3, x + 4, x + 5, x + 6,
-                       x + 7, x + 8) != 10)
-                continue;
-            MTLRenderPipelineColorAttachmentDescriptor *c = d.colorAttachments[i];
-            c.pixelFormat = (MTLPixelFormat)x[0];
-            c.writeMask = x[1];
-            c.blendingEnabled = x[2];
-            c.sourceRGBBlendFactor = (MTLBlendFactor)x[3];
-            c.destinationRGBBlendFactor = (MTLBlendFactor)x[4];
-            c.rgbBlendOperation = (MTLBlendOperation)x[5];
-            c.sourceAlphaBlendFactor = (MTLBlendFactor)x[6];
-            c.destinationAlphaBlendFactor = (MTLBlendFactor)x[7];
-            c.alphaBlendOperation = (MTLBlendOperation)x[8];
-        } else if (h[0] == 'a' && isdigit(h[1])) {
-            unsigned i, x[6] = {};
-            if (sscanf(h.c_str(), "a%u=%u:%u:%u:%u:%u:%u", &i, x, x + 1, x + 2, x + 3, x + 4, x + 5) != 7)
-                continue;
-            if (!vd)
-                vd = [MTLVertexDescriptor vertexDescriptor];
-            vd.attributes[i].format = (MTLVertexFormat)x[0];
-            vd.attributes[i].offset = x[1];
-            vd.attributes[i].bufferIndex = x[2];
-            vd.layouts[x[2]].stride = x[3];
-            vd.layouts[x[2]].stepFunction = (MTLVertexStepFunction)x[4];
-            vd.layouts[x[2]].stepRate = x[5];
-        }
-    }
-    d.vertexDescriptor = vd;
-    d.vertexFunction = function(qc, frame::split(line.substr(bar1 + 5, bar2 - bar1 - 5)));
-    d.fragmentFunction =
-        function(qc, frame::split(line.substr(bar2 + 5, (bar3 == std::string::npos ? line.size() : bar3) - bar2 - 5)));
-    return d;
-}
+using state_desc::descriptor;
 
 int main(int argc, char **argv)
 {
@@ -168,6 +94,10 @@ int main(int argc, char **argv)
             fprintf(stderr, "NO DEVICE: %s\n", why.UTF8String);
             return 1;
         }
+        // FRAME_COMPLETE=<dir>|memory: the runtime makes the records of the states the pack lacks (RawComplete.h), kept in <dir>;
+        // FRAME_COMPLETE_SETTLE=<frame>: two seconds before that frame, so the frames after draw the states it made
+        if (const char *complete = getenv("FRAME_COMPLETE"))
+            raw_metal_complete_states(strcmp(complete, "memory") ? complete : nullptr);
 #else
         setenv("NMB_DEVICE_BASE_NSOBJECT", "1", 1);
         id<MTLDevice> dev = native_bridge_metal_open(argv[1], argv[2], 0, missing);
@@ -177,7 +107,17 @@ int main(int argc, char **argv)
         }
 #endif
         NSError *error = nil;
-        id<MTLLibrary> qc = [dev newLibraryWithURL:[NSURL fileURLWithPath:@(argv[3])] error:&error];
+        // FRAME_LIBRARY_BYTES=1: the library made from its bytes, as an app's own (no framework's: no state looked up in the
+        // pack, every one the runtime's to make)
+        id<MTLLibrary> qc = nil;
+        if (getenv("FRAME_LIBRARY_BYTES")) {
+            NSData *bytes = [NSData dataWithContentsOfFile:@(argv[3])];
+            qc = [dev newLibraryWithData:dispatch_data_create(bytes.bytes, bytes.length, nil,
+                                                              DISPATCH_DATA_DESTRUCTOR_DEFAULT)
+                                   error:&error];
+        } else {
+            qc = [dev newLibraryWithURL:[NSURL fileURLWithPath:@(argv[3])] error:&error];
+        }
         std::vector<frame::State> all = frame::states(argv[4]);
         std::vector<id<MTLRenderPipelineState>> uber, blur, extra;
         for (auto &s : all) {
@@ -186,6 +126,7 @@ int main(int argc, char **argv)
                                                                                        error:&error]) {
                     extra.push_back(p);
                     printf("STATE extra %s\n", s.key.c_str());
+                    statesOut(s);
                 }
                 continue;
             }
@@ -206,6 +147,7 @@ int main(int argc, char **argv)
             }
             (s.uber ? uber : blur).push_back(p);
             printf("STATE %s %s\n", s.uber ? "uber" : "blur", s.key.c_str());
+            statesOut(s);
         }
         id<MTLCommandQueue> queue = [dev newCommandQueue];
         id<MTLTexture> tex[frame::TEX_COUNT];
@@ -469,7 +411,10 @@ int main(int argc, char **argv)
         // FRAME_YCBCR_WRITE=k: every k-th frame from the k-th, the 4:2:0 surface written under a write lock (its seed moves:
         // a decoder's next frame), so the raw path converts its image again then and only then (RMTexture _imageSeed)
         const unsigned ycbcrWrite = getenv("FRAME_YCBCR_WRITE") ? unsigned(atoi(getenv("FRAME_YCBCR_WRITE"))) : 0;
+        const int settle = getenv("FRAME_COMPLETE_SETTLE") ? atoi(getenv("FRAME_COMPLETE_SETTLE")) : -1;
         for (unsigned f = 0; f < frames; f++) {
+            if (int(f) == settle)
+                usleep(2000000);
             if (ycbcrWrite && f && f % ycbcrWrite == 0 && surfaces[frame::IMAGE2] && getenv("FRAME_YCBCR")) {
                 IOSurfaceLock(surfaces[frame::IMAGE2], 0, nullptr);
                 uint8_t *base = (uint8_t *)IOSurfaceGetBaseAddress(surfaces[frame::IMAGE2]);

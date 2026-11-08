@@ -16,6 +16,7 @@
 //!   `queue.rs` [`Device::new_command_queue`], and so on).
 
 mod adopt;
+pub(super) mod alongside;
 pub(super) mod argument_buffers;
 mod compiles;
 pub(super) mod create;

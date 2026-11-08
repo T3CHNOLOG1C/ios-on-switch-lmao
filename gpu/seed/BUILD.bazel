@@ -101,6 +101,7 @@ metal_seed(
     device_libraries = "@gpu_device_data//:libraries",
     embedded = [METAL + ":TwoPlaneStandIn.h"],
     records = "@gpu_device_data//:records",
+    replies = "@gpu_device_data//:replies",
     tags = ["manual"],
     tools = ":tools",
 )
