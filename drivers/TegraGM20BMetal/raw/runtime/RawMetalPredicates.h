@@ -52,6 +52,7 @@ enum RMPred : uint8_t {
     PredBlitWholeTexCopy,
     PredCompute,
     PredMipmaps,
+    PredMipmapsFormat,  // a mipmapped texture's generateMipmaps in a format the 2D engine does not filter: a = format
     PredEvent,
     // found while encoding (the raw encode ran up to here and was thrown away)
     PredEncPlanarCopy,
@@ -64,6 +65,7 @@ enum RMPred : uint8_t {
     PredEncUboOffset,     // a = stage << 8 | slot, b = va & 255
     PredEncNoTic,
     PredEncDepthStencil,  // a = the state's depth format, b = the pass's | a state that tests without the attachment << 32
+    PredEncNoChannel,     // the kernel refused the channel or its context (logged with its answer)
     PredCount
 };
 
@@ -106,6 +108,7 @@ static constexpr const char *kPredNames[] = {"-",
                                              "blit.whole",
                                              "compute",
                                              "mipmaps",
+                                             "mipmaps.fmt",
                                              "event",
                                              "enc.planarcopy",
                                              "enc.planarclamp",
@@ -116,7 +119,8 @@ static constexpr const char *kPredNames[] = {"-",
                                              "enc.colorfmt",
                                              "enc.ubo",
                                              "enc.notic",
-                                             "enc.ds"};
+                                             "enc.ds",
+                                             "enc.nochannel"};
 static_assert(sizeof kPredNames / sizeof *kPredNames == PredCount, "a name for each predicate");
 
 // What makes a command buffer go to m2v (counted, one log line each kind)

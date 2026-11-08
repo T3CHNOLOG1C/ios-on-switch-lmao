@@ -15,6 +15,9 @@ POWER = 'SwitchPower: '
 RENDER = 'SwitchFrameRender: vsync'
 DISPLAY = 'drivers/NativeMobileDisplay/NativeLegacyDisplay.cpp'
 IDLE = 'drivers/SwitchPower/SwitchPowerStats.cpp, kernel/switch/idle/idle.c'
+RAW = 'com.brunostjohn.switch.TegraGM20BMetal'
+RATES = 'drivers/TegraGM20BMetal/raw/runtime/RawMetalRates.mm'
+RENDER_SERVER = 'backboardd'
 LONG = (
     r'long \d+: idle (?P<idle>\d+)/\d+ ca (?P<ca>\d+)/\d+ gpu (?P<gpu>\d+)/\d+ queue (?P<queue>\d+)/\d+ '
     r'latch (?P<latch>\d+)/\d+ rate (?P<rate>\d+)/\d+'
@@ -91,11 +94,12 @@ STUTTER = [
         'stutter.c7-frame-wakes',
         OWNER,
         POWER,
-        'max(wakes) <= 2',
+        'max(wakes) <= 10',
         process=KERNEL,
         regex=r'cpu3 c7 [\d.]+% \(\d+, \d+ skipped, (?P<wakes>\d+) frame wakes\)',
         source=IDLE,
-        note='frame lines (all on CPU3) that found it in C7, per 10 s: one per animation start after 100 ms still',
+        note='frame lines (all on CPU3) that found it in C7, per 10 s: one per animation start after 100 ms still is '
+        'the design (Control Center x5 is five); tens mean the frame core power-gates between frames',
     ),
     Check(
         'stutter.c7-exit-max',
@@ -108,6 +112,17 @@ STUTTER = [
         note='C7 exit measured from the wake timer, us; the governor budgets the console DT wakeup-latency, 130',
     ),
     Check('stutter.c7-exit-late', OWNER, POWER, 'sum(late) == 0', process=KERNEL, regex=C7_EXITS, source=IDLE),
+    Check(
+        'stutter.emc-raise',
+        OWNER,
+        POWER,
+        'max(max) <= 2000',
+        process=KERNEL,
+        regex=r'(?P<raises>\d+) raises: hint to top (?P<mean>\d+)/(?P<max>\d+) us \(BPMP max (?P<bpmp>\d+) us\)',
+        source='drivers/SwitchPower/SwitchEMC.cpp',
+        note='touch, first frame line or GPU submit to the EMC at its top rate, us: slower than the first frame '
+        "needs it leaves that frame's GPU work on a slow EMC",
+    ),
     Check(
         'stutter.render-core-wait',
         OWNER,
@@ -124,7 +139,8 @@ STUTTER = [
         RENDER,
         REPORT,
         process=KERNEL,
-        regex=r'longest block (?P<longest>\d+) us, user pc (?P<pc>\S+) lr \S+, kernel continuation (?P<kernel>0x[0-9a-f]+)',
+        regex=r'longest block (?P<longest>\d+) us, user pc (?P<pc>\S+) lr \S+, '
+        r'kernel continuation (?P<kernel>0x[0-9a-f]+)',
         show=('kernel', 'pc'),
         source='kernel/switch/sched/render.c',
         note="where CA's display thread waited in slow frames (ipsw dyld a2s the pc)",
@@ -133,11 +149,12 @@ STUTTER = [
         'stutter.cpu-at-vsync',
         OWNER,
         'SwitchFrame: latch',
-        'min(vsync) >= 1785',
+        'min(vsync) >= 1683',
         process=KERNEL,
         regex=r'cpu (?P<vsync>\d+) MHz at vsync (?P<swap>\d+) at swap',
         source=DISPLAY,
-        note='CPU clock at the vsync of each slow frame: touch, missed-frame and launch hints boost it',
+        note='CPU clock at the vsync of each slow frame: touch, missed-frame and launch hints boost it to the '
+        'ceiling, 1785 or 1683 MHz where the DFLL row measured high',
     ),
     Check(
         'stutter.gpu-raise',
@@ -148,5 +165,57 @@ STUTTER = [
         regex=r'raise mean (?P<mean>\d+) ns max (?P<max>\d+) ns',
         source='drivers/TegraGM20B/gpu.c',
         note='76.8 -> 768 MHz before the kick that needs it, ns: a PL change and two 2 us delays',
+    ),
+    Check(
+        'stutter.raw-scheduled-wait',
+        OWNER,
+        'raw ',
+        'max(us) <= 5000',
+        process=RENDER_SERVER,
+        subsystem=RAW,
+        regex=r' ws=(?P<waits>\d+)/(?P<us>\d+)us',
+        source=RATES,
+        note="the render thread blocked in waitUntilScheduled, us per 5 s: a scheduled-handler hop or m2v's scheduling",
+    ),
+    Check(
+        'stutter.raw-completed-wait',
+        OWNER,
+        'raw ',
+        'sum(waits) == 0',
+        process=RENDER_SERVER,
+        subsystem=RAW,
+        regex=r' wc=(?P<waits>\d+)/(?P<us>\d+)us',
+        source=RATES,
+        note='the render server waited for the GPU to finish a command buffer',
+    ),
+    Check(
+        'stutter.raw-cpu-ordered',
+        OWNER,
+        'raw ',
+        'sum(cpu) == 0',
+        subsystem=RAW,
+        regex=r' sw=\d+ cpu=(?P<cpu>\d+) ',
+        source=RATES,
+        note='raw and m2v ordered by a CPU wait instead of the GPU',
+    ),
+    Check(
+        'stutter.raw-ring-waits',
+        OWNER,
+        'raw ',
+        'sum(rw) == 0',
+        subsystem=RAW,
+        regex=r' rw=(?P<rw>\d+) pool=',
+        source=RATES,
+        note='the encoder waited for ring space',
+    ),
+    Check(
+        'stutter.raw-pool-stalls',
+        OWNER,
+        'raw ',
+        'sum(grow) == 0',
+        subsystem=RAW,
+        regex=r' grow=(?P<grow>\d+) ',
+        source=RATES,
+        note='an allocation waited for the pool to grow',
     ),
 ]

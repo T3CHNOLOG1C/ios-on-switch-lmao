@@ -108,8 +108,6 @@
         _cb->_sampledShadows = true;
     if (x && x->_raw.standIn)
         _cb->_standIns = true;
-    if (x && (x->_raw.chain || (x->_parent && x->_parent->_raw.chain)))
-        _cb->_chains = true;
     setBinding(_cb, OpTexture, stage, index, t, 0);
 }
 

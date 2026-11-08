@@ -113,9 +113,14 @@
 {
     SWITCH_API(ApiObject);
     id<MTLBuffer> b = [self newBufferWithLength:n options:o];
-    if (b && p && n) {
-        memcpy(((RMBuffer *)b)->_raw.cpu, p, n);  // the draws that read it clean the lines they read
+    if (!b || !p || !n)
+        return b;
+    if (![(id)b isKindOfClass:[RMBuffer class]]) {  // the pool had no room: m2v's buffer, made with the bytes
+        RMTwinObject *t = (RMTwinObject *)b;
+        t->_twin = [gRM->fallback newBufferWithBytes:p length:n options:o];
+        return t->_twin ? b : nil;
     }
+    memcpy(((RMBuffer *)b)->_raw.cpu, p, n);  // the draws that read it clean the lines they read
     return b;
 }
 
@@ -161,7 +166,7 @@
 
 - (id<MTLTexture>)rmNewTexture:(MTLTextureDescriptor *)d tiled:(bool)tiled
 {
-    if (chainShape(d) && gRM->raw->chains()) {  // mipmapped: level 0 a pool texture, the levels a chain (raw/fx)
+    if (chainShape(d)) {  // mipmapped: level 0 of a block-linear chain of its levels (raw/fx)
         RMTexture *t = [RMTexture new];
         t->_device = self;
         t->_descriptor = [d copy];
@@ -315,7 +320,18 @@ static bool producesTexture(MTLTextureDescriptor *d)
                                                    uint32_t(d.pixelFormat), t->_raw, producesTexture(d));
         if (t->_rawOk)
             keepExtendedRange(d, t->_raw, false);
+    } else if (rawShape(d) && plane < IOSurfaceGetPlaneCount(s)) {
+        // a plane as a texture of its own (a video player's R8 luma and RG8 chroma): the plane's bytes, pitch, as CoreVideo
+        // lays its planes out for every other reader (never a block-linear layout the kernel would decide for the surface)
+        void *base = IOSurfaceGetBaseAddress(s);
+        t->_rawOk = gRM->raw->createSurfaceTexture(
+            IOSurfaceGetID(s), base, IOSurfaceGetAllocSize(s), s,
+            uintptr_t(IOSurfaceGetBaseAddressOfPlane(s, plane)) - uintptr_t(base), uint32_t(d.width),
+            uint32_t(d.height), uint32_t(IOSurfaceGetBytesPerRowOfPlane(s, plane)), uint32_t(d.pixelFormat), t->_raw,
+            false);
     }
+    if (t->_rawOk && t->_raw.converted())
+        surfaceConverted(s, true);
     if (t->_rawOk && writesTexture(d))
         declareGpuWrites(t);
     if (!t->_rawOk) {  // a surface the raw path does not take: m2v's texture over it, made now (it may refuse: nil, as today)

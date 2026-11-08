@@ -60,7 +60,7 @@ uint64_t nowUs();
 
 struct Stats {
     std::atomic<uint64_t> raw{0}, m2v{0}, deferred{0}, aborted{0}, encodeUs{0}, draws{0}, passes{0}, copies{0},
-        reasons[WhyCount], switches{0}, cpuOrdered{0}, acquires{0}, eventsReleased{0}, heldReturns{0};
+        reasons[WhyCount]{}, switches{0}, cpuOrdered{0}, acquires{0}, eventsReleased{0}, heldReturns{0};
     // diagnostics (r10-rawsweep): the raw encode thrown away by aborted command buffers, the m2v replay's time on the committing
     // thread (replay + commit), and the bytes replay cleans
     std::atomic<uint64_t> abortUs{0}, replayUs{0}, replayClean{0};
@@ -68,9 +68,45 @@ struct Stats {
     std::atomic<uint64_t> splits{0}, splitM2v{0};
     // command buffers completed (finish): with the commits, what the stall line (rawStall) watches
     std::atomic<uint64_t> finished{0};
+    // waitUntilScheduled / waitUntilCompleted calls that blocked, and the time they blocked: CPU waits on the caller's thread
+    // (Core Animation's render thread flushes with waitUntilScheduled every frame)
+    std::atomic<uint64_t> scheduledWaits{0}, scheduledWaitUs{0}, completedWaits{0}, completedWaitUs{0};
 #if SWITCH_FRAME_TIMELINE
     // the m2v replay's parts (noteReplay)
     std::atomic<uint64_t> replaySlotUs{0}, replayTwinUs{0}, replayCommitUs{0}, replayMaxUs{0};
+    // the draws it replayed, and the twins it made: textures, buffers, anything else
+    std::atomic<uint64_t> replayDraws{0}, twinTextures{0}, twinBuffers{0}, twinOthers{0}, twinTextureUs{0};
+    // command buffers completed before their submitting thread scheduled them (finish() ran their scheduled handlers)
+    std::atomic<uint64_t> scheduledByFinish{0};
+#endif
+};
+
+// A wait that blocked, counted with its time into two Stats counters when it ends (debug builds; nothing in release).
+class BlockedWait {
+public:
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    BlockedWait(std::atomic<uint64_t> &waits, std::atomic<uint64_t> &waitedUs)
+        : waits_(&waits), waitedUs_(&waitedUs), began_(nowUs())
+    {}
+
+    ~BlockedWait()
+    {
+        waits_->fetch_add(1, std::memory_order_relaxed);
+        waitedUs_->fetch_add(nowUs() - began_, std::memory_order_relaxed);
+    }
+
+    BlockedWait(const BlockedWait &) = delete;
+    BlockedWait &operator=(const BlockedWait &) = delete;
+    BlockedWait(BlockedWait &&) = delete;
+    BlockedWait &operator=(BlockedWait &&) = delete;
+
+private:
+    std::atomic<uint64_t> *waits_;
+    std::atomic<uint64_t> *waitedUs_;
+    uint64_t began_;
+#else
+    BlockedWait(std::atomic<uint64_t> &, std::atomic<uint64_t> &)
+    {}
 #endif
 };
 
@@ -149,19 +185,11 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed);
 #endif
 
 // RawMetalTextureCpu.mm
-void noteCpuLevels(RMTexture *t, uint32_t bits);
-void foldCpuLevels();
 void cpuTiled(RMTexture *t, MTLRegion r, uint8_t *bytes, NSUInteger row, bool write);
 void cpuLevel(RMTexture *t, MTLRegion r, NSUInteger level, uint8_t *bytes, NSUInteger row, bool write);
 
 // RawMetalDevice.mm
 const char *ycbcrPlan(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteger plane, raw::YcbcrPlan &out);
-
-// RawMetalMips.mm
-void mipSync(RMCommandBuffer *cb, id<MTLCommandBuffer> m, size_t at, size_t to);
-void mipWritten(void *o, uint64_t level, MirrorWrites *toMirrors);
-void mirrorWrites(id<MTLCommandBuffer> m, MirrorWrites &writes);
-void mirrorsForM2v(RMCommandBuffer *cb, size_t from, size_t to);
 
 // RawMetalReplay.mm
 id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool part);
@@ -181,10 +209,17 @@ bool eventsReady(RMCommandBuffer *cb);
 void waitEvents(RMCommandBuffer *cb);
 
 // RawMetalFinish.mm
+void forEachWritten(RMCommandBuffer *cb, size_t from, size_t to, void (*written)(void *));
 extern GpuMemoryRelease &gRawRelease;
 void scheduled(RMCommandBuffer *cb);
 void finish(RMCommandBuffer *cb, NSError *error);
 void completionLoop();
+
+// RawMetalSurfaceWrites.mm
+void surfaceConverted(IOSurfaceRef s, bool made);  // a planar or YCbCr texture over `s` made, or gone
+uint64_t surfaceWrites(IOSurfaceRef s);
+void noteSurfaceWrite(IOSurfaceRef s);
+void noteSurfaceWrites(RMCommandBuffer *cb, size_t from, size_t to);  // after [from, to) of `cb` was submitted
 
 // RawMetalSubmit.mm
 void orderRefused(const char *what, int kr);

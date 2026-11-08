@@ -14,6 +14,7 @@
 #include <mach/mach.h>
 #include <os/log.h>
 #include <pthread.h>
+#include <time.h>
 #include <unistd.h>
 #include <algorithm>
 #include <chrono>
@@ -101,10 +102,13 @@ constexpr uint32_t kTicCount = 8192, kTscCount = 1024;
 constexpr uint32_t kEngines =
     TegraGM20BEngine3D | TegraGM20BEngineCompute | TegraGM20BEngineCopy | TegraGM20BEngine2D | TegraGM20BEngineM2MF;
 constexpr size_t kDedicatedSpares = 2;
-// The shader heap: the programs of the states a process uses, placed at first use (Device::place); the pack holds MBs of
-// programs, of which the render server uses a few hundred. Bound in steps as they are placed, with room after the last one
-// for the GPU's instruction prefetch past a program's end.
-constexpr uint64_t kHeapCap = 8 << 20, kHeapStep = 256 << 10, kHeapSlack = 0x1000;
+// The shader heap: the programs of the states a process uses, placed at first use (Device::place); the pack holds tens of MiB
+// of programs, of which a process uses a few hundred. Its GPU VA is the whole program window: SET_PIPELINE_PROGRAM is a 32-bit
+// offset from SET_PROGRAM_REGION, so every program lies in the 4 GiB after it (NVK's contiguous shader arena before Volta is
+// that window too). Only VA is held; parts of host memory are bound in it as programs are placed, with room after the last
+// one for the GPU's instruction prefetch past a program's end. The render server binds kHeapAtOpen at its start: what Core
+// Animation's states place in their first frames (17's journal: 1.13 MiB).
+constexpr uint64_t kProgramWindow = 1ull << 32, kHeapStep = 256 << 10, kHeapSlack = 0x1000, kHeapAtOpen = 2 << 20;
 // INVALIDATE_SHADER_CACHES_NO_WFI (cla097.h): INSTRUCTION bit 0, CONSTANT bit 12
 constexpr uint32_t kInvalidateInstruction = 1u << 0, kInvalidateConstant = 1u << 12;
 constexpr uint32_t kMaxSegments = TegraGM20BMaxPushes;
@@ -335,19 +339,17 @@ bool Device::open(const char *packPath, uint64_t stack, std::string &err, Role r
 // which textures, samplers and states need before any submission. The render server's channel, heap and first chunks too.
 bool Device::init(std::string &err)
 {
-    vm_address_t heapCpu = 0;
     if (!k_.alloc(kTicCount * 32, true, tic_) || !k_.alloc(kTscCount * 32, true, tsc_) ||
         !k_.alloc(0x1000, true, root_) || !k_.alloc(0x10000, true, zero_) || !k_.alloc(0x1000, true, tickets_)) {
         err = k_.error();
         return false;
     }
-    heap_.bytes = kHeapCap;
-    heap_.va = heap_.vaBase = k_.reserveVa(kHeapCap);
-    if (!heap_.va || vm_allocate(mach_task_self(), &heapCpu, kHeapCap, VM_FLAGS_ANYWHERE) != KERN_SUCCESS) {
-        err = "no room for the shader heap";
+    heap_.bytes = kProgramWindow;
+    heap_.va = heap_.vaBase = k_.reserveVa(kProgramWindow);
+    if (!heap_.va) {
+        err = "no GPU VA for the shader heap's program window";
         return false;
     }
-    heap_.cpu = reinterpret_cast<uint8_t *>(heapCpu);
     memset(tic_.cpu, 0, tic_.bytes);
     memset(tsc_.cpu, 0, tsc_.bytes);
     memset(root_.cpu, 0, root_.bytes);
@@ -389,16 +391,14 @@ bool Device::init(std::string &err)
         err = channelError_;
         return false;
     }
-    // at the render server's start, not under its first frames: the heap bound for every program of the pack, the mip chains'
-    // first chunk and the first pool chunk
+    // at the render server's start, not under its first frames: the heap's first part, the mip chains' first chunk and the
+    // first pool chunk
     {
         std::lock_guard<std::mutex> l(lock_);
-        heapGrow(std::min<uint64_t>(pack_.bytes(PackHeap) + kHeapSlack, kHeapCap));
-        if (chainsOn_) {
-            Span first;
-            if (blAlloc(1, 0, first))
-                blFree(first);
-        }
+        heapGrow(std::min<uint64_t>(pack_.bytes(PackHeap) + kHeapSlack, kHeapAtOpen));
+        Span first;
+        if (blAlloc(1, 0, first))
+            blFree(first);
     }
     uint32_t chunk;
     newChunk(sizes_.chunk, false, nullptr, chunk);
@@ -412,18 +412,20 @@ bool Device::ensureChannel()
     std::lock_guard<std::mutex> l(channelLock_);
     if (channelReady_.load(std::memory_order_relaxed))
         return true;
-    if (channelFailed_)
+    const uint64_t now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+    if (channelFailed_ && now < channelRetryNs_)
         return false;
     if (!openChannel(channelError_)) {
         channelFailed_ = true;
+        channelRetryNs_ = now + kChannelRetryNs;
         return false;
     }
     channelReady_.store(true, std::memory_order_release);
     return true;
 }
 
-// channelLock_ held: the rings, the channel and its context, then the 2D engine's state and its mip-chain self-test (raw/fx).
-// False: what it made is given back, so a later call starts over.
+// channelLock_ held: the rings, the channel and its context with the 2D engine's state (raw/fx). False: what it made is given
+// back, so a later call starts over.
 bool Device::openChannel(std::string &err)
 {
     auto undo = [&](bool created) {
@@ -441,17 +443,18 @@ bool Device::openChannel(std::string &err)
     if (!k_.alloc(sizes_.push, true, push_.bo) || !k_.alloc(sizes_.upload, true, upload_.bo) ||
         !k_.channel(kEngines, channel_, fence_))
         return undo(false);
+    const uint32_t words = contextWords() + uint32_t(fx::twodInitWords());
     uint64_t va;
-    uint32_t *start = reinterpret_cast<uint32_t *>(alloc(push_, contextWords() * 4, 256, va));
-    Push p{start, start + contextWords()};
+    uint32_t *start = reinterpret_cast<uint32_t *>(alloc(push_, words * 4, 256, va));
+    Push p{start, start + words};
     emitContext(p);
+    fx::emitTwodInit(p);
     TegraGM20BAbiPush seg = {va, uint32_t(p.at - start), 0};
     uint32_t seq = 0;
     if (!k_.exec(channel_, &seg, 1, 0, seq))
         return undo(true);
     lastSeqno_ = seq;
     retire(push_, seq);
-    selfTest();
     return true;
 }
 
@@ -475,39 +478,58 @@ bool Device::place(uint32_t prog, uint32_t &program, uint64_t &data)
     return true;
 }
 
-// lock_ held: the heap bound from its start through `end`: host pages of its CPU range imported and bound at the reservation's
-// VAs, in steps. False: past the reservation, or the kernel refused a part.
+// lock_ held: the heap bound from its start through `end`, the range past what is bound as one more part of host memory imported
+// and bound at the window's VAs. False: past the window, or no memory or the kernel refused the part.
 bool Device::heapGrow(uint64_t end)
 {
+    if (end <= heapBound_)
+        return true;
     if (end > heap_.bytes)
         return false;
-    while (heapBound_ < end) {
-        const uint64_t step = std::min(heap_.bytes - heapBound_, (end - heapBound_ + kHeapStep - 1) & ~(kHeapStep - 1));
-        Bo part;
-        uint8_t *cpu = heap_.cpu + heapBound_;
-        if (!k_.importPages(cpu, step, part, 0, true) ||
-            !k_.bindImportAt(cpu, part, heap_.va + heapBound_, kPteKindPitch))
-            return false;
-        heapParts_.push_back(part);
-        heapBound_ += step;
+    HeapPart part;
+    part.offset = heapBound_;
+    part.bytes = std::min(heap_.bytes - heapBound_, (end - heapBound_ + kHeapStep - 1) & ~(kHeapStep - 1));
+    vm_address_t cpu = 0;
+    if (vm_allocate(mach_task_self(), &cpu, part.bytes, VM_FLAGS_ANYWHERE) != KERN_SUCCESS)
+        return false;
+    part.cpu = reinterpret_cast<uint8_t *>(cpu);
+    if (!k_.importPages(part.cpu, part.bytes, part.bo, 0, true) ||
+        !k_.bindImportAt(part.cpu, part.bo, heap_.va + part.offset, kPteKindPitch)) {
+        vm_deallocate(mach_task_self(), cpu, part.bytes);
+        return false;
     }
+    heapParts_.push_back(part);
+    heapBound_ += part.bytes;
     return true;
+}
+
+// lock_ held: the bound part heap offset `at` lies in, null past every part
+const Device::HeapPart *Device::heapPartAt(uint64_t at) const
+{
+    for (auto it = heapParts_.rbegin(); it != heapParts_.rend(); ++it)
+        if (at >= it->offset)
+            return at < it->offset + it->bytes ? &*it : nullptr;
+    return nullptr;
 }
 
 // lock_ held: a program slot of `size` bytes at the heap's end, its offset in `offset`, with the prefetch slack after it bound.
 // A slot starts 256-aligned as NVK's uploads do: its code at +0x80 and its shader data at a 256-aligned offset in it, while the
-// slot before may end anywhere after its shader data. The heap is cached host memory: what the CPU copies there is cleaned to
-// memory before the GPU can read it. False: no room.
+// slot before may end anywhere after its shader data. Parts are apart in host memory, so a slot lies in one part: one that
+// would cross a part's end starts at the next part. The heap is cached host memory: what the CPU copies there is cleaned to
+// memory before the GPU can read it. False: no room in the window.
 bool Device::heapPlace(const uint8_t *bytes, uint32_t size, uint64_t &offset)
 {
-    const uint64_t at = (heapPlaced_ + 0xFF) & ~uint64_t(0xFF);
-    const uint64_t end = at + size;
-    if (!heapGrow(end + kHeapSlack))
+    uint64_t at = (heapPlaced_ + 0xFF) & ~uint64_t(0xFF);
+    for (const HeapPart *p = heapPartAt(at); p && at + size > p->offset + p->bytes; p = heapPartAt(at))
+        at = p->offset + p->bytes;
+    if (!heapGrow(at + size + kHeapSlack))
         return false;
-    memcpy(heap_.cpu + at, bytes, size);
-    cleanToMemory(heap_.cpu + at, size);
+    const HeapPart *p = heapPartAt(at);
+    uint8_t *cpu = p->cpu + (at - p->offset);
+    memcpy(cpu, bytes, size);
+    cleanToMemory(cpu, size);
     offset = at;
-    heapPlaced_ = end;
+    heapPlaced_ = at + size;
     return true;
 }
 
@@ -928,6 +950,14 @@ uint32_t Device::allocTic()
     return nextTic_ < kTicCount ? nextTic_++ : 0;
 }
 
+// A freed header holds header 0's null descriptor until it is reused: zeroes would read as a buffer texture at VA 0, which a
+// draw still in flight, or one binding a stale index, would sample (a fault).
+void Device::freeTic(uint32_t tic)
+{
+    memcpy(tic_.cpu + 32 * tic, tic_.cpu, 32);
+    freeTic_.push_back(tic);
+}
+
 // Texture header of a pitch-linear 2D texture (Mesa NIL nvb097_fill_image_view_desc for a linear image: HEADER_VERSION PITCH,
 // TEXTURE_TYPE TWO_D_NO_MIPMAP), word 0 NVK's for the format
 void Device::writeTic(const Texture &t)
@@ -1177,9 +1207,9 @@ bool Device::createBufferTexture(const Buffer &b, uint64_t offset, uint32_t widt
 
 bool Device::createView(const Texture &of, uint32_t format, Texture &t)
 {
-    // A mipmapped texture's view is m2v's. Metal views a converted image (planar, YCbCr) only in its own format or that
-    // format's sRGB twin (m2v view_plan.rs), neither of which has a header here.
-    if (of.chain || of.converted())
+    // Metal views a converted image (planar, YCbCr) only in its own format or that format's sRGB twin (m2v view_plan.rs),
+    // neither of which has a header here.
+    if (of.converted())
         return false;
     const FormatInfo *f = formatInfo(format);
     if (!f || f->bpp != of.bpp || of.memoryless || of.sampled || xrForm(format) != XrForm::None ||
@@ -1194,8 +1224,15 @@ bool Device::createView(const Texture &of, uint32_t format, Texture &t)
     t.import = nullptr;  // the viewed texture owns the memory (RawMetal.mm keeps it alive while a view lives)
     t.span = {};
     t.lease = nullptr;
+    t.chain = nullptr;  // a mipmapped texture's view: every level sampled, level 0 rendered and copied
     if (!(t.tic = allocTic()))
         return false;
+    if (of.chain) {
+        uint32_t w[8];
+        fx::mipChainTic(of.chain->layout, of.va, f->tic0, f->srgb, 0, of.chain->layout.levels, w);
+        memcpy(tic_.cpu + 32 * t.tic, w, 32);
+        return true;
+    }
     writeTic(t);
     return true;
 }
@@ -1308,24 +1345,33 @@ bool Device::createMipTexture(uint32_t width, uint32_t height, uint32_t format, 
 {
     const FormatInfo *f = formatInfo(format);
     const uint32_t fmt2d = fx::twodFormat(format);
-    if (!chainsOn_ || !f || !fmt2d || f->srgb || levels < 2 || !f->rt)
+    if (!f || levels < 2 || !f->rt || xrForm(format) != XrForm::None)
         return false;
     Texture::Chain *c = new Texture::Chain;
-    if (!fx::mipChainLayout(width, height, levels, f->bpp, c->layout) || !createTexture(width, height, format, t)) {
+    if (!fx::mipChainLayout(width, height, levels, f->bpp, c->layout) || !shape(width, height, format, t)) {
         delete c;
         return false;
     }
-    bool placed;
     {
         std::lock_guard<std::mutex> l(lock_);
-        placed = blAlloc(c->layout.bytes, c->layout.align, c->span);
+        if (!blAlloc(c->layout.bytes, c->layout.align, t.span)) {
+            delete c;
+            return false;
+        }
+        if (!(t.tic = allocTic())) {
+            Lease *none = nullptr;
+            freeSpan(t.span, Memory::Bl, none);
+            delete c;
+            return false;
+        }
     }
-    if (!placed) {
-        delete c;
-        destroyTexture(t);
-        return false;
-    }
-    c->va = c->span.va;
+    const fx::MipLevel &l0 = c->layout.level[0];
+    t.va = c->va = t.span.va;
+    t.cpu = t.span.cpu;
+    t.pitch = l0.rowBytes;
+    t.blockLinear = true;
+    t.blockHeight = l0.yLog2;
+    t.layerBytes = c->layout.bytes;
     c->fmt2d = fmt2d;
     uint32_t w[8];
     fx::mipChainTic(c->layout, c->va, f->tic0, f->srgb, 0, levels, w);
@@ -1336,72 +1382,12 @@ bool Device::createMipTexture(uint32_t width, uint32_t height, uint32_t format, 
     return true;
 }
 
-// Once at open, after the init submission: the 2D engine's state (Mesa nvc0's 2D init), then one 24x10 chain per sampling
-// candidate (fx::sampling) made from a pattern in one submission and read back (fx_mip.h). Chains go on with the first candidate
-// whose chain is exact within 1 in either of the CPU's two possible views of kind-0xFE memory (production never reads a chain on
-// the CPU; the view only tells the check where to look); none: chains stay off and every texture is as before. Its memory is a
-// coherent allocation: the CPU reads it without an invalidate. Nothing but this submission's own fence is waited for.
-void Device::selfTest()
-{
-    for (uint32_t i = 0; i < fx::kSamplings; i++)
-        selfTestTegra[i] = selfTestFermi[i] = ~0u;
-    fx::MipChain c;
-    if (!fx::mipChainLayout(fx::kSelfTestW, fx::kSelfTestH, fx::fullLevels(fx::kSelfTestW, fx::kSelfTestH), 4, c))
-        return;
-    const uint64_t stride = (c.bytes + 16383) & ~uint64_t(16383);
-    Bo chains, src;
-    if (!k_.alloc(stride * fx::kSamplings, true, chains, fx::kBlockLinearKind))
-        return;
-    if (!k_.alloc(4096, true, src)) {
-        k_.free(chains);
-        return;
-    }
-    memset(chains.cpu, 0, stride * fx::kSamplings);
-    fx::selfTestPattern(src.cpu, 256);
-    const uint32_t room = uint32_t(fx::twodInitWords() + fx::kSamplings * fx::generateWords(c, 0, c.levels - 1) + 16);
-    uint64_t va;
-    uint32_t *start = reinterpret_cast<uint32_t *>(alloc(push_, room * 4, 256, va));
-    Push p{start, start + room};
-    fx::emitTwodInit(p);
-    const fx::Pitch l0{src.va, 256, fx::kSelfTestW, fx::kSelfTestH};
-    for (uint32_t i = 0; i < fx::kSamplings; i++)
-        fx::emitGenerate(p, c, chains.va + i * stride, &l0, fx::twodFormat(80), 0, c.levels - 1, fx::sampling(i));
-    TegraGM20BAbiPush seg = {va, uint32_t(p.at - start), 0};
-    uint32_t seq = 0;
-    if (k_.exec(channel_, &seg, 1, lastSeqno_, seq)) {
-        lastSeqno_ = seq;
-        retire(push_, seq);
-        if (wait(seq)) {
-            for (uint32_t i = 0; i < fx::kSamplings; i++) {
-                const uint8_t *cpu = chains.cpu + i * stride;
-                selfTestTegra[i] = fx::selfTestCheck(c, cpu, nullptr, false);
-                selfTestFermi[i] = fx::selfTestCheck(c, cpu, nullptr, true);
-            }
-            fx::selfTestDetail(c, chains.cpu, false, selfTestFirst);
-            for (uint32_t view = 0; view < 2 && selfTestChosen == fx::kSamplings; view++)
-                for (uint32_t i = 0; i < fx::kSamplings; i++)
-                    if (!(view ? selfTestFermi[i] : selfTestTegra[i])) {
-                        selfTestChosen = i;
-                        selfTestFermiView = view;
-                        break;
-                    }
-            if (selfTestChosen < fx::kSamplings) {
-                sampling_ = fx::sampling(selfTestChosen);
-                chainsOn_ = true;
-            }
-        }
-    }
-    k_.free(src);
-    k_.free(chains);
-}
-
 void Device::destroyTexture(Texture &t)
 {
     if (t.view) {
         std::lock_guard<std::mutex> l(lock_);
         if (t.tic) {
-            memset(tic_.cpu + 32 * t.tic, 0, 32);
-            freeTic_.push_back(t.tic);
+            freeTic(t.tic);
         }
         t = {};
         return;
@@ -1425,16 +1411,13 @@ void Device::destroyTexture(Texture &t)
     }
     std::lock_guard<std::mutex> l(lock_);
     if (t.tic) {
-        memset(tic_.cpu + 32 * t.tic, 0, 32);
-        freeTic_.push_back(t.tic);
+        freeTic(t.tic);
     }
     if (t.chain) {
         for (const uint32_t level : t.chain->levelTic)
             if (level) {
-                memset(tic_.cpu + 32 * level, 0, 32);
-                freeTic_.push_back(level);
+                freeTic(level);
             }
-        blFree(t.chain->span);
         delete t.chain;
         t.chain = nullptr;
     }
@@ -1900,8 +1883,7 @@ Texture *Device::backing(const Texture &m, uint32_t tag, bool blockLinear)
 void Device::freeBacking(Texture &t)
 {
     if (t.tic) {
-        memset(tic_.cpu + 32 * t.tic, 0, 32);
-        freeTic_.push_back(t.tic);
+        freeTic(t.tic);
     }
     if (t.zeta)
         tiledFree(zChunks_, t.span);
@@ -2153,6 +2135,7 @@ CommandBuffer *Device::begin()
     cb.surfaces_.clear();
     cb.draws = cb.passes = cb.blits = 0;
     cb.refusal = {};
+    cb.partial = false;
     cb.pushStart_ = push_.head;
     cb.uploadStart_ = upload_.head;
     memcpy(cb.rootPush_, rootPush_, sizeof rootPush_);
@@ -2357,6 +2340,11 @@ bool CommandBuffer::commit(uint32_t &seqno)
             if (!at && invalidates) {  // its prologue never reached the GPU: the next submission's invalidates
                 std::lock_guard<std::mutex> l(d.lock_);
                 d.heapInvalidated_ = invalidatedBefore;
+            }
+            if (at) {  // its first batches run on: abandon() may give their ring words back only once they completed
+                partial = true;
+                d.wait(d.lastSeqno_);
+                d.contextless_ = true;
             }
             return false;
         }
@@ -3410,13 +3398,19 @@ void RenderEncoder::end()
         p.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
     }
     uint32_t ct = 0, count = 0;
-    for (uint32_t j = 0; j < pass_.count && j < 8; j++) {
-        const Texture *t = pass_.color[j].texture;
-        if (!t)
-            continue;
-        targetWords(p, COLOR_TARGET + 0x40 * j, *t);
-        p.m(COLOR_COMPRESSION + 4 * j, 0);
-        count++;
+    for (uint32_t j = 0; j < pass_.count && j < 8; j++)
+        if (pass_.color[j].texture)
+            count = j + 1;
+    for (uint32_t j = 0; j < count; j++) {
+        if (const Texture *t = pass_.color[j].texture) {
+            targetWords(p, COLOR_TARGET + 0x40 * j, *t);
+            p.m(COLOR_COMPRESSION + 4 * j, 0);
+        } else {
+            uint32_t w[kColorTargetWords];
+            disabledTargetWords(w);
+            p.incArray(COLOR_TARGET + 0x40 * j, w, kColorTargetWords);
+            p.m(COLOR_COMPRESSION + 4 * j, 1);
+        }
     }
     // targets map to themselves (NVK writes all eight slots of the map; the hardware reads the first `count`)
     for (uint32_t k = 0; k < 8; k++)
@@ -3678,23 +3672,15 @@ void BlitEncoder::convertPlanar(const Texture &t)
     p_.m(CE_LAUNCH_DMA, kLaunchPitch | 1u << 10, SUBC_COPY);
 }
 
-void BlitEncoder::generate(Texture &t, bool all)
+void BlitEncoder::generate(Texture &t)
 {
     Texture::Chain *c = t.chain;
-    if (!c)
+    if (!c || !c->fmt2d)  // (the facade sends those to m2v: PredMipmapsFormat)
         return;
-    const uint32_t last = all ? c->layout.levels - 1 : 0;
+    const uint32_t last = c->layout.levels - 1;
     room(uint32_t(fx::generateWords(c->layout, 0, last)));
-    const fx::Pitch l0{t.va, t.pitch, t.width, t.height};
-    fx::emitGenerate(p_, c->layout, c->va, &l0, c->fmt2d, 0, last, dev_->sampling_);
-    c->l0Fresh = true;
-    if (all) {
-        c->levelsFresh = true;
-        c->rawLevels = c->mirrorLevels = 0;
-        dev_->stats.chainGenerates++;
-    } else {
-        dev_->stats.chainRefreshes++;
-    }
+    fx::emitGenerate(p_, c->layout, c->va, nullptr, c->fmt2d, 0, last);
+    dev_->stats.chainGenerates++;
 }
 
 void BlitEncoder::copyFromLevel(const Texture &t, uint32_t level, uint32_t sx, uint32_t sy, const Texture &dst,
@@ -3703,7 +3689,8 @@ void BlitEncoder::copyFromLevel(const Texture &t, uint32_t level, uint32_t sx, u
     const Texture::Chain *c = t.chain;
     if (!c)
         return;
-    if (dst.blockLinear) {  // the copy engine, block-linear to block-linear (the 2D engine's destination here is pitch)
+    if (dst.blockLinear ||
+        !c->fmt2d) {  // the copy engine (the 2D engine's destination here is pitch, of a format it takes)
         Texture from;
         if (chainLevelImage(t, level, from))
             copyTexels(from, sx, sy, dst, dx, dy, w, h);
@@ -3714,17 +3701,6 @@ void BlitEncoder::copyFromLevel(const Texture &t, uint32_t level, uint32_t sx, u
     const fx::Pitch d{dst.va, dst.pitch, dst.width, dst.height};
     fx::emitCopyFromLevel(p_, c->layout, c->va, level, d, c->fmt2d, sx, sy, dx, dy, w, h);
     dev_->stats.chainCopies++;
-}
-
-void BlitEncoder::copyToLevel(Texture &t, uint32_t level, const Texture &src)
-{
-    Texture::Chain *c = t.chain;
-    if (!c || !level || level >= c->layout.levels)
-        return;
-    const fx::MipLevel &l = c->layout.level[level];
-    room(uint32_t(fx::copyWords()));
-    const fx::Pitch s{src.va, src.pitch, src.width, src.height};
-    fx::emitCopyToLevel(p_, c->layout, c->va, level, s, c->fmt2d, 0, 0, 0, 0, l.width, l.height);
 }
 
 void BlitEncoder::end()

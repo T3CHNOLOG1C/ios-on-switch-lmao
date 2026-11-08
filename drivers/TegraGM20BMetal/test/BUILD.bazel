@@ -208,6 +208,8 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_cache.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_cache.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_capture.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_compiler.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_compiler.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_metallib.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_metallib.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.cpp",

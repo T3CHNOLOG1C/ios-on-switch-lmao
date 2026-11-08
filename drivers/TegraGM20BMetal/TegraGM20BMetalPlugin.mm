@@ -587,8 +587,8 @@ void startRates()
     dispatch_source_set_timer(timer, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC), 5 * NSEC_PER_SEC,
                               5 * NSEC_PER_SEC);
     dispatch_source_set_event_handler(timer, ^{
-        // 768: the rates line passed 512 with r6-lows' frame distributions (encp= cgap= swait= gpuq= psomax=).
-        char line[768];
+        // 1024: the raw rates line passed 768 with its replay parts (rsplit= rdraw= tw=).
+        char line[1024];
         if (native_bridge_metal_rates(line, sizeof line))
             os_log(logger(), "TegraGM20BMetal: %{public}s %{public}s", processWord(), line);
         // r17-widgets: the stack of one commit per 30 s (what drives this process's commit rate).

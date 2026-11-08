@@ -176,22 +176,14 @@ struct Texture {
     // no draw call stores Metal's straight route's codes
     bool compressed = false;
 
-    // A mipmapped texture's levels (r12, raw/fx): level 0 is this texture (pitch, pool memory: rendered, copied and cleared as any
-    // other), and `chain` the block-linear image of every level that its texture header (tic) points at, which the 2D engine
-    // fills from level 0 (BlitEncoder::generate). The chain's own level 0 is a copy: `l0Fresh` says it holds what the texture's
-    // level 0 holds now, `levelsFresh` that its later levels were generated since the last generateMipmaps (encode order, under
-    // the submit lock: the GPU's order).
-    // `rawLevels`: levels written directly (a pass into the level, chainLevelTarget, or a copy from a mirror) since the last
-    // generate, so not what generating from level 0 gives: m2v gets them by copies (RawMetalMips.mm mirrorsForM2v).
-    // `mirrorLevels`: levels m2v rendered since, held by the RMTexture's mirror of each and copied into the chain before
-    // the raw path next reads it (BlitEncoder::copyToLevel).
+    // A mipmapped texture's levels (r12, raw/fx): `chain` is the block-linear image of every level, NIL's layout, and this texture
+    // is its level 0 (va, span, pitch and block height level 0's; its header, tic, the chain's). The 2D engine fills the later
+    // levels from level 0 in place (BlitEncoder::generate); m2v's twin is a texture of every level over the same memory, so
+    // whatever either driver writes into a level is the level.
     struct Chain {
         fx::MipChain layout;
         uint64_t va = 0;
-        Span span;
-        uint32_t fmt2d = 0;
-        bool l0Fresh = false, levelsFresh = false;
-        uint16_t rawLevels = 0, mirrorLevels = 0;
+        uint32_t fmt2d = 0;  // the 2D engine's surface format (fx::twodFormat); 0: it does not filter this one
         uint32_t levelTic[fx::kMaxLevels] = {};  // a view of each level alone (Device::levelTic), made on first use
     } *chain = nullptr;
 
@@ -492,15 +484,12 @@ public:
     // A planar texture's image from its surface's planes (Texture::planar): two remapped copies, the luma codes into green
     // (alpha 255), then the chroma pairs into red (Cr) and blue (Cb), each leaving the other components as they are
     void convertPlanar(const Texture &t);
-    // A mipmapped texture's chain (Texture::chain) on the 2D engine: `all`, generateMipmaps (level 0 converted from the texture,
-    // then each level from the one above); else level 0 only (the texture's level 0 was written since: what sampling it needs)
-    void generate(Texture &t, bool all);
+    // generateMipmaps of a mipmapped texture (Texture::chain) on the 2D engine: each later level from the one above, in place
+    void generate(Texture &t);
     // `w` x `h` texels of chain level `level` of `t` at (sx, sy) into the pitch texture `dst` at (dx, dy) (copyFromTexture of a
     // level below the first); 1:1 on the 2D engine
     void copyFromLevel(const Texture &t, uint32_t level, uint32_t sx, uint32_t sy, const Texture &dst, uint32_t dx,
                        uint32_t dy, uint32_t w, uint32_t h);
-    // The whole of chain level `level` of `t` from the pitch texture `src` of its size (its mirror); 1:1 on the 2D engine
-    void copyToLevel(Texture &t, uint32_t level, const Texture &src);
     void end();
 
 private:
@@ -536,8 +525,11 @@ public:
     // `invalidate`: also dropped from the CPU's caches (memory the GPU writes, so no dirty line lands on it later).
     void clean(const void *cpu, uint64_t bytes, bool invalidate = false);
     // One Exec (more when the segments exceed one Exec's 255): the submission prologue, then every pass and blit in order.
+    // false with `partial`: the kernel refused a later Exec after earlier ones were submitted; those completed before it
+    // returned, and the next command buffer gets a new channel (the GPU's state after them is not what the device tracks).
     bool commit(uint32_t &seqno);
-    // Nothing of it is submitted: the rings get back what it took, the root table's shadow what it was.
+    bool partial = false;
+    // Nothing of it is on the GPU any more: the rings get back what it took, the root table's shadow what it was.
     void abandon();
 
     // A host import the submission reads or writes (a surface's, a no-copy buffer's), for the kernel's order with other
@@ -593,7 +585,8 @@ public:
     }
 
     // The channel and its context, made now if not yet (a client's first command buffer, Order or mipmapped texture); with it
-    // the 2D engine's mip-chain self-test. False: the kernel refused it (`channelError()`), and the device submits nothing.
+    // the 2D engine's mip-chain self-test. False: the kernel refused it (`channelError()`), and the device submits nothing
+    // until a call kChannelRetryNs or more later gets one.
     bool ensureChannel();
 
     // Why the kernel last refused the channel or its context (ensureChannel, or begin() making a killed channel again)
@@ -662,8 +655,8 @@ public:
     bool createView(const Texture &of, uint32_t format, Texture &t);  // the same memory as another format
     // Memoryless (a pass gives it a backing); Depth32Float_Stencil8 among them, as zeta (Texture::zeta)
     bool createMemoryless(uint32_t width, uint32_t height, uint32_t format, Texture &t);
-    // A mipmapped 2D texture of `levels` levels: level 0 a pool texture as createTexture's, its header the block-linear chain's
-    // (Texture::chain). False: not one the raw path keeps (chainsOn() false, a format the 2D engine does not filter, no memory).
+    // A mipmapped 2D texture of `levels` levels: level 0 of its block-linear chain (Texture::chain), its header the chain's.
+    // False: not one the raw path keeps (not a render target format, extended range, no memory).
     bool createMipTexture(uint32_t width, uint32_t height, uint32_t format, uint32_t levels, Texture &t);
     // The texture header of level `level` of mipmapped texture `t`'s chain alone, as NVK's view of that level (a pass into
     // the level fetches its color through it); 0: none
@@ -673,18 +666,6 @@ public:
     bool shared() const
     {
         return k_.shared();
-    }
-
-    // Whether mip chains are on: the 2D engine's self-test, run with the channel, made the chain the design expects (fx_mip.h)
-    bool chainsOn() const
-    {
-        return chainsOn_;
-    }
-
-    // The same, the channel made first where it is not yet (a client's first mipmapped texture)
-    bool chains()
-    {
-        return ensureChannel() && chainsOn_;
     }
 
     // The memory no resource holds goes back to the kernel: empty chunks of the pool, of images and of buffers, and the kept
@@ -829,14 +810,14 @@ public:
         // color targets in rows the raw path rendered through a block-linear shadow, beside a block-linear one in their pass
         std::atomic<uint64_t> rtMixed{0};
         std::atomic<uint32_t> rtUnalignedPitch{0}, rtUnalignedVa{0};
-        // mip chains: made, chain bytes, generated (whole) and level-0 refreshes, copies out of a level
-        std::atomic<uint64_t> chains{0}, chainBytes{0}, chainGenerates{0}, chainRefreshes{0}, chainCopies{0};
+        // mip chains: made, chain bytes, generated, copies out of a level
+        std::atomic<uint64_t> chains{0}, chainBytes{0}, chainGenerates{0}, chainCopies{0};
         // write-combined buffers: live bytes, and the buffers that asked for one and got pool memory (the WC pool full)
         std::atomic<uint64_t> wcBytes{0}, wcFallbacks{0};
         // the copy engine's work encoded: launches and the bytes they write (copies, remaps, the pass prologue's shadow copies)
         std::atomic<uint64_t> ceOps{0}, ceBytes{0};
-        // passes into a chain level, and levels copied between a chain and its mirrors (out: for m2v; in: what m2v rendered)
-        std::atomic<uint64_t> levelPasses{0}, mirrorsOut{0}, mirrorsIn{0};
+        // passes into a chain level
+        std::atomic<uint64_t> levelPasses{0};
         // pack programs placed in the shader heap, and states not made because it was full
         std::atomic<uint64_t> programsPlaced{0}, heapFull{0};
         // framebuffer-fetch barriers encoded, and those left out where the draw's pixels meet none a color write reached
@@ -873,19 +854,6 @@ public:
     std::atomic<FetchBarrier> fetchBarrier{FetchBarrier::PixelShader};
     static const char *fetchBarrierName(FetchBarrier b);
 #endif
-
-    // The self-test's result (open), per sampling candidate (fx::sampling(i)): bytes off by more than 1 in the CPU's Tegra and
-    // Fermi views (~0u: not run); the one chains use (selfTestChosen, fx::kSamplings: none passed) and its view; the first
-    // candidate's detail in the Tegra view (what the documented convention gave)
-    uint32_t selfTestTegra[fx::kSamplings], selfTestFermi[fx::kSamplings];
-    uint32_t selfTestChosen = fx::kSamplings;
-    bool selfTestFermiView = false;
-    fx::SelfTestReport selfTestFirst;
-
-    fx::Sampling sampling() const
-    {
-        return sampling_;
-    }
 
 private:
     friend class CommandBuffer;
@@ -930,10 +898,17 @@ private:
     std::mutex lock_;
     Kernel k_;
     Pack pack_;
-    // heap_: the shader heap's GPU VA reservation and CPU range (bytes: their size), bound from its start (heapBound_) in parts
-    // as programs are placed
+    // heap_: the shader heap's GPU VA reservation (bytes: the program window), bound from its start (heapBound_) in parts of
+    // host memory as programs are placed
     Bo heap_, tic_, tsc_, root_, zero_, tickets_;
-    std::vector<Bo> heapParts_;
+
+    struct HeapPart {
+        uint64_t offset = 0, bytes = 0;  // in the heap
+        uint8_t *cpu = nullptr;
+        Bo bo;
+    };
+
+    std::vector<HeapPart> heapParts_;
     uint64_t heapBound_ = 0;
     Ring push_, upload_;
     // rings replaced by larger ones, freed once the GPU passed the seqno
@@ -945,6 +920,8 @@ private:
     std::mutex channelLock_;
     std::atomic<bool> channelReady_{false};
     bool channelFailed_ = false;
+    uint64_t channelRetryNs_ = 0;  // CLOCK_UPTIME_RAW: a refused channel is asked for again from then on
+    static constexpr uint64_t kChannelRetryNs = 1000000000;
     std::string channelError_;
     // The channel died and the one made since has no context yet (reopen gave up before the context's Exec): begin() makes it
     // again before it gives out a command buffer. channel_ is 0 while the kernel holds none of this device's.
@@ -962,6 +939,7 @@ private:
     uint32_t ctWrite_[8] = {};  // SET_CT_WRITE(i) as the baseline leaves it
     bool place(uint32_t prog, uint32_t &program, uint64_t &data);
     bool heapGrow(uint64_t end);
+    const HeapPart *heapPartAt(uint64_t at) const;
     bool heapPlace(const uint8_t *bytes, uint32_t size, uint64_t &offset);
     void build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs, const PlacedProgram &fs,
                const uint32_t *blob, const char *keyString, bool caTransform);
@@ -1020,8 +998,6 @@ private:
     std::vector<Chunk> wcChunks_;
     bool wcAlloc(uint64_t bytes, Span &s);
     void wcFree(Span &s);
-    bool chainsOn_ = false;
-    fx::Sampling sampling_;  // the self-test's winner: how every chain's scaled steps sample
 
     bool blAlloc(uint64_t bytes, uint64_t align, Span &s)
     {
@@ -1036,7 +1012,6 @@ private:
     // a span of chunks bound with PTE kind `kind` (block-linear images), lock_ held
     bool tiledAlloc(std::vector<Chunk> &chunks, uint32_t kind, uint64_t bytes, uint64_t align, Span &s);
     void tiledFree(std::vector<Chunk> &chunks, Span &s);
-    void selfTest();
 
     struct Backing {
         Texture texture;
@@ -1084,6 +1059,7 @@ private:
     uint8_t *alloc(Ring &r, uint32_t bytes, uint32_t align, uint64_t &va);
     void retire(Ring &r, uint32_t seqno);
     uint32_t allocTic();
+    void freeTic(uint32_t tic);  // lock_ held
     void writeTic(const Texture &t);
     bool poolAlloc(uint64_t bytes, Span &s);
     void poolFree(Span &s);

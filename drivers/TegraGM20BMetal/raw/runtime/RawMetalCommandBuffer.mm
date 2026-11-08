@@ -100,6 +100,23 @@ static void giveRecording(RMCommandBuffer *b)
     [self takeReason:reason why:why];
 }
 
+- (void)useResidencySet:(id)set
+{
+    _residency.add(&set, 1);
+}
+
+// (QuartzCore 27, per command buffer: the kernel charges GPU time to the task that submits it, this one)
+- (void)setResponsibleTaskIDs:(const uint32_t *)taskIDs count:(uint32_t)count
+{
+    (void)taskIDs;
+    (void)count;
+}
+
+- (void)useResidencySets:(const __unsafe_unretained id *)sets count:(NSUInteger)count
+{
+    _residency.add(sets, count);
+}
+
 - (id)rmTwin
 {
     return nil;
@@ -292,8 +309,9 @@ static void giveRecording(RMCommandBuffer *b)
 - (void)waitUntilScheduled
 {
     std::unique_lock<std::mutex> l(_lock);
-    if (!_committed)
+    if (!_committed || _scheduledDone)
         return;
+    const BlockedWait blocked(gRM->stats.scheduledWaits, gRM->stats.scheduledWaitUs);
     if (_changed.wait_for(l, kHeldGrace, [&] {
             return _scheduledDone;
         }))
@@ -321,8 +339,9 @@ static void giveRecording(RMCommandBuffer *b)
 - (void)waitUntilCompleted
 {
     std::unique_lock<std::mutex> l(_lock);
-    if (!_committed)
+    if (!_committed || _completedDone)
         return;
+    const BlockedWait blocked(gRM->stats.completedWaits, gRM->stats.completedWaitUs);
     if (!_changed.wait_for(l, kWaitLimit, [&] {
             return _completedDone;
         }))
@@ -445,6 +464,26 @@ static void giveRecording(RMCommandBuffer *b)
 
 - (void)insertDebugCaptureBoundary
 {}
+
+- (void)addResidencySet:(id)set
+{
+    _residency.add(&set, 1);
+}
+
+- (void)addResidencySets:(const __unsafe_unretained id *)sets count:(NSUInteger)count
+{
+    _residency.add(sets, count);
+}
+
+- (void)removeResidencySet:(id)set
+{
+    _residency.remove(&set, 1);
+}
+
+- (void)removeResidencySets:(const __unsafe_unretained id *)sets count:(NSUInteger)count
+{
+    _residency.remove(sets, count);
+}
 
 - (void)setCompletionQueue:(dispatch_queue_t)queue
 {

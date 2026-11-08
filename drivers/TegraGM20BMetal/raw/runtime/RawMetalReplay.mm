@@ -4,6 +4,17 @@
 // ---- object mapping for the m2v replay ----
 #if SWITCH_FRAME_TIMELINE
 thread_local uint64_t tTwinTicks;
+
+void countTwin(id object, uint64_t ticks)
+{
+    Stats &s = gRM->stats;
+    if ([object isKindOfClass:[RMTexture class]]) {
+        s.twinTextures++;
+        s.twinTextureUs += ticks * 1000 / switch_frame::ticksPerMs();
+    } else {
+        ([object isKindOfClass:[RMBuffer class]] ? s.twinBuffers : s.twinOthers)++;
+    }
+}
 #endif
 
 static MTLRenderPassDescriptor *twinPass(MTLRenderPassDescriptor *pass)
@@ -24,40 +35,9 @@ static MTLRenderPassDescriptor *twinPass(MTLRenderPassDescriptor *pass)
 // An invocation recorded on a facade encoder or command buffer, sent to the m2v one: object arguments become their twins.
 static void replayInvocation(NSInvocation *inv, id target)
 {
-    NSMethodSignature *sig = inv.methodSignature;
-    for (NSUInteger i = 2; i < sig.numberOfArguments; i++) {
-        const char *t = raw::argumentType(sig, i);
-        if (*t == '@') {
-            __unsafe_unretained id arg = nil;
-            [inv getArgument:&arg atIndex:i];
-            id mapped = twinOf(arg);
-            if (mapped != arg) {
-                __unsafe_unretained id m = mapped;
-                [inv setArgument:&m atIndex:i];
-            }
-        } else if (t[0] == '^' && t[1] == '@') {
-            // an array of objects (set...s:withRange:, useResources:count:), the invocation's own copy
-            // (keepPointedArguments): mapped in place over another copy the invocation keeps
-            id __unsafe_unretained *array = nullptr;
-            [inv getArgument:&array atIndex:i];
-            const NSUInteger count = raw::pointedElements(inv, i);
-            if (array && count) {
-                NSMutableData *copy = [NSMutableData dataWithLength:count * sizeof(id)];
-                id __unsafe_unretained *out = (id __unsafe_unretained *)copy.mutableBytes;
-                NSMutableArray *keep = [NSMutableArray array];
-                for (NSUInteger k = 0; k < count; k++) {
-                    id m = twinOf(array[k]);
-                    if (m)
-                        [keep addObject:m];
-                    out[k] = m;
-                }
-                objc_setAssociatedObject(inv, (__bridge const void *)copy, @[ copy, keep ], OBJC_ASSOCIATION_RETAIN);
-                id __unsafe_unretained *p = out;
-                [inv setArgument:&p atIndex:i];
-            }
-        }
-    }
-    [inv invokeWithTarget:target];
+    raw::invokeMapped(inv, target, [](id o) {
+        return twinOf(o);
+    });
 }
 
 // The tape into an m2v command buffer, every object its twin; the CPU lines of the buffers it names cleaned first.
@@ -76,6 +56,8 @@ id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool pa
     if (!m)
         return nil;
     m.label = cb.label;
+    cb->_queue->_residency.useOn(m);
+    cb->_residency.useOn(m);
     id enc = nil;
     // What the CPU wrote that this work reads, cleaned to memory before m2v's submission (m2v cleans an import only when it
     // makes it): the ranges a draw of a pack state reads, as raw::RenderEncoder::prepare cleans them (its uniform windows, its
@@ -135,7 +117,6 @@ id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool pa
                       uint64_t(count) * r.vertexStride);
     };
     std::set<void *> updated;  // fences this part updated
-    MirrorWrites toMirrors;    // later levels of mipmapped textures the open encoder writes (mipWritten)
     for (size_t at = from; at < to; at++) {
         const Cmd &c = cb->_tape[at];
         if (isKernelCommand(c.op)) {
@@ -144,37 +125,20 @@ id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool pa
         }
         switch (c.op) {
         case OpRender: {
-            MTLRenderPassDescriptor *pass = (__bridge MTLRenderPassDescriptor *)c.obj, *twin = twinPass(pass);
-            if (cb->_chains) {
-                mipSync(cb, m, at, to);
-                for (unsigned j = 0; j < 8; j++) {  // a mipmapped attachment: level 0 in place, another level m2v's own
-                    MTLRenderPassColorAttachmentDescriptor *a = pass.colorAttachments[j];
-                    if (!chained((__bridge void *)a.texture))
-                        continue;
-                    if (a.level)
-                        twin.colorAttachments[j].texture = [(RMTexture *)a.texture rmMipTwin];
-                    mipWritten((__bridge void *)a.texture, a.level, &toMirrors);
-                }
-            }
-            enc = [m renderCommandEncoderWithDescriptor:twin];
+            enc = [m renderCommandEncoderWithDescriptor:twinPass((__bridge MTLRenderPassDescriptor *)c.obj)];
             memset(bound, 0, sizeof bound);
             pipe = nil;
             break;
         }
         case OpBlit:
-            if (cb->_chains)
-                mipSync(cb, m, at, to);
             enc = [m blitCommandEncoder];
             break;
         case OpCompute:
-            if (cb->_chains)
-                mipSync(cb, m, at, to);
             enc = [m computeCommandEncoderWithDispatchType:MTLDispatchType(c.a)];
             break;
         case OpEnd:
             [enc endEncoding];
             enc = nil;
-            mirrorWrites(m, toMirrors);
             break;
         case OpPipeline:
             pipe = [(__bridge id)c.obj isKindOfClass:[RMPipeline class]] ? (__bridge RMPipeline *)c.obj : nil;
@@ -210,9 +174,9 @@ id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool pa
             break;
         case OpTexture:
             if (c.stage == 1)
-                [enc setVertexTexture:mipTwinOf(c.obj, false) atIndex:c.index];
+                [enc setVertexTexture:twinOf((__bridge id)c.obj) atIndex:c.index];
             else
-                [enc setFragmentTexture:mipTwinOf(c.obj, false) atIndex:c.index];
+                [enc setFragmentTexture:twinOf((__bridge id)c.obj) atIndex:c.index];
             break;
         case OpSampler:
             if (c.stage == 1)
@@ -278,13 +242,12 @@ id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool pa
             break;
         case OpCopyTexture: {
             const uint64_t x = c.x, o = extra(cb, x + 10);
-            mipWritten(c.obj2, extra(cb, x + 9), &toMirrors);
-            [enc copyFromTexture:mipTwinOf(c.obj, !extra(cb, x + 1))
+            [enc copyFromTexture:twinOf((__bridge id)c.obj)
                       sourceSlice:extra(cb, x)
                       sourceLevel:extra(cb, x + 1)
                      sourceOrigin:MTLOriginMake(extra(cb, x + 2), extra(cb, x + 3), extra(cb, x + 4))
                        sourceSize:MTLSizeMake(extra(cb, x + 5), extra(cb, x + 6), extra(cb, x + 7))
-                        toTexture:mipTwinOf(c.obj2, !extra(cb, x + 9))
+                        toTexture:twinOf((__bridge id)c.obj2)
                  destinationSlice:extra(cb, x + 8)
                  destinationLevel:extra(cb, x + 9)
                 destinationOrigin:MTLOriginMake(uint32_t(o), o >> 32, extra(cb, x + 11))];
@@ -312,13 +275,12 @@ id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool pa
                 else
                     use(c.obj);
             }
-            mipWritten(c.obj2, extra(cb, x + 7), &toMirrors);
             [enc copyFromBuffer:twinOf((__bridge id)c.obj)
                        sourceOffset:extra(cb, x)
                   sourceBytesPerRow:extra(cb, x + 1)
                 sourceBytesPerImage:extra(cb, x + 2)
                          sourceSize:MTLSizeMake(extra(cb, x + 3), extra(cb, x + 4), extra(cb, x + 5))
-                          toTexture:mipTwinOf(c.obj2, !extra(cb, x + 7))
+                          toTexture:twinOf((__bridge id)c.obj2)
                    destinationSlice:extra(cb, x + 6)
                    destinationLevel:extra(cb, x + 7)
                   destinationOrigin:MTLOriginMake(uint32_t(o), o >> 32, extra(cb, x + 9))];
@@ -336,7 +298,7 @@ id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool pa
                 else
                     use(c.obj2);
             }
-            [enc copyFromTexture:mipTwinOf(c.obj, !extra(cb, x + 1))
+            [enc copyFromTexture:twinOf((__bridge id)c.obj)
                              sourceSlice:extra(cb, x)
                              sourceLevel:extra(cb, x + 1)
                             sourceOrigin:MTLOriginMake(uint32_t(o), o >> 32, extra(cb, x + 3))
@@ -348,29 +310,14 @@ id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool pa
             break;
         }
         case OpMipmaps:
-            if (chained(
-                    c.obj)) {  // m2v's texture of every level (mipSync made its level 0 current): the chain's are behind it
-                RMTexture *t = (__bridge RMTexture *)c.obj;
-                [enc generateMipmapsForTexture:[t rmMipTwin]];
-                t->_mipLevels = true;
-                t->_raw.chain->levelsFresh = false;
-                t->_raw.chain->mirrorLevels = 0;  // every level regenerated: no mirror is newer
-            } else {
-                [enc generateMipmapsForTexture:twinOf((__bridge id)c.obj)];
-            }
+            [enc generateMipmapsForTexture:twinOf((__bridge id)c.obj)];
             break;
         case OpInvocation: {
             NSInvocation *inv = (__bridge NSInvocation *)c.obj;
-            for (NSUInteger i = 2; i < inv.methodSignature.numberOfArguments;
-                 i++) {  // buffers it names get cleaned too
-                const char *t = [inv.methodSignature getArgumentTypeAtIndex:i];
-                if (*t != '@')
-                    continue;
-                __unsafe_unretained id arg = nil;
-                [inv getArgument:&arg atIndex:i];
-                if ([arg isKindOfClass:[RMBuffer class]])
-                    buffers.insert((RMBuffer *)arg);
-            }
+            raw::forEachObject(inv, [&](id o) {  // buffers it names get cleaned too
+                if ([o isKindOfClass:[RMBuffer class]])
+                    buffers.insert((RMBuffer *)o);
+            });
             replayInvocation(inv, c.stage == 0xff ? m : enc);
             break;
         }
@@ -459,5 +406,12 @@ id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool pa
     __asm__ volatile("dsb sy" ::: "memory");
 #endif
     gRM->stats.replayClean += cleaned;
+#if SWITCH_FRAME_TIMELINE
+    gRM->stats.replayDraws +=
+        uint64_t(std::count_if(cb->_tape.begin() + from, cb->_tape.begin() + to, [](const Cmd &c) {
+            return c.op == OpDraw || c.op == OpDrawIndexed;
+        }));
+#endif
+    noteSurfaceWrites(cb, from, to);
     return m;
 }

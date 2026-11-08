@@ -14,17 +14,17 @@ static void markDirty(void *o)
         ((RMTexture *)object)->_gpuDirty = true;
 }
 
-static void markWritten(RMCommandBuffer *cb)
+void forEachWritten(RMCommandBuffer *cb, size_t from, size_t to, void (*written)(void *))
 {
     bool compute = false;
-    for (const Cmd &c : cb->_tape) {
+    for (size_t at = from; at < to; at++) {
+        const Cmd &c = cb->_tape[at];
         switch (c.op) {
         case OpRender: {
             MTLRenderPassDescriptor *pass = (__bridge MTLRenderPassDescriptor *)c.obj;
             for (unsigned j = 0; j < 8; j++)
-                if (RMTexture *t = (RMTexture *)pass.colorAttachments[j].texture)
-                    if ([t isKindOfClass:[RMTexture class]])
-                        t->_gpuDirty = true;
+                if (id<MTLTexture> t = pass.colorAttachments[j].texture)
+                    written((__bridge void *)t);
             break;
         }
         case OpCompute:
@@ -39,32 +39,26 @@ static void markWritten(RMCommandBuffer *cb)
         case OpCopyTexture:
         case OpCopyBufferToTexture:
         case OpMipmaps:
-            markDirty(c.op == OpMipmaps ? c.obj : c.obj2);
+            written(c.op == OpMipmaps ? c.obj : c.obj2);
             break;
         case OpCopyBuffer:
         case OpCopyTextureToBuffer:
-            markDirty(c.obj2);
+            written(c.obj2);
             break;
         case OpBuffer:
         case OpTexture:
             if (compute)
-                markDirty(c.obj);
+                written(c.obj);
             break;
         case OpKernelBuffer:
         case OpKernelTexture:
-            markDirty(c.obj);
+            written(c.obj);
             break;
-        case OpInvocation: {  // compute and other recorded calls: every buffer and texture they name
-            NSInvocation *inv = (__bridge NSInvocation *)c.obj;
-            for (NSUInteger i = 2; i < inv.methodSignature.numberOfArguments; i++) {
-                if (*[inv.methodSignature getArgumentTypeAtIndex:i] != '@')
-                    continue;
-                __unsafe_unretained id arg = nil;
-                [inv getArgument:&arg atIndex:i];
-                markDirty((__bridge void *)arg);
-            }
+        case OpInvocation:  // compute and other recorded calls: every buffer and texture they name
+            raw::forEachObject((__bridge NSInvocation *)c.obj, [written](id o) {
+                written((__bridge void *)o);
+            });
             break;
-        }
         default:
             break;
         }
@@ -90,21 +84,20 @@ void scheduled(RMCommandBuffer *cb)
         // the handler queue
         if (!handlers.count)
             cb->_scheduledDone = true;
+        else  // queued under the lock: a finish() that finds them not done queues its handlers behind them
+            dispatch_async(gRM->handlers, ^{
+                for (MTLCommandBufferHandler h in handlers)
+                    h((id<MTLCommandBuffer>)cb);
+                {
+                    std::lock_guard<std::mutex> g(cb->_lock);
+                    cb->_scheduledDone = true;
+                    // a handler added meanwhile ran at once (addScheduledHandler)
+                }
+                cb->_changed.notify_all();
+            });
     }
-    if (!handlers.count) {
+    if (!handlers.count)
         cb->_changed.notify_all();
-        return;
-    }
-    dispatch_async(gRM->handlers, ^{
-        for (MTLCommandBufferHandler h in handlers)
-            h((id<MTLCommandBuffer>)cb);
-        {
-            std::lock_guard<std::mutex> l(cb->_lock);
-            cb->_scheduledDone = true;
-            // a handler added meanwhile ran at once (addScheduledHandler)
-        }
-        cb->_changed.notify_all();
-    });
 }
 
 // Completed: CPU-signalled events, written resources marked, handlers (on the queue's completion queue when it has one), the
@@ -117,23 +110,40 @@ void finish(RMCommandBuffer *cb, NSError *error)
 {
     gRM->stats.finished.fetch_add(1, std::memory_order_relaxed);
     unhold(cb);
-    markWritten(cb);
+    forEachWritten(cb, 0, cb->_tape.size(), markDirty);
     if (!cb->_m2v)
         for (const Cmd &c : cb->_tape)
             if (c.op == OpSignalEvent)
                 [(id<MTLSharedEvent>)(__bridge id)c.obj setSignaledValue:c.c];
-    NSArray *handlers;
+    // A completed command buffer is scheduled. Its scheduled handlers scheduled() never took run here, before the completed ones:
+    // one whose fence passed before its submitting thread's scheduled() (the completion thread wakes on work it was just handed),
+    // one that never reached a GPU. Ones scheduled() already queued run first, the completed ones queued behind them on the
+    // handler queue.
+    NSArray *handlers, *scheduledHandlers = nil;
+    bool behindScheduled = false;
     {
         std::lock_guard<std::mutex> l(cb->_lock);
+        if (!cb->_scheduledSent) {
+            scheduledHandlers = cb->_scheduledHandlers;
+            cb->_scheduledHandlers = nil;
+            cb->_gpuStart = hostSeconds();
+#if SWITCH_FRAME_TIMELINE
+            gRM->stats.scheduledByFinish++;
+#endif
+        } else {
+            behindScheduled = !cb->_scheduledDone;
+        }
         cb->_status = error ? MTLCommandBufferStatusError : MTLCommandBufferStatusCompleted;
         cb->_error = error;
         cb->_gpuEnd = hostSeconds();
         handlers = cb->_completedHandlers;
         cb->_completedHandlers = nil;
         cb->_completedSent = true;
-        cb->_scheduledSent = true;  // a completed command buffer is scheduled; its own scheduled() runs no more
+        cb->_scheduledSent = true;  // scheduled() runs no more
     }
     void (^run)(void) = ^{
+        for (MTLCommandBufferHandler h in scheduledHandlers)
+            h((id<MTLCommandBuffer>)cb);
         for (MTLCommandBufferHandler h in handlers)
             h((id<MTLCommandBuffer>)cb);
         {
@@ -151,7 +161,14 @@ void finish(RMCommandBuffer *cb, NSError *error)
 #endif
     };
     dispatch_queue_t q = cb->_queue ? cb->_queue->_completionQueue : nil;
-    if (q)
+    if (behindScheduled)
+        dispatch_async(gRM->handlers, ^{
+            if (q)
+                dispatch_async(q, run);
+            else
+                run();
+        });
+    else if (q)
         dispatch_async(q, run);
     else
         run();
