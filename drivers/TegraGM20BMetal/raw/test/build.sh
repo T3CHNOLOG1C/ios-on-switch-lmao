@@ -110,7 +110,7 @@ echo "built $OUT/selcheck"
 # selcover: every selector the kinds' system images send to a Metal object answered by the object the raw device hands out
 # (run: selcover <pack> <cache> <nvk dylib> <default.metallib> selgaps.txt <tree>/drivers/NativeMetal/abi/kinds/*.json)
 xcrun clang++ "${OBJC[@]}" -Wall -Wextra -x objective-c++ "$HERE/selcover.mm" "${FACADE[@]}" "$FRONT/NativeBridgeMetalFrontend.mm" \
-    -x c++ "$RAW/runtime/raw_gpu.cpp" "$RAW/fx/fx_mip.cpp" "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_alias.cpp" "$RAW/runtime/raw_pack.cpp" "$RAW/runtime/raw_ycbcr.cpp" "$RAW/runtime/raw_zeta.cpp" "$RAW/runtime/raw_comp.cpp" "$RAW/runtime/raw_completed.cpp" "${COMPLETION[@]}" "$TREE/kits/SwitchRefusal/SwitchRefusal.c" -x none "$BRIDGE" "${LIBS[@]}" \
+    -x c++ "$RAW/runtime/raw_gpu.cpp" "$RAW/fx/fx_mip.cpp" "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_alias.cpp" "$RAW/runtime/raw_pack.cpp" "$RAW/runtime/raw_ycbcr.cpp" "$RAW/runtime/raw_zeta.cpp" "$RAW/runtime/raw_comp.cpp" "$RAW/runtime/raw_compute.cpp" "$RAW/runtime/raw_completed.cpp" "${COMPLETION[@]}" "$TREE/kits/SwitchRefusal/SwitchRefusal.c" -x none "$BRIDGE" "${LIBS[@]}" \
     -o "$OUT/selcover" 2>&1 | grep -v "duplicate libraries" || true
 echo "built $OUT/selcover"
 # contractcheck: Metal contracts the facade keeps where the raw path cannot draw (build it with -fsanitize=address too)
