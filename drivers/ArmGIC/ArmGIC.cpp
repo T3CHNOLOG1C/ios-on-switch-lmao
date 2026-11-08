@@ -28,6 +28,7 @@
 #include <kern/clock.h>
 #include <kern/sched_prim.h>
 #include <libkern/OSAtomic.h>
+#include <string.h>
 #include <libkern/c++/OSArray.h>
 #include <libkern/c++/OSData.h>
 #include <libkern/c++/OSSymbol.h>
@@ -39,6 +40,7 @@
 // ArmCpu's GIC state (drivers/ArmCpu/ArmCpu.cpp): version, distributor/CPU interface enabled, and each logical
 // CPU's GICv2 target mask (its GICD_ITARGETSR0 byte), written once that CPU's interface is up.
 extern "C" volatile uint32_t armcpu_gic_version, armcpu_gic_ready, armcpu_gic_targets[8];
+extern "C" void armcpu_gic_cpu_describe(char *buffer, size_t size);
 
 namespace {
 // Distributor registers, byte offsets (IHI 0048B table 4-1).
@@ -572,7 +574,8 @@ void ArmGIC::causeVector(IOInterruptVectorNumber vectorNumber, IOInterruptVector
     OSSynchronizeIO();
 }
 
-// Distributor state of one SPI, and the Tegra LIC gate in front of it, for a driver's panic message.
+// Distributor state of one SPI, the Tegra LIC gate in front of it, the lowest SPI active anywhere and the calling
+// core's CPU interface, for a driver's panic message.
 void ArmGIC::describe(uint32_t intid, char *buffer, size_t size) const
 {
     if (intid < kFirstSpi || intid >= intids) {
@@ -588,6 +591,19 @@ void ArmGIC::describe(uint32_t intid, char *buffer, size_t size) const
              static_cast<int>(readBit(GICD_ISACTIVER, intid)), isEdge(intid) ? "edge" : "level",
              read8(GICD_IPRIORITYR + intid), read8(GICD_ITARGETSR + intid),
              licCovers(intid) ? static_cast<int>((licRead(licBank(intid), ICTLR_CPU_IER) >> (intid % 32)) & 1) : -1);
+    int active = -1;
+    for (uint32_t i = kFirstSpi; i < intids && active < 0; ++i) {
+        if (readBit(GICD_ISACTIVER, i)) {
+            active = static_cast<int>(i);
+        }
+    }
+    const size_t used = strnlen(buffer, size);
+    if (used + 1 >= size) {
+        return;
+    }
+    char cpu[96];
+    armcpu_gic_cpu_describe(cpu, sizeof(cpu));
+    snprintf(buffer + used, size - used, ", active %d, %s", active, cpu);
 }
 
 // System sleep (drivers/SwitchSuspend quiesce/active actions): boot CPU, interrupts off, the other cores off. The

@@ -4,6 +4,7 @@
 #include <IOKit/IOMemoryDescriptor.h>
 #include <libkern/c++/OSData.h>
 #include <libkern/c++/OSSymbol.h>
+#include <kern/cpu_number.h>
 #include <kern/sched_prim.h>
 #include <machine/machine_routines.h>
 #include <pexpert/pexpert.h>
@@ -1181,6 +1182,19 @@ void ArmCpu::interrupt()
             __asm__ volatile("msr icc_eoir1_el1, %0\nisb" ::"r"(id) : "memory");
         }
     }
+}
+
+// This core's GICv2 CPU interface, for a lost-interrupt panic (ArmGIC::describe). An SPI pending and enabled for this
+// core but held off while higher-priority interrupts still arrive is below its running priority: one this core
+// acknowledged and never ended.
+extern "C" void armcpu_gic_cpu_describe(char *buffer, size_t size)
+{
+    if (!gV2CpuIf) {
+        snprintf(buffer, size, "cpu%d: no GICv2 CPU interface", cpu_number());
+        return;
+    }
+    snprintf(buffer, size, "cpu%d rpr %#x hppir %#x apr %#x pmr %#x", cpu_number(), read32(gV2CpuIf, 0x14),
+             read32(gV2CpuIf, 0x18), read32(gV2CpuIf, 0xd0), read32(gV2CpuIf, 0x4));
 }
 
 void ArmCpu::signalCPU(IOCPU *target)
