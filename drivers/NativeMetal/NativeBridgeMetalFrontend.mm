@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <map>
 #include <mutex>
 #include <pthread.h>
 #include <string>
@@ -1993,11 +1994,11 @@ static NSData *functionBitcode(NBFunction *function)
 @interface NBComputePipeline : NBObject
 @property (nonatomic) NmbComputePipeline *handle;
 @property (nonatomic) std::string journalState;
-- (void)journalDispatch:(MTLSize)grid group:(MTLSize)group threads:(bool)threads;
+- (void)journalDispatch:(MTLSize)grid group:(MTLSize)group threads:(bool)threads memory:(const std::string &)memory;
 @end
 @implementation NBComputePipeline {
     std::mutex _dispatchLock;
-    std::vector<std::array<uint32_t, 7>> _dispatched;
+    std::vector<std::pair<std::array<uint32_t, 7>, std::string>> _dispatched;
 }
 
 - (void)dealloc
@@ -2005,7 +2006,7 @@ static NSData *functionBitcode(NBFunction *function)
     nmb_compute_pipeline_release(_handle);
 }
 
-- (void)journalDispatch:(MTLSize)grid group:(MTLSize)group threads:(bool)threads
+- (void)journalDispatch:(MTLSize)grid group:(MTLSize)group threads:(bool)threads memory:(const std::string &)memory
 {
     if (!journalOn() || _journalState.empty())
         return;
@@ -2016,14 +2017,15 @@ static NSData *functionBitcode(NBFunction *function)
         shape[3 + i] = g[i] ? (uint32_t)(n[i] % g[i]) : 0;
     {
         std::lock_guard<std::mutex> hold(_dispatchLock);
-        if (_dispatched.size() >= 16 || std::find(_dispatched.begin(), _dispatched.end(), shape) != _dispatched.end())
+        const auto seen = std::make_pair(shape, memory);
+        if (_dispatched.size() >= 16 || std::find(_dispatched.begin(), _dispatched.end(), seen) != _dispatched.end())
             return;
-        _dispatched.push_back(shape);
+        _dispatched.push_back(seen);
     }
     char head[128];
-    snprintf(head, sizeof head, "D ok=1 tg=%u,%u,%u edge=%u,%u,%u threads=%u | ", shape[0], shape[1], shape[2],
-             shape[3], shape[4], shape[5], shape[6]);
-    journal(head + _journalState);
+    snprintf(head, sizeof head, "D ok=1 tg=%u,%u,%u edge=%u,%u,%u threads=%u", shape[0], shape[1], shape[2], shape[3],
+             shape[4], shape[5], shape[6]);
+    journal(head + (memory.empty() ? std::string() : " tgmem=" + memory) + " | " + _journalState);
 }
 
 - (NSUInteger)maxTotalThreadsPerThreadgroup
@@ -2746,7 +2748,21 @@ static void waitForResource(id resource)
 @property (nonatomic) MTLDispatchType kind;
 @property (nonatomic, strong) NBComputePipeline *state;
 @end
-@implementation NBComputeEncoder
+@implementation NBComputeEncoder {
+    // setThreadgroupMemoryLength:'s lengths by index, rounded up to 16 as Metal takes them: a dispatch's D line names
+    // them (m2v compiles each into the kernel's program)
+    std::map<uint32_t, uint32_t> _threadgroupMemory;
+}
+
+// "<index>:<length>,..." of the lengths set (the raw pack's key, raw/runtime/raw_compute_key.h)
+- (std::string)threadgroupMemoryText
+{
+    std::string text;
+    for (const auto &[index, length] : _threadgroupMemory)
+        if (length)
+            text += (text.empty() ? "" : ",") + std::to_string(index) + ":" + std::to_string(length);
+    return text;
+}
 
 - (MTLDispatchType)dispatchType
 {
@@ -2806,6 +2822,8 @@ static void waitForResource(id resource)
 {
     [self check:nmb_compute_set_threadgroup_memory(self.handle, (uint32_t)n, (uint32_t)i)
            what:"setThreadgroupMemoryLength"];
+    if (journalOn())
+        _threadgroupMemory[(uint32_t)i] = (uint32_t)((n + 15) & ~NSUInteger(15));
 }
 
 - (void)dispatch:(MTLSize)size group:(MTLSize)group threads:(bool)threads
@@ -2816,7 +2834,7 @@ static void waitForResource(id resource)
     const uint64_t s[3] = {size.width, size.height, size.depth}, g[3] = {group.width, group.height, group.depth};
     [self check:nmb_compute_dispatch(self.handle, s, g, threads) what:"dispatch"];
     if (journalOn())
-        [self.state journalDispatch:size group:group threads:threads];
+        [self.state journalDispatch:size group:group threads:threads memory:[self threadgroupMemoryText]];
 }
 
 - (void)dispatchThreads:(MTLSize)t threadsPerThreadgroup:(MTLSize)g
@@ -2845,7 +2863,7 @@ static void waitForResource(id resource)
     [self check:nmb_compute_dispatch_indirect(self.handle, [(NBBuffer *)b handle], o, per)
            what:"dispatchThreadgroupsWithIndirectBuffer"];
     if (journalOn())
-        [self.state journalDispatch:MTLSizeMake(0, 0, 0) group:g threads:false];
+        [self.state journalDispatch:MTLSizeMake(0, 0, 0) group:g threads:false memory:[self threadgroupMemoryText]];
 }
 
 // SPI (MTLDispatchThreadsIndirectArguments: the grid, then the threadgroup).
