@@ -102,10 +102,13 @@ constexpr uint32_t kTicCount = 8192, kTscCount = 1024;
 constexpr uint32_t kEngines =
     TegraGM20BEngine3D | TegraGM20BEngineCompute | TegraGM20BEngineCopy | TegraGM20BEngine2D | TegraGM20BEngineM2MF;
 constexpr size_t kDedicatedSpares = 2;
-// The shader heap: the programs of the states a process uses, placed at first use (Device::place); the pack holds MBs of
-// programs, of which the render server uses a few hundred. Bound in steps as they are placed, with room after the last one
-// for the GPU's instruction prefetch past a program's end.
-constexpr uint64_t kHeapCap = 8 << 20, kHeapStep = 256 << 10, kHeapSlack = 0x1000;
+// The shader heap: the programs of the states a process uses, placed at first use (Device::place); the pack holds tens of MiB
+// of programs, of which a process uses a few hundred. Its GPU VA is the whole program window: SET_PIPELINE_PROGRAM is a 32-bit
+// offset from SET_PROGRAM_REGION, so every program lies in the 4 GiB after it (NVK's contiguous shader arena before Volta is
+// that window too). Only VA is held; parts of host memory are bound in it as programs are placed, with room after the last
+// one for the GPU's instruction prefetch past a program's end. The render server binds kHeapAtOpen at its start: what Core
+// Animation's states place in their first frames (17's journal: 1.13 MiB).
+constexpr uint64_t kProgramWindow = 1ull << 32, kHeapStep = 256 << 10, kHeapSlack = 0x1000, kHeapAtOpen = 2 << 20;
 // INVALIDATE_SHADER_CACHES_NO_WFI (cla097.h): INSTRUCTION bit 0, CONSTANT bit 12
 constexpr uint32_t kInvalidateInstruction = 1u << 0, kInvalidateConstant = 1u << 12;
 constexpr uint32_t kMaxSegments = TegraGM20BMaxPushes;
@@ -336,19 +339,17 @@ bool Device::open(const char *packPath, uint64_t stack, std::string &err, Role r
 // which textures, samplers and states need before any submission. The render server's channel, heap and first chunks too.
 bool Device::init(std::string &err)
 {
-    vm_address_t heapCpu = 0;
     if (!k_.alloc(kTicCount * 32, true, tic_) || !k_.alloc(kTscCount * 32, true, tsc_) ||
         !k_.alloc(0x1000, true, root_) || !k_.alloc(0x10000, true, zero_) || !k_.alloc(0x1000, true, tickets_)) {
         err = k_.error();
         return false;
     }
-    heap_.bytes = kHeapCap;
-    heap_.va = heap_.vaBase = k_.reserveVa(kHeapCap);
-    if (!heap_.va || vm_allocate(mach_task_self(), &heapCpu, kHeapCap, VM_FLAGS_ANYWHERE) != KERN_SUCCESS) {
-        err = "no room for the shader heap";
+    heap_.bytes = kProgramWindow;
+    heap_.va = heap_.vaBase = k_.reserveVa(kProgramWindow);
+    if (!heap_.va) {
+        err = "no GPU VA for the shader heap's program window";
         return false;
     }
-    heap_.cpu = reinterpret_cast<uint8_t *>(heapCpu);
     memset(tic_.cpu, 0, tic_.bytes);
     memset(tsc_.cpu, 0, tsc_.bytes);
     memset(root_.cpu, 0, root_.bytes);
@@ -390,11 +391,11 @@ bool Device::init(std::string &err)
         err = channelError_;
         return false;
     }
-    // at the render server's start, not under its first frames: the heap bound for every program of the pack, the mip chains'
-    // first chunk and the first pool chunk
+    // at the render server's start, not under its first frames: the heap's first part, the mip chains' first chunk and the
+    // first pool chunk
     {
         std::lock_guard<std::mutex> l(lock_);
-        heapGrow(std::min<uint64_t>(pack_.bytes(PackHeap) + kHeapSlack, kHeapCap));
+        heapGrow(std::min<uint64_t>(pack_.bytes(PackHeap) + kHeapSlack, kHeapAtOpen));
         if (chainsOn_) {
             Span first;
             if (blAlloc(1, 0, first))
@@ -478,39 +479,58 @@ bool Device::place(uint32_t prog, uint32_t &program, uint64_t &data)
     return true;
 }
 
-// lock_ held: the heap bound from its start through `end`: host pages of its CPU range imported and bound at the reservation's
-// VAs, in steps. False: past the reservation, or the kernel refused a part.
+// lock_ held: the heap bound from its start through `end`, the range past what is bound as one more part of host memory imported
+// and bound at the window's VAs. False: past the window, or no memory or the kernel refused the part.
 bool Device::heapGrow(uint64_t end)
 {
+    if (end <= heapBound_)
+        return true;
     if (end > heap_.bytes)
         return false;
-    while (heapBound_ < end) {
-        const uint64_t step = std::min(heap_.bytes - heapBound_, (end - heapBound_ + kHeapStep - 1) & ~(kHeapStep - 1));
-        Bo part;
-        uint8_t *cpu = heap_.cpu + heapBound_;
-        if (!k_.importPages(cpu, step, part, 0, true) ||
-            !k_.bindImportAt(cpu, part, heap_.va + heapBound_, kPteKindPitch))
-            return false;
-        heapParts_.push_back(part);
-        heapBound_ += step;
+    HeapPart part;
+    part.offset = heapBound_;
+    part.bytes = std::min(heap_.bytes - heapBound_, (end - heapBound_ + kHeapStep - 1) & ~(kHeapStep - 1));
+    vm_address_t cpu = 0;
+    if (vm_allocate(mach_task_self(), &cpu, part.bytes, VM_FLAGS_ANYWHERE) != KERN_SUCCESS)
+        return false;
+    part.cpu = reinterpret_cast<uint8_t *>(cpu);
+    if (!k_.importPages(part.cpu, part.bytes, part.bo, 0, true) ||
+        !k_.bindImportAt(part.cpu, part.bo, heap_.va + part.offset, kPteKindPitch)) {
+        vm_deallocate(mach_task_self(), cpu, part.bytes);
+        return false;
     }
+    heapParts_.push_back(part);
+    heapBound_ += part.bytes;
     return true;
+}
+
+// lock_ held: the bound part heap offset `at` lies in, null past every part
+const Device::HeapPart *Device::heapPartAt(uint64_t at) const
+{
+    for (auto it = heapParts_.rbegin(); it != heapParts_.rend(); ++it)
+        if (at >= it->offset)
+            return at < it->offset + it->bytes ? &*it : nullptr;
+    return nullptr;
 }
 
 // lock_ held: a program slot of `size` bytes at the heap's end, its offset in `offset`, with the prefetch slack after it bound.
 // A slot starts 256-aligned as NVK's uploads do: its code at +0x80 and its shader data at a 256-aligned offset in it, while the
-// slot before may end anywhere after its shader data. The heap is cached host memory: what the CPU copies there is cleaned to
-// memory before the GPU can read it. False: no room.
+// slot before may end anywhere after its shader data. Parts are apart in host memory, so a slot lies in one part: one that
+// would cross a part's end starts at the next part. The heap is cached host memory: what the CPU copies there is cleaned to
+// memory before the GPU can read it. False: no room in the window.
 bool Device::heapPlace(const uint8_t *bytes, uint32_t size, uint64_t &offset)
 {
-    const uint64_t at = (heapPlaced_ + 0xFF) & ~uint64_t(0xFF);
-    const uint64_t end = at + size;
-    if (!heapGrow(end + kHeapSlack))
+    uint64_t at = (heapPlaced_ + 0xFF) & ~uint64_t(0xFF);
+    for (const HeapPart *p = heapPartAt(at); p && at + size > p->offset + p->bytes; p = heapPartAt(at))
+        at = p->offset + p->bytes;
+    if (!heapGrow(at + size + kHeapSlack))
         return false;
-    memcpy(heap_.cpu + at, bytes, size);
-    cleanToMemory(heap_.cpu + at, size);
+    const HeapPart *p = heapPartAt(at);
+    uint8_t *cpu = p->cpu + (at - p->offset);
+    memcpy(cpu, bytes, size);
+    cleanToMemory(cpu, size);
     offset = at;
-    heapPlaced_ = end;
+    heapPlaced_ = at + size;
     return true;
 }
 
