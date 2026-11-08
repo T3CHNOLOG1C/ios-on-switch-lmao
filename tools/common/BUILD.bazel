@@ -1,0 +1,57 @@
+# The helpers every tool shares, one module per concern, each the one implementation of its pattern.
+load("@rules_python//python:py_library.bzl", "py_library")
+load("@rules_python//python:py_test.bzl", "py_test")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+py_library(
+    name = "hashing",
+    srcs = ["hashing.py"],
+    imports = ["../.."],
+)
+
+py_test(
+    name = "hashing_test",
+    srcs = ["hashing_test.py"],
+    deps = [":hashing"],
+)
+
+py_library(
+    name = "paths",
+    srcs = ["paths.py"],
+    imports = ["../.."],
+    deps = ["@rules_python//python/runfiles"],
+)
+
+py_test(
+    name = "paths_test",
+    srcs = ["paths_test.py"],
+    deps = [":paths"],
+)
+
+py_library(
+    name = "sudo",
+    srcs = ["sudo.py"],
+    imports = ["../.."],
+)
+
+py_test(
+    name = "sudo_test",
+    srcs = ["sudo_test.py"],
+    deps = [":sudo"],
+)
+
+py_library(
+    name = "files",
+    srcs = ["files.py"],
+    imports = ["../.."],
+)
+
+py_test(
+    name = "files_test",
+    srcs = ["files_test.py"],
+    deps = [":files"],
+)

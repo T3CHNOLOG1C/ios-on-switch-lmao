@@ -32,6 +32,7 @@ from typing import NoReturn
 
 if __package__ in (None, ''):
     sys.path.insert(0, str(Path(os.path.abspath(__file__)).parents[2]))
+from tools.common import paths, sudo
 from tools.install import (
     apfs,
     card as cards,
@@ -43,32 +44,14 @@ from tools.install import (
     target as targets,
 )
 
-try:
-    from python.runfiles import runfiles
-except ImportError:
-    runfiles = None
-
 COPY_CHUNK = composer.COPY_CHUNK
 SEEK_HOLE, SEEK_DATA = getattr(os, 'SEEK_HOLE', 3), getattr(os, 'SEEK_DATA', 4)
 
 
-def default_log() -> Path:
-    stamp = time.strftime('%Y%m%d-%H%M%S')
-    return Path.home() / f'Library/Logs/switch-ios-install/install-{stamp}.log'
-
-
 def resolve_inputs(args: argparse.Namespace) -> None:
     """Runfiles paths (from `bazel run`) to absolute paths, so a sudo re-exec needs no Bazel environment."""
-    locate = runfiles.Create() if runfiles else None
     for name in ('spec', 'ipsw', 'os_dmg', 'system_cryptex', 'app_cryptex', 'boot_package'):
-        value = getattr(args, name)
-        if value and not os.path.isabs(value) and locate:
-            located = locate.Rlocation(value)
-            if located:
-                value = located
-        if value:
-            value = os.path.abspath(value)
-        setattr(args, name, value)
+        setattr(args, name, paths.located(getattr(args, name)))
 
 
 class Installer:
@@ -148,11 +131,13 @@ class Installer:
         return Path(self.args.scratch or (Path.home() / 'Library/Caches/switch-ios-install'))
 
     def compose(self) -> tuple[Path, int, int]:
-        scratch = self.scratch_dir()
-        scratch.mkdir(parents=True, exist_ok=True)
-        image = scratch / 'compose.img'
+        image = sudo.user_directory(self.scratch_dir()) / 'compose.img'
         self.log("compose: attaching the IPSW's OS image", self.args.os_dmg)
-        offset, os_bytes = composer.compose(image, self.args.os_dmg, self.card.target.bytes, self.spec, self.log)
+        try:
+            offset, os_bytes = composer.compose(image, self.args.os_dmg, self.card.target.bytes, self.spec, self.log)
+        finally:
+            if image.exists():
+                sudo.give_back(image)
         return image, offset, os_bytes
 
     def write(self, image: Path, part_offset: int, os_bytes: int) -> None:
@@ -391,22 +376,8 @@ class Installer:
         return 0
 
 
-def confirm(args: argparse.Namespace, card_disk: str) -> None:
-    if args.confirm:
-        if args.confirm != card_disk:
-            raise cards.RefusedError(f'--confirm={args.confirm} does not name the target {card_disk}')
-        return
-    if not sys.stdin.isatty():
-        raise cards.RefusedError(f'type-to-confirm needs a terminal (or pass --confirm={card_disk})')
-    answer = input(f"This rewrites {card_disk}'s userdata partition. Type {card_disk} to continue: ")
-    if answer.strip() != card_disk:
-        raise cards.RefusedError('not confirmed')
-    args.confirm = card_disk
-
-
 def reexec_as_root(args: argparse.Namespace, argv: list[str]) -> NoReturn:
     """After confirmation: the same command under sudo, with absolute input paths and the confirmation."""
-    command = ['sudo', '--', sys.executable, os.path.abspath(__file__)]
     passthrough = [a for a in argv if not a.startswith('--confirm')]
     for name in ('spec', 'ipsw', 'os_dmg', 'system_cryptex', 'app_cryptex', 'boot_package', 'scratch', 'log'):
         value = getattr(args, name)
@@ -414,9 +385,7 @@ def reexec_as_root(args: argparse.Namespace, argv: list[str]) -> NoReturn:
         passthrough = [a for a in passthrough if not a.startswith(flag + '=')]
         if value:
             passthrough.append(f'{flag}={value}')
-    command += [*passthrough, f'--confirm={args.confirm}']
-    print('running under sudo:', ' '.join(command), flush=True)
-    os.execvp('sudo', command)
+    sudo.rerun(__file__, [*passthrough, f'--confirm={args.confirm}'])
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -449,7 +418,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--boot-package')
     args = parser.parse_args(argv)
     resolve_inputs(args)
-    args.log = args.log or str(default_log())
+    args.log = args.log or str(paths.run_log('install', 'switch-ios-install'))
     log = host.Log(args.log)
     try:
         host.check_tools(log)
@@ -458,7 +427,7 @@ def main(argv: list[str] | None = None) -> int:
             card = cards.resolve(args.disk)
             if args.unprivileged_test and not card.image:
                 raise cards.RefusedError('--unprivileged-test is only for disk images')
-            confirm(args, card.disk)
+            cards.confirm(args, card.disk, f"This rewrites {card.disk}'s userdata partition.")
             if os.geteuid() != 0 and not args.unprivileged_test:
                 args.scratch = str(installer.scratch_dir())
                 reexec_as_root(args, argv)

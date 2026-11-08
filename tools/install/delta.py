@@ -9,7 +9,8 @@ import json
 import os
 from pathlib import Path
 
-from tools.install import card as cards, host, progress
+from tools.common import hashing
+from tools.install import host, progress
 
 COMPRESSED = 0x20  # UF_COMPRESSED: decmpfs, which a write in place drops
 COPY_CHUNK = 8 << 20
@@ -81,7 +82,7 @@ def apply(root: Path, entries: list[dict], log: host.Log, what: str, consume: bo
         for e, target, size in zip(entries, targets, work, strict=True):
             if not target.is_file() or target.is_symlink():
                 raise DeltaError('{}: {} is not a regular file'.format(what, e['path']))
-            current = cards.sha256_file(target, progress.advance)
+            current = hashing.sha256_file(target, progress.advance)
             if current == e['sha256_out']:
                 progress.advance(size - target.stat().st_size)
                 if consume:
@@ -90,7 +91,7 @@ def apply(root: Path, entries: list[dict], log: host.Log, what: str, consume: bo
             if current != e['sha256_in']:
                 raise DeltaError('{}: {} is not the file the delta was made from'.format(what, e['path']))
             _rewrite(target, e['source'])
-            if cards.sha256_file(target, progress.advance) != e['sha256_out']:
+            if hashing.sha256_file(target, progress.advance) != e['sha256_out']:
                 raise DeltaError('{}: {} does not hold the translated bytes after the write'.format(what, e['path']))
             if consume:
                 e['source'].unlink()

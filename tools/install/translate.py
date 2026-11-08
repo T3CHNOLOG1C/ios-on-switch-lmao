@@ -22,7 +22,8 @@ from pathlib import Path
 
 if __package__ in (None, ''):
     sys.path.insert(0, str(Path(os.path.abspath(__file__)).parents[2]))
-from tools.install import card as cards, cryptex, delta, disks, host, progress
+from tools.common import hashing
+from tools.install import cryptex, delta, disks, host, progress
 
 TAIL_LINES = 40
 
@@ -75,7 +76,7 @@ def make_cryptex(args: argparse.Namespace, log: host.Log) -> None:
     disks.sweep(out.parent, log)
     volume_uuid = uuid.UUID(json.loads(Path(args.pins).read_text())['volumes'][args.role + '_uuid'])
     cryptex.rebuild(cryptex.Job(args.image, entries, out, args.apfs_tool, args.role, volume_uuid), log)
-    Path(args.sha256).write_text(cards.sha256_file(out) + '\n')
+    Path(args.sha256).write_text(hashing.sha256_file(out) + '\n')
 
 
 def arguments(argv: list[str] | None) -> argparse.Namespace:

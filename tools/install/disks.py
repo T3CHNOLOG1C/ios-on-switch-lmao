@@ -18,13 +18,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import FrameType
 
+from tools.common import files
 from tools.install import host
 
 UNMOUNT_TRIES = 5
 MOUNT_TRIES = 3
 
 APFS_VOLUME = '41504653-0000-11AA-AA11-00306543ECAC'
-PARTIAL = '.partial-'
+# Partial files are files.partial()'s NAME.partial; runs before tools/common/files named them .partial-NAME.
+PARTIALS = ('*' + files.SUFFIX, '.partial-*')
 FSEVENTS = '.fseventsd'
 ATTACH = ('-nomount', '-noverify', '-noautofsck')
 RAW = ('-imagekey', 'diskimage-class=CRawDiskImage')
@@ -146,21 +148,15 @@ def sweep(directory: Path, log: host.Log) -> list[str]:
         if whole:
             host.run('hdiutil', 'detach', '-force', whole[0], log=log, check=False)
             done.append(f'detached {path.name} ({whole[0]})')
-    if root.is_dir():
-        for leftover in root.rglob(PARTIAL + '*'):
-            if leftover.is_dir() and not leftover.is_symlink():
-                shutil.rmtree(leftover)
-            else:
-                leftover.unlink()
-            done.append(f'removed {leftover.name}')
+    for leftover in sorted({p for pattern in PARTIALS for p in root.rglob(pattern)}) if root.is_dir() else []:
+        if leftover.is_dir() and not leftover.is_symlink():
+            shutil.rmtree(leftover)
+        else:
+            leftover.unlink(missing_ok=True)
+        done.append(f'removed {leftover.name}')
     for line in done:
         log(f'cleanup: {line}')
     return done
-
-
-def partial(path: Path) -> Path:
-    """Where `path` is written before os.replace() puts it in place, so a run that stops leaves only a partial."""
-    return Path(path).with_name(PARTIAL + Path(path).name)
 
 
 def _raise_interrupt(signum: int, _frame: FrameType | None) -> None:
