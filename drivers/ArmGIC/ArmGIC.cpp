@@ -34,6 +34,7 @@
 #include "ArmGIC.h"
 #include "SwitchInterrupts.h"
 #include "../../kits/SwitchIdle/switch_idle.h"
+#include "../../kits/SwitchMMIO/SwitchMMIO.h"
 
 // ArmCpu's GIC state (drivers/ArmCpu/ArmCpu.cpp): version, distributor/CPU interface enabled, and each logical
 // CPU's GICv2 target mask (its GICD_ITARGETSR0 byte), written once that CPU's interface is up.
@@ -110,7 +111,7 @@ class ArmGIC : public IOInterruptController {
 
         IOMemoryMap *distMap = nullptr,
                     *licMap = nullptr;
-    uintptr_t dist = 0, lic = 0;
+    volatile uint8_t *dist = nullptr, *lic = nullptr;
     uint32_t intids = 0;     // INTIDs the distributor implements: 32 * (GICD_TYPER.ITLinesNumber + 1), < 1020
     uint8_t cpu0Target = 0;  // CPU interface mask of logical CPU 0
     bool steering = false;   // frame and kSteered SPIs go to their secondary core
@@ -127,12 +128,12 @@ class ArmGIC : public IOInterruptController {
 
     uint32_t read32(uint32_t offset) const
     {
-        return *reinterpret_cast<volatile uint32_t *>(dist + offset);
+        return switch_mmio_read32(dist, offset);
     }
 
     uint8_t read8(uint32_t offset) const
     {
-        return *reinterpret_cast<volatile uint8_t *>(dist + offset);
+        return switch_mmio_read8(dist, offset);
     }
 
     bool readBit(uint32_t bank, uint32_t intid) const
@@ -142,12 +143,12 @@ class ArmGIC : public IOInterruptController {
 
     void write32(uint32_t offset, uint32_t value) const
     {
-        *reinterpret_cast<volatile uint32_t *>(dist + offset) = value;
+        switch_mmio_write32(dist, offset, value);
     }
 
     void write8(uint32_t offset, uint8_t value) const
     {
-        *reinterpret_cast<volatile uint8_t *>(dist + offset) = value;
+        switch_mmio_write8(dist, offset, value);
     }
 
     // One bit per INTID in a W1S/W1C register bank (ISENABLER, ICENABLER, ISPENDR, ICPENDR).
@@ -158,13 +159,23 @@ class ArmGIC : public IOInterruptController {
 
     bool licCovers(uint32_t intid) const
     {
-        return (lic != 0u) && (intid - kFirstSpi) / 32 < kLicBanks;
+        return (lic != nullptr) && licBank(intid) < kLicBanks;
     }
 
-    volatile uint32_t *licRegister(uint32_t intid, uint32_t offset) const
+    // The LIC's register `offset` in bank `bank` (32 SPIs from kFirstSpi each).
+    uint32_t licRead(uint32_t bank, uint32_t offset) const
     {
-        return reinterpret_cast<volatile uint32_t *>(lic + static_cast<uintptr_t>((intid - kFirstSpi) / 32) * 0x100 +
-                                                     offset);
+        return switch_mmio_read32(lic, bank * 0x100 + offset);
+    }
+
+    void licWrite(uint32_t bank, uint32_t offset, uint32_t value) const
+    {
+        switch_mmio_write32(lic, bank * 0x100 + offset, value);
+    }
+
+    static uint32_t licBank(uint32_t intid)
+    {
+        return (intid - kFirstSpi) / 32;
     }
 
     bool isEdge(uint32_t intid) const
@@ -339,7 +350,7 @@ bool ArmGIC::mapDistributor(uint64_t *physical)
     OSSafeReleaseNULL(memory);
     if (!distMap)
         return false;
-    dist = static_cast<uintptr_t>(distMap->getVirtualAddress());
+    dist = reinterpret_cast<volatile uint8_t *>(distMap->getVirtualAddress());
     return ((read32(GICD_PIDR2) >> 4) & 15) == 2;
 }
 
@@ -380,7 +391,7 @@ const char *ArmGIC::setup()
         OSSafeReleaseNULL(memory);
         if (!licMap)
             return "cannot map the Tegra legacy interrupt controller";
-        lic = static_cast<uintptr_t>(licMap->getVirtualAddress());
+        lic = reinterpret_cast<volatile uint8_t *>(licMap->getVirtualAddress());
     }
     IOPlatformExpert *platform = getPlatform();
     if (!platform || !attach(platform))
@@ -516,8 +527,9 @@ void ArmGIC::initVector(IOInterruptVectorNumber vectorNumber, IOInterruptVector 
     const IOInterruptState state = IOSimpleLockLockDisableInterrupt(controllerLock);
     write32(config, isEdge(intid) ? (read32(config) | edgeBit) : (read32(config) & ~edgeBit));
     if (licCovers(intid)) {
-        volatile uint32_t *iepClass = licRegister(intid, ICTLR_CPU_IEP_CLASS);
-        *iepClass = *iepClass & ~(1U << (intid % 32));  // IRQ, not FIQ
+        const uint32_t bank = licBank(intid);
+        licWrite(bank, ICTLR_CPU_IEP_CLASS,
+                 licRead(bank, ICTLR_CPU_IEP_CLASS) & ~(1U << (intid % 32)));  // IRQ, not FIQ
     }
     IOSimpleLockUnlockEnableInterrupt(controllerLock, state);
     OSSynchronizeIO();
@@ -533,7 +545,7 @@ void ArmGIC::disableVectorHard(IOInterruptVectorNumber vectorNumber, IOInterrupt
     const uint32_t intid = static_cast<uint32_t>(vectorNumber);
     writeBit(GICD_ICENABLER, intid);
     if (licCovers(intid))
-        *licRegister(intid, ICTLR_CPU_IER_CLR) = 1U << (intid % 32);
+        licWrite(licBank(intid), ICTLR_CPU_IER_CLR, 1U << (intid % 32));
     OSSynchronizeIO();
 }
 
@@ -549,7 +561,7 @@ void ArmGIC::enableVector(IOInterruptVectorNumber vectorNumber, IOInterruptVecto
         }
     }
     if (licCovers(intid))
-        *licRegister(intid, ICTLR_CPU_IER_SET) = 1U << (intid % 32);
+        licWrite(licBank(intid), ICTLR_CPU_IER_SET, 1U << (intid % 32));
     writeBit(GICD_ISENABLER, intid);
     OSSynchronizeIO();
 }
@@ -575,7 +587,7 @@ void ArmGIC::describe(uint32_t intid, char *buffer, size_t size) const
              static_cast<int>(readBit(GICD_ISENABLER, intid)), static_cast<int>(readBit(GICD_ISPENDR, intid)),
              static_cast<int>(readBit(GICD_ISACTIVER, intid)), isEdge(intid) ? "edge" : "level",
              read8(GICD_IPRIORITYR + intid), read8(GICD_ITARGETSR + intid),
-             licCovers(intid) ? static_cast<int>((*licRegister(intid, ICTLR_CPU_IER) >> (intid % 32)) & 1) : -1);
+             licCovers(intid) ? static_cast<int>((licRead(licBank(intid), ICTLR_CPU_IER) >> (intid % 32)) & 1) : -1);
 }
 
 // System sleep (drivers/SwitchSuspend quiesce/active actions): boot CPU, interrupts off, the other cores off. The
@@ -592,11 +604,9 @@ void ArmGIC::suspend()
         savedPriority[i] = read32(GICD_IPRIORITYR + i * 4);
         savedTarget[i] = read32(GICD_ITARGETSR + i * 4);
     }
-    for (uint32_t bank = 0; lic && bank < kLicBanks; ++bank) {
-        savedLicEnable[bank] =
-            *reinterpret_cast<volatile uint32_t *>(lic + static_cast<uintptr_t>(bank) * 0x100 + ICTLR_CPU_IER);
-        savedLicClass[bank] =
-            *reinterpret_cast<volatile uint32_t *>(lic + static_cast<uintptr_t>(bank) * 0x100 + ICTLR_CPU_IEP_CLASS);
+    for (uint32_t bank = 0; lic != nullptr && bank < kLicBanks; ++bank) {
+        savedLicEnable[bank] = licRead(bank, ICTLR_CPU_IER);
+        savedLicClass[bank] = licRead(bank, ICTLR_CPU_IEP_CLASS);
     }
 }
 
@@ -612,13 +622,10 @@ void ArmGIC::resume()
         write32(GICD_IPRIORITYR + i * 4, savedPriority[i]);
         write32(GICD_ITARGETSR + i * 4, savedTarget[i]);
     }
-    for (uint32_t bank = 0; lic && bank < kLicBanks; ++bank) {
-        *reinterpret_cast<volatile uint32_t *>(lic + static_cast<uintptr_t>(bank) * 0x100 + ICTLR_CPU_IEP_CLASS) =
-            savedLicClass[bank];
-        *reinterpret_cast<volatile uint32_t *>(lic + static_cast<uintptr_t>(bank) * 0x100 + ICTLR_CPU_IER_CLR) =
-            ~savedLicEnable[bank];
-        *reinterpret_cast<volatile uint32_t *>(lic + static_cast<uintptr_t>(bank) * 0x100 + ICTLR_CPU_IER_SET) =
-            savedLicEnable[bank];
+    for (uint32_t bank = 0; lic != nullptr && bank < kLicBanks; ++bank) {
+        licWrite(bank, ICTLR_CPU_IEP_CLASS, savedLicClass[bank]);
+        licWrite(bank, ICTLR_CPU_IER_CLR, ~savedLicEnable[bank]);
+        licWrite(bank, ICTLR_CPU_IER_SET, savedLicEnable[bank]);
     }
     for (uint32_t i = kFirstSpi / 32; i < intids / 32; ++i)
         write32(GICD_ISENABLER + i * 4, savedEnable[i]);
