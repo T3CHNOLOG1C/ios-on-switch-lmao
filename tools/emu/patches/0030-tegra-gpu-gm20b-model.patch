@@ -15,7 +15,7 @@ index 9852ea9..7e5251c 100644
    'apb/fuse/fuse.c',
 diff --git a/hw/arm/tegra2/ahb/gpu/gm20b.h b/hw/arm/tegra2/ahb/gpu/gm20b.h
 new file mode 100644
-index 0000000..eda50bd
+index 0000000..675e407
 --- /dev/null
 +++ b/hw/arm/tegra2/ahb/gpu/gm20b.h
 @@ -0,0 +1,114 @@
@@ -78,8 +78,8 @@ index 0000000..eda50bd
 +    uint32_t *regs;
 +    char *method_log_path;
 +    FILE *method_log;
-+    char *fault_log_path;
-+    FILE *fault_log;
++    char *event_log_path;
++    FILE *event_log;
 +    int64_t ptimer_offset;
 +    QEMUTimer *ptimer_alarm;
 +    QEMUTimer *host_poll;
@@ -113,7 +113,7 @@ index 0000000..eda50bd
 +
 +void gm20b_update_irqs(tegra_gpu *s);
 +uint64_t gm20b_ptimer_ns(tegra_gpu *s);
-+void gm20b_log_fault(tegra_gpu *s, const char *fmt, ...) G_GNUC_PRINTF(2, 3);
++void gm20b_log_event(tegra_gpu *s, const char *fmt, ...) G_GNUC_PRINTF(2, 3);
 +
 +void gm20b_falcon_init(tegra_gpu *s);
 +void gm20b_falcon_reset(tegra_gpu *s);
@@ -307,10 +307,10 @@ index 0000000..c18f885
 +}
 diff --git a/hw/arm/tegra2/ahb/gpu/gm20b_falcon.c b/hw/arm/tegra2/ahb/gpu/gm20b_falcon.c
 new file mode 100644
-index 0000000..39981b8
+index 0000000..116cb49
 --- /dev/null
 +++ b/hw/arm/tegra2/ahb/gpu/gm20b_falcon.c
-@@ -0,0 +1,450 @@
+@@ -0,0 +1,456 @@
 +/*
 + * NVIDIA GM20B falcons as their firmware answers the host: PMU (ACR, then its RTOS), FECS and GPCCS.
 + *
@@ -467,6 +467,9 @@ index 0000000..39981b8
 +        info[4] = q == 4 ? 0 : q;
 +    }
 +    f->rtos = true;
++    /* The RTOS routes its message interrupt (SWGEN0) to the host itself: nouveau never programs IRQMSET/IRQDEST */
++    f->irqmask |= IRQ_SWGEN0;
++    f->irqdest = IRQ_SWGEN0;
 +    GM20B_REG(s, f->base + PMU_MSGQ_TAIL) = pmu_queue_offset[4];
 +    GM20B_REG(s, f->base + PMU_MSGQ_HEAD) = pmu_queue_offset[4];
 +    for (unsigned q = 0; q < 2; q++) {
@@ -490,6 +493,7 @@ index 0000000..39981b8
 +{
 +    uint8_t reply[12] = { UNIT_ACR, 0, 0, cmd[3], cmd[4] };
 +
++    gm20b_log_event(s, "pmu ACR command %u (falcon %u)", cmd[4], ldl_le_p(cmd + 12));
 +    switch (cmd[4]) {
 +    case ACR_CMD_INIT_WPR_REGION:
 +        reply[1] = 12; /* error_code 0 */
@@ -535,6 +539,7 @@ index 0000000..39981b8
 +    GM20BFalcon *f = &s->falcon[id];
 +
 +    f->starts++;
++    gm20b_log_event(s, "%s start %d%s", f->name, f->starts, f->lsf ? " (LS)" : "");
 +    if (id == GM20B_PMU && !s->acr_done) {
 +        /* The HS ACR load: WPR set up, the LS falcons bootstrapped later on the RTOS's command */
 +        s->acr_done = true;
@@ -555,6 +560,7 @@ index 0000000..39981b8
 +{
 +    uint32_t data = GM20B_REG(s, 0x409500);
 +
++    gm20b_log_event(s, "fecs method 0x%02x data 0x%08x", method, data);
 +    switch (method) {
 +    case 0x03: /* bind pointer */
 +        GM20B_REG(s, 0x409b00) = data;
@@ -763,10 +769,10 @@ index 0000000..39981b8
 +}
 diff --git a/hw/arm/tegra2/ahb/gpu/gm20b_fifo.c b/hw/arm/tegra2/ahb/gpu/gm20b_fifo.c
 new file mode 100644
-index 0000000..6dbc16c
+index 0000000..a7eaf1d
 --- /dev/null
 +++ b/hw/arm/tegra2/ahb/gpu/gm20b_fifo.c
-@@ -0,0 +1,453 @@
+@@ -0,0 +1,455 @@
 +/*
 + * NVIDIA GM20B host (PFIFO, one PBDMA): runlists, channels, GPFIFO and pushbuffer parsing, host methods, the copy
 + * engine, and the method log.
@@ -860,7 +866,7 @@ index 0000000..6dbc16c
 +    r->c->faulted = true;
 +    r->stop = true;
 +    GM20B_REG(r->s, CCSR(r->chid) + 4) |= bit;
-+    gm20b_log_fault(r->s, "channel %u stopped: %s", r->chid, why);
++    gm20b_log_event(r->s, "channel %u stopped: %s", r->chid, why);
 +}
 +
 +/* Semaphores (host SEMAPHORED, 3D/compute SET_REPORT_SEMAPHORE_D, copy LAUNCH_DMA): payload alone, or payload, zero
@@ -1212,6 +1218,8 @@ index 0000000..6dbc16c
 +        GM20B_REG(s, offset) = value;
 +        return true;
 +    case 0x002274:
++        gm20b_log_event(s, "runlist %u submit: %u entries at 0x%" PRIx64, (value >> 20) & 0xf, value & 0xffff,
++                        (uint64_t)(s->runlist_base & 0x0fffffff) << 12);
 +        s->runlist_len[MIN((value >> 20) & 0xf, 1u)] = value & 0xffff;
 +        GM20B_REG(s, offset) = value;
 +        gm20b_fifo_kick(s);
@@ -1222,7 +1230,7 @@ index 0000000..6dbc16c
 +}
 diff --git a/hw/arm/tegra2/ahb/gpu/gm20b_mmu.c b/hw/arm/tegra2/ahb/gpu/gm20b_mmu.c
 new file mode 100644
-index 0000000..df70272
+index 0000000..c7690fb
 --- /dev/null
 +++ b/hw/arm/tegra2/ahb/gpu/gm20b_mmu.c
 @@ -0,0 +1,174 @@
@@ -1277,7 +1285,7 @@ index 0000000..df70272
 +    hwaddr rec = 0x002800 + a->unit * 0x10;
 +
 +    s->faults++;
-+    gm20b_log_fault(s, "fault unit 0x%02x client 0x%02x %s %s va 0x%010" PRIx64 " inst 0x%" PRIx64, a->unit,
++    gm20b_log_event(s, "fault unit 0x%02x client 0x%02x %s %s va 0x%010" PRIx64 " inst 0x%" PRIx64, a->unit,
 +                    a->client, write ? "write" : "read", fault_type_name(type), va, a->inst);
 +    if (GM20B_REG(s, 0x00259c) & (1u << a->unit))
 +        return;
@@ -1401,7 +1409,7 @@ index 0000000..df70272
 +    *value = ldq_le_p(buf) & (size == 8 ? ~0ull : (1ull << (size * 8)) - 1);
 +}
 diff --git a/hw/arm/tegra2/ahb/gpu/gpu.c b/hw/arm/tegra2/ahb/gpu/gpu.c
-index 2f05a53..198639f 100644
+index 2f05a53..f122627 100644
 --- a/hw/arm/tegra2/ahb/gpu/gpu.c
 +++ b/hw/arm/tegra2/ahb/gpu/gpu.c
 @@ -1,5 +1,5 @@
@@ -1571,7 +1579,7 @@ index 2f05a53..198639f 100644
 -static MemTxResult tegra_gpu_translate_gmmu(tegra_gpu *s, dma_addr_t addr,
 -                                            dma_addr_t *out_addr,
 -                                            IOMMUAccessFlags flag, dma_addr_t pdb, bool big_page_size)
-+void gm20b_log_fault(tegra_gpu *s, const char *fmt, ...)
++void gm20b_log_event(tegra_gpu *s, const char *fmt, ...)
  {
 -    MemTxResult res = MEMTX_OK;
 -
@@ -1635,16 +1643,16 @@ index 2f05a53..198639f 100644
 -    return res;
 +    va_list ap;
 +
-+    if (!s->fault_log && s->fault_log_path && *s->fault_log_path)
-+        s->fault_log = fopen(s->fault_log_path, "w");
-+    if (!s->fault_log)
++    if (!s->event_log && s->event_log_path && *s->event_log_path)
++        s->event_log = fopen(s->event_log_path, "w");
++    if (!s->event_log)
 +        return;
-+    fprintf(s->fault_log, "%" PRIu64 " ", gm20b_ptimer_ns(s));
++    fprintf(s->event_log, "%" PRIu64 " ", gm20b_ptimer_ns(s));
 +    va_start(ap, fmt);
-+    vfprintf(s->fault_log, fmt, ap);
++    vfprintf(s->event_log, fmt, ap);
 +    va_end(ap);
-+    fputc('\n', s->fault_log);
-+    fflush(s->fault_log);
++    fputc('\n', s->event_log);
++    fflush(s->event_log);
  }
  
 -#if 0
@@ -1803,8 +1811,8 @@ index 2f05a53..198639f 100644
 +    uint32_t v = 0;
  
 -    return res;
-+    dma_memory_read(&address_space_memory, pa, &v, 4, MEMTXATTRS_UNSPECIFIED);
-+    return v;
++    address_space_read(&address_space_memory, pa, (MemTxAttrs){ .secure = 1 }, &v, 4);
++    return le32_to_cpu(v);
  }
  
 -static MemTxResult tegra_gpu_parse_gpfifo_cmds(tegra_gpu *s,
@@ -2236,7 +2244,7 @@ index 2f05a53..198639f 100644
  
 +static Property tegra_gpu_properties[] = {
 +    DEFINE_PROP_STRING("method-log", tegra_gpu, method_log_path),
-+    DEFINE_PROP_STRING("fault-log", tegra_gpu, fault_log_path),
++    DEFINE_PROP_STRING("event-log", tegra_gpu, event_log_path),
 +    DEFINE_PROP_END_OF_LIST(),
 +};
 +

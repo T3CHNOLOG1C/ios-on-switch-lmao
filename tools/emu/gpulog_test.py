@@ -17,7 +17,8 @@ RAW = """\
 3 0 b06f 001c 00000002
 """
 
-FAULTS = """\
+EVENTS = """\
+999 pmu start 1
 1000 fault unit 0x07 client 0x06 read PTE va 0x0001000000 inst 0x80000000
 1001 channel 3 stopped: pushbuffer fetch
 """
@@ -48,12 +49,12 @@ class GpuLogTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             run = Path(tmp)
             (run / 'gpu-methods.raw').write_text(RAW)
-            (run / 'gpu-faults.log').write_text(FAULTS)
+            (run / 'gpu-events.log').write_text(EVENTS)
             summary = gpulog.summarize(run)
             self.assertTrue((run / 'gpu-methods.log').exists())
         self.assertIn('10 methods', summary)
         self.assertIn('NOT_IN_CLASS 1', summary)
-        self.assertIn('2 fault lines; first: fault unit 0x07', summary)
+        self.assertIn('2 faults or stopped channels; first: fault unit 0x07', summary)
 
 
 if __name__ == '__main__':

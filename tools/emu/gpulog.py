@@ -1,7 +1,8 @@
 """The emulated GPU's method and fault logs, named with Mesa's class headers (third_party/mesa, MIT).
 
-QEMU's GPU model (patches 0030-) writes one line per method a channel executes, `chid subc class method data [flag]`
-in hex, and one line per MMU fault or stopped channel. This names each method from the class's header and flags the
+QEMU's GPU model (patch 0030) writes one line per method a channel executes, `chid subc class method data [flag]`
+in hex, and a line per bring-up event (falcon starts, PMU and FECS commands, runlist submits), MMU fault or stopped
+channel. This names each method from the class's header and flags the
 ones the class does not have, the subchannels with no class bound and the opcodes the host rejected.
 """
 
@@ -104,15 +105,16 @@ def decode(raw: Path, out: Path, classes: dict[int, Class] | None = None) -> col
     return counts
 
 
-def fault_lines(faults: Path) -> list[str]:
-    return [line for line in faults.read_text().splitlines() if line.strip()] if faults.exists() else []
+def fault_lines(events: Path) -> list[str]:
+    lines = events.read_text().splitlines() if events.exists() else []
+    return [line for line in lines if ' fault ' in line or ' stopped: ' in line]
 
 
 def summarize(run: Path) -> str:
     """Name the run's GPU method log (gpu-methods.log) and describe what both logs hold."""
     raw = run / 'gpu-methods.raw'
     counts = decode(raw, run / 'gpu-methods.log') if raw.exists() else collections.Counter()
-    faults = fault_lines(run / 'gpu-faults.log')
+    faults = fault_lines(run / 'gpu-events.log')
     flags = ', '.join(f'{flag} {n}' for flag, n in sorted(counts.items()) if flag != 'methods') or 'none flagged'
     first = f'; first: {faults[0].split(" ", 1)[1]}' if faults else ''
-    return f'{counts["methods"]} methods ({flags}); {len(faults)} fault lines{first}'
+    return f'{counts["methods"]} methods ({flags}); {len(faults)} faults or stopped channels{first}'
