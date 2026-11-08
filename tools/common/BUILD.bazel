@@ -55,3 +55,15 @@ py_test(
     srcs = ["files_test.py"],
     deps = [":files"],
 )
+
+py_library(
+    name = "macho",
+    srcs = ["macho.py"],
+    imports = ["../.."],
+)
+
+py_test(
+    name = "macho_test",
+    srcs = ["macho_test.py"],
+    deps = [":macho"],
+)

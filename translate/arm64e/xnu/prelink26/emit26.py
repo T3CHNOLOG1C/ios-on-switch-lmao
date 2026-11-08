@@ -21,7 +21,7 @@ R = os.path.join(HERE, "..")
 sys.path.insert(0, HERE)
 from kcinfo import KC, ROOTS, decode8
 import paths
-from native_prelink import macho, exports, backed_offset
+from tools.common.macho import macho, exports, backed_offset
 
 CUTS = {("com.apple.iokit.IOUSBHostFamily", "com.apple.driver.AppleSMC"): "_switch_prelink_cut_null",
         ("com.apple.iokit.IOUSBHostFamily", "com.apple.driver.usb.AppleUSBHostPlatformProperties"): None,

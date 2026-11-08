@@ -11,7 +11,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 R = os.path.join(HERE, "..")
 sys.path.insert(0, HERE)
 import paths
-from native_prelink import macho, backed_offset, unserialize_xml
+from native_prelink import unserialize_xml
+from tools.common.macho import macho, backed_offset
 from kcinfo import KC
 
 out_path, kc_path = sys.argv[1:3]
