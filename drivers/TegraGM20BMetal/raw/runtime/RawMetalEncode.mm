@@ -471,16 +471,12 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
             const uint32_t sx = uint32_t(extra(cb, x + 2)), sy = uint32_t(extra(cb, x + 3)),
                            w = uint32_t(extra(cb, x + 5)), h = uint32_t(extra(cb, x + 6)), dx = uint32_t(o),
                            dy = uint32_t(o >> 32);
-            if (sl && !dl && !t->_raw.blockLinear) {
-                be->copyFromLevel(s->_raw, uint32_t(sl), sx, sy, t->_raw, dx, dy, w, h);
-            } else {
-                raw::Texture fromLevel, toLevel;
-                if (sl)
-                    raw::chainLevelImage(s->_raw, uint32_t(sl), fromLevel);
-                if (dl)
-                    raw::chainLevelImage(t->_raw, uint32_t(dl), toLevel);
-                be->copyTexels(sl ? fromLevel : s->_raw, sx, sy, dl ? toLevel : t->_raw, dx, dy, w, h);
-            }
+            raw::Texture fromLevel, toLevel;
+            if (sl)
+                raw::chainLevelImage(s->_raw, uint32_t(sl), fromLevel);
+            if (dl)
+                raw::chainLevelImage(t->_raw, uint32_t(dl), toLevel);
+            be->copyTexels(sl ? fromLevel : s->_raw, sx, sy, dl ? toLevel : t->_raw, dx, dy, w, h);
             break;
         }
         case OpMipmaps: {  // a chain's levels from level 0 (decided at record)

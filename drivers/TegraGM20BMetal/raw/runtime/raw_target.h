@@ -6,7 +6,7 @@
 //    offset, its block height clamped to the level as the hardware does, its rows aligned to one GOB's 64 bytes). WIDTH is
 //    the level's row stride in texels (row_stride_B / bpp, as NVK writes it), HEIGHT the level's, MEMORY BLOCK_WIDTH
 //    ONE_GOB, BLOCK_HEIGHT the level's, BLOCK_DEPTH 0, LAYOUT_BLOCKLINEAR, THIRD_DIMENSION_DEFINES_ARRAY_SIZE; one layer,
-//    ARRAY_PITCH the image's layer size / 4, LAYER 0. The 2D engine's level copies (fx::emitCopyToLevel, emitCopyFromLevel,
+//    ARRAY_PITCH the image's layer size / 4, LAYER 0. The 2D engine's level writes (fx::emitCopyToLevel,
 //    emitGenerate) address the same level by the same base and block height.
 #pragma once
 #include <cstdint>
