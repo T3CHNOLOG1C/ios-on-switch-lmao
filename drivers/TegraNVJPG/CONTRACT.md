@@ -233,7 +233,7 @@ Pull logs read-only after boot (`idevicesyslog -u <udid> archive boot.tar --age-
 `/usr/bin/log show boot.logarchive --predicate 'eventMessage CONTAINS "TegraNVJPG"'`; the kernel's IOLog lines are
 also in the boot console).
 
-1. **Bring-up**, in order, one line each, within a few seconds of NVDEC's N4 line:
+1. **Bring-up**, in order, one line each, within a few seconds of NVDEC's N3 line:
    `TegraNVJPG: J0 ok firmware 16640 bytes ...`, `J1 ok ASID 125 ... partition 26 ... 408 MHz, falcon started (OS code
    0+0x300 data 0x3d00+0x200, 13 apps)`, `J2 ok host interface and falcon incremented syncpoint ...`,
    `J3 ok N decodes in ... us ...: SMMU translates ...; formats F, sampling S, scales C; writes ...`,

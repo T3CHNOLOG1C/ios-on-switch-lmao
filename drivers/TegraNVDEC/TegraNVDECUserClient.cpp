@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// N4 (on unless switch-no-nvdec): the TegraNVDEC service and its user client (ABI in TegraNVDECABI.h).
+// N3 (on unless switch-no-nvdec): the TegraNVDEC service and its user client (ABI in TegraNVDECABI.h).
 //
 // The client class is named AppleD5500UserClient, the name of iPad7,1's own decoder client (AppleD5500, the VXD393
 // kext, not loaded here), which some of 21H461's sandbox profiles may admit. The service is not called AppleD5500:
@@ -128,7 +128,6 @@ void AppleD5500UserClient::drop(Buffer *b, bool returnMemory)
 
 IOReturn AppleD5500UserClient::clientClose()
 {
-    tegra_nvdec_check_release(this);  // a clip check this connection claimed and never reported goes to the next
     IOLockLock(lock_);
     const bool idle = quiesce();
     if (!idle)
@@ -144,7 +143,6 @@ IOReturn AppleD5500UserClient::clientClose()
 
 void AppleD5500UserClient::free()
 {
-    tegra_nvdec_check_release(this);
     if (lock_) {
         for (Buffer &b : buffers_) {
             if (b.handle)
@@ -182,9 +180,6 @@ IOReturn AppleD5500UserClient::run(uint32_t method, const void *in, uint32_t inS
         {sizeof(TegraNVDECBuffer), 0},
         {sizeof(TegraNVDECSubmit), sizeof(TegraNVDECFence)},
         {sizeof(TegraNVDECWait), 0},
-        {0, sizeof(TegraNVDECClaim)},
-        {sizeof(TegraNVDECReport), 0},
-        {0, sizeof(TegraNVDECClaim)},
         {sizeof(TegraNVDECPresent), 0},
     };
 
@@ -193,12 +188,6 @@ IOReturn AppleD5500UserClient::run(uint32_t method, const void *in, uint32_t inS
         return kIOReturnBadArgument;
     *outSize = kSizes[method].out;
 
-    if (method == TegraNVDECMethodWaitSelfTest) {  // no lock either: it sleeps (at most 3 s) for another process
-        TegraNVDECClaim *reply = static_cast<TegraNVDECClaim *>(out);
-        reply->claimed = 0;
-        reply->state = tegra_nvdec_check_wait();
-        return kIOReturnSuccess;
-    }
     if (method == TegraNVDECMethodWait) {  // no lock: other calls of this connection may proceed while it sleeps
         const TegraNVDECWait *w = static_cast<const TegraNVDECWait *>(in);
         // NOLINTNEXTLINE(clang-analyzer-core.NullDereference): input size checked above
@@ -283,7 +272,7 @@ IOReturn AppleD5500UserClient::run(uint32_t method, const void *in, uint32_t inS
         if (submit->codec < 32 && (codecs & (1u << submit->codec)) && (!tenBit || (codecs & TEGRA_NVDEC_HEVC_MAIN10))) {
             err = tegra_nvdec_run(submit, resolve, this, &fence, &why);
         } else {
-            why = "codec not proven at boot";
+            why = "codec not decoded on NVDEC";
         }
         if (err) {
             static volatile int logged;
@@ -340,20 +329,6 @@ IOReturn AppleD5500UserClient::run(uint32_t method, const void *in, uint32_t inS
             tegra_nvdec_cache_flush(b->block.va, picture);
             ret = (err == -22 || err == -12) ? ioreturn(err) : kIOReturnUnsupported;
         }
-        break;
-    }
-    case TegraNVDECMethodClaimSelfTest: {
-        TegraNVDECClaim *reply = static_cast<TegraNVDECClaim *>(out);
-        bool claimed = false;
-        reply->state = tegra_nvdec_check_claim(this, &claimed);
-        reply->claimed = static_cast<uint32_t>(claimed);
-        break;
-    }
-    case TegraNVDECMethodReportSelfTest: {
-        const TegraNVDECReport *report = static_cast<const TegraNVDECReport *>(in);
-        ret =
-            // NOLINTNEXTLINE(clang-analyzer-core.NullDereference): input size checked above
-            ioreturn(tegra_nvdec_check_report(this, report->vp9_ok != 0, report->hevc_ok != 0, report->hevc10_ok != 0));
         break;
     }
     default:
@@ -442,7 +417,7 @@ extern "C" int tegra_nvdec_publish(void)
     TegraNVDEC *service = OSTypeAlloc(TegraNVDEC);
     if (!resources || !service || !service->init()) {
         OSSafeReleaseNULL(service);
-        IOLog("TegraNVDEC: N4 FAIL could not create the service\n");
+        IOLog("TegraNVDEC: N3 FAIL could not create the service\n");
         return -12;
     }
     service->setProperty("IOUserClientClass", "AppleD5500UserClient");
@@ -451,20 +426,20 @@ extern "C" int tegra_nvdec_publish(void)
     service->setProperty("TegraNVDECABIVersion", (unsigned long long)TEGRA_NVDEC_ABI_VERSION, 32);
     if (!service->attach(resources)) {
         service->release();
-        IOLog("TegraNVDEC: N4 FAIL could not attach the service\n");
+        IOLog("TegraNVDEC: N3 FAIL could not attach the service\n");
         return -12;
     }
     if (!service->start(resources)) {
         service->detach(resources);
         service->release();
-        IOLog("TegraNVDEC: N4 FAIL could not start the service\n");
+        IOLog("TegraNVDEC: N3 FAIL could not start the service\n");
         return -12;
     }
     service->registerService();
     uint64_t limit = 0;
     uint64_t free = 0;
     tegra_nvdec_memory_usage(&limit, &free);
-    IOLog("TegraNVDEC: N4 ok service published (user client AppleD5500UserClient, ABI %u, buffers of any pages behind "
+    IOLog("TegraNVDEC: N3 ok service published (user client AppleD5500UserClient, ABI %u, buffers of any pages behind "
           "the SMMU, %llu MiB at most)\n",
           TEGRA_NVDEC_ABI_VERSION, limit >> 20);
     service->release();  // the attachment keeps it
