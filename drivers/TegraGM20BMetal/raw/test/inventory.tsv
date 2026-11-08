@@ -501,7 +501,7 @@ MTLDevice	-	newTextureWithDescriptor:iosurface:plane:slice:	-	21H461,24B119	base
 MTLDevice	-	newVisibleFunctionTableWithDescriptor:	-	24B119	none
 MTLDevice	-	productName	-	21H461,24B119	raw
 MTLDevice	-	queryTimestampFrequency	-	24B119	base
-MTLDevice	-	recommendedMaxWorkingSetSize	-	24B119	m2v
+MTLDevice	-	recommendedMaxWorkingSetSize	-	24B119	raw
 MTLDevice	-	sampleTimestamps:gpuTimestamp:	-	21H461,24B119	base
 MTLDevice	-	setCompilerProcessesCount:	-	24B119	base
 MTLDevice	-	setPluginData:	-	24B119	base

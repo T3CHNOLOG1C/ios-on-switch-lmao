@@ -28,6 +28,9 @@ struct CADrawThenCopyScene: GPUScene {
         let target = try SurfaceTarget.make(
             gpu, .bgra8Unorm, Self.width, Self.height, rowBytes: Self.width * 4, usage: [.renderTarget, .shaderRead])
         let copy = try gpu.texture(.bgra8Unorm, Self.width, Self.height, usage: [.shaderRead])
+        // Core Animation's fill state declares a second colour attachment
+        let colour1 = try gpu.texture(
+            .bgra8Unorm, Self.width, Self.height, usage: [.renderTarget], storage: .memoryless)
         var stale = 0
         for round in 0..<Self.rounds {
             let timing = try await gpu.run(tolerateError: true) { commands in
@@ -35,6 +38,9 @@ struct CADrawThenCopyScene: GPUScene {
                 pass.colorAttachments[0].texture = target.texture
                 pass.colorAttachments[0].loadAction = .clear
                 pass.colorAttachments[0].storeAction = .store
+                pass.colorAttachments[1].texture = colour1
+                pass.colorAttachments[1].loadAction = .clear
+                pass.colorAttachments[1].storeAction = .dontCare
                 let encoder = commands.makeRenderCommandEncoder(descriptor: pass)!
                 encoder.setRenderPipelineState(pipeline)
                 for draw in 0..<Self.draws {

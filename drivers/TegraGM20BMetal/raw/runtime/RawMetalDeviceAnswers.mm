@@ -4,6 +4,8 @@
 // (raw/test/selcover holds them so on the host).
 #import "RawMetalInternal.h"
 #include <mach/vm_page_size.h>
+#include <os/proc.h>
+#include <algorithm>
 #include "raw_device_answers.h"
 
 namespace {
@@ -146,6 +148,18 @@ void installDeviceAnswers(Class cls)
 - (uint64_t)dedicatedMemorySize
 {
     return 0;
+}
+
+// What the process holds and may still take, as m2v's device answers, within the memory there is: a process without a jetsam
+// limit reads os_proc_available_memory() as about INT32_MAX MB
+- (uint64_t)recommendedMaxWorkingSetSize
+{
+    const uint64_t physical = NSProcessInfo.processInfo.physicalMemory;
+#if TARGET_OS_IPHONE
+    return std::min<uint64_t>(uint64_t([(id<MTLDevice>)self currentAllocatedSize]) + os_proc_available_memory(), physical);
+#else
+    return physical;
+#endif
 }
 
 - (NSUInteger)minBufferNoCopyAlignmentBytes
