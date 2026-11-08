@@ -22,7 +22,8 @@
 #include <pexpert/pexpert.h>
 #include "../ArmGIC/SwitchInterrupts.h"
 #include "../../kits/SwitchDMA/SwitchDcache.h"
-#include "../../kits/SwitchMMIO/SwitchMMIO.h"
+#include "../../kits/SwitchCAR/SwitchCAR.h"
+#include "../../kits/SwitchMMIO/SwitchMMIOWords.h"
 #include "../../kits/SwitchSysctl/SwitchSysctl.h"
 #include "../TegraDisplayFlip/TegraScanoutCopy.h"
 #include "../TegraDisplayFlip/TegraScanoutRing.h"
@@ -279,10 +280,10 @@ extern "C" __attribute__((weak)) void tegra_display_power_up(void)
 // Display controller A (hekate bdk/display/di.h, Linux drivers/gpu/drm/tegra/dc.h): 32-bit registers, word indices. INT_STATUS is write-1-
 // to-clear, INT_ENABLE lets a bit latch, INT_MASK routes a latched bit to the level-high line, GIC_SPI 73 = INTID 105 (mainline
 // tegra210.dtsi dc@54200000, hekate irq.h IRQ_DISPLAY). DC A's clock (CAR DISP1, L27) must run before its registers are read.
-static constexpr uint64_t kDisplayAPA = 0x54200000, kCarPA = 0x60006000;
+static constexpr uint64_t kDisplayAPA = 0x54200000;
 static constexpr uint32_t kDcIntStatus = 0x037, kDcIntMask = 0x038, kDcIntEnable = 0x039, kFrameEndInt = 1u << 1,
                           kVblankInt = 1u << 2;
-static constexpr uint32_t kDisplayAInterrupt = 105, kCarResetL = 0x004, kCarClockL = 0x010, kCarDisp1 = 1u << 27;
+static constexpr uint32_t kDisplayAInterrupt = 105, kCarDisp1Id = 27;  // Linux TEGRA210_CLK_DISP1
 // r17-touch: V_PULSE2, a raster-line interrupt, for the compositor's vsync phase (VsyncPhase.h). L4T dc_reg.h and
 // tegra_dc_init_vpulse2_int (T21x): INT bit 5; DISP_SIGNAL_OPTIONS0 V_PULSE_2_ENABLE bit 19; V_PULSE2_CONTROL H position 0,
 // LAST(1) (bit 8); V_PULSE2_POSITION_A START line 12:0 and END line 28:16, lines counted as L4T counts them (its V_BLANK line is
@@ -386,7 +387,7 @@ extern "C" void (*volatile switch_display_panic_hook)(const char *message);
 
 namespace {
 struct PanicRestore {
-    volatile uint32_t *dc;
+    SwitchMMIOWords dc;
     volatile uint64_t *pixels;
     uint64_t bytes;
     uint32_t options, stride, kind, hOffset, start;  // start: the boot framebuffer, where the panic console draws
@@ -414,7 +415,7 @@ void restorePitchOnPanic(const char *message)
             for (uint64_t i = 0; i < gPanicRestore.bytes / 8; ++i)
                 pixels[i] = 0xff000000ff000000ULL;
         }
-        volatile uint32_t *dc = gPanicRestore.dc;
+        const SwitchMMIOWords dc = gPanicRestore.dc;
         dc[kDcStateAccess] = dc[kDcStateAccess] & ~(kReadMuxActive | kWriteMuxActive);
         dc[kDcWindowHeader] = kWindowASelect;
         dc[kWinLineStride] = gPanicRestore.stride;
@@ -445,7 +446,7 @@ void restorePitchOnPanic(const char *message)
         dc[kDcStateControl] = request;
     } else if (gPanicRestore
                    .planes) {  // the plane probe covers the screen before the first frame: off, the console shows
-        volatile uint32_t *dc = gPanicRestore.dc;
+        const SwitchMMIOWords dc = gPanicRestore.dc;
         dc[kWinBBase + native_planes::kOptions] = 0;
         TegraDisplayColor::bypassForPanic(dc);
         __asm__ volatile("dsb sy" ::: "memory");
@@ -777,7 +778,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     // 250 ms after the start, that frame ends arrive.
     IOFilterInterruptEventSource *vblankSource = nullptr;
     IOMemoryMap *dcMap = nullptr;
-    volatile uint32_t *dc = nullptr;
+    SwitchMMIOWords dc;
     uint32_t dcEnable = 0, dcMask = 0;  // INT_ENABLE and INT_MASK as found, restored on stop
     // INT_MASK is written from outside the gate too (frame-end holds), so every write of it takes this lock.
     IOSimpleLock *intMaskLock = nullptr;
@@ -1438,7 +1439,8 @@ private:
             char gic[192];
             switch_interrupt_describe(kDisplayAInterrupt, gic, sizeof(gic));
             panic("SwitchDisplay: no DC A frame end in 250 ms: INT_STATUS %#x MASK %#x ENABLE %#x, %s",
-                  dc[kDcIntStatus], dc[kDcIntMask], dc[kDcIntEnable], gic);
+                  static_cast<uint32_t>(dc[kDcIntStatus]), static_cast<uint32_t>(dc[kDcIntMask]),
+                  static_cast<uint32_t>(dc[kDcIntEnable]), gic);
         }
         vsyncArmed = false;
         if (!vsyncTimer)
@@ -1467,12 +1469,11 @@ private:
     static bool vblankFilter(OSObject *owner, IOFilterInterruptEventSource *source)
     {
         NativeLegacyDisplay *self = static_cast<NativeLegacyDisplay *>(owner);
-        const uint32_t status =
-            switch_mmio_read32_word(self->dc, kDcIntStatus) & (kVblankInt | kFrameEndInt | kVpulse2Int);
+        const uint32_t status = self->dc[kDcIntStatus] & (kVblankInt | kFrameEndInt | kVpulse2Int);
         if (!status)
             return false;
         self->dc[kDcIntStatus] = status;
-        (void)switch_mmio_read32_word(self->dc, kDcIntStatus);  // read back: the line is low before ArmCpu's EOI
+        (void)self->dc[kDcIntStatus];  // read back: the line is low before ArmCpu's EOI
         if (gPanicRestore.panicking)
             return false;  // window A is the panic's (restorePitchOnPanic): no flip, no DSI command
         if (status & kVblankInt) {
@@ -1892,7 +1893,8 @@ private:
         switch_interrupt_describe(kDisplayAInterrupt, gic, sizeof(gic));
         panic("SwitchDisplay: no DC A V_PULSE2 in %u frame ends with the vsync phase on: INT_STATUS %#x MASK %#x "
               "ENABLE %#x, %s",
-              vpulseSilent, dc[kDcIntStatus], dc[kDcIntMask], dc[kDcIntEnable], gic);
+              vpulseSilent, static_cast<uint32_t>(dc[kDcIntStatus]), static_cast<uint32_t>(dc[kDcIntMask]),
+              static_cast<uint32_t>(dc[kDcIntEnable]), gic);
     }
 
     uint32_t lineNs() const
@@ -1959,8 +1961,10 @@ private:
         switch_interrupt_describe(kDisplayAInterrupt, gic, sizeof(gic));
         IOLog("SwitchDisplay: vsync phase off for this boot: V_PULSE2 never reached the CPU in %u flips (line %u; "
               "SIGNAL_OPTIONS0 %#x V_PULSE2 %#x/%#x INT_STATUS %#x MASK %#x ENABLE %#x, %s); vsync stays at V_BLANK\n",
-              phaseProbe, phaseLine, dc[kDcDispSignalOptions0], dc[kDcDispVpulse2Control], dc[kDcDispVpulse2Position],
-              dc[kDcIntStatus], dc[kDcIntMask], dc[kDcIntEnable], gic);
+              phaseProbe, phaseLine, static_cast<uint32_t>(dc[kDcDispSignalOptions0]),
+              static_cast<uint32_t>(dc[kDcDispVpulse2Control]), static_cast<uint32_t>(dc[kDcDispVpulse2Position]),
+              static_cast<uint32_t>(dc[kDcIntStatus]), static_cast<uint32_t>(dc[kDcIntMask]),
+              static_cast<uint32_t>(dc[kDcIntEnable]), gic);
     }
 
     // The compositor has no vsync client any more: it has nothing to draw until it registers again.
@@ -1994,20 +1998,13 @@ private:
         switch_interrupt_describe(kDisplayAInterrupt, gic, sizeof(gic));
         panic("SwitchDisplay: no DC A V_BLANK in %u frame ends with vsync armed: INT_STATUS %#x MASK %#x ENABLE "
               "%#x, %s",
-              vsyncSilent, dc[kDcIntStatus], dc[kDcIntMask], dc[kDcIntEnable], gic);
+              vsyncSilent, static_cast<uint32_t>(dc[kDcIntStatus]), static_cast<uint32_t>(dc[kDcIntMask]),
+              static_cast<uint32_t>(dc[kDcIntEnable]), gic);
     }
 
     static bool displayClocked()
     {
-        IODeviceMemory *memory = IODeviceMemory::withRange(kCarPA, 0x1000);
-        IOMemoryMap *car = memory ? memory->map(kIOMapAnywhere | kIOMapInhibitCache) : nullptr;
-        OSSafeReleaseNULL(memory);
-        if (!car)
-            return false;
-        const volatile uint32_t *regs = reinterpret_cast<const volatile uint32_t *>(car->getVirtualAddress());
-        const bool running = ((regs[kCarClockL / 4] & kCarDisp1) != 0u) && ((regs[kCarResetL / 4] & kCarDisp1) == 0u);
-        car->release();
-        return running;
+        return switch_car_clock_enabled(kCarDisp1Id) && !switch_car_reset_asserted(kCarDisp1Id);
     }
 
     bool startVblank(IOWorkLoop *loop)
@@ -2020,7 +2017,7 @@ private:
         OSSafeReleaseNULL(memory);
         if (!dcMap)
             panic("SwitchDisplay: cannot map DC A");
-        dc = reinterpret_cast<volatile uint32_t *>(dcMap->getVirtualAddress());
+        dc = SwitchMMIOWords(static_cast<uintptr_t>(dcMap->getVirtualAddress()));
         color->attach(dc);
         vblankSource = IOFilterInterruptEventSource::filterInterruptEventSource(
             this, &NativeLegacyDisplay::vblankFired, &NativeLegacyDisplay::vblankFilter, nub, 0);
@@ -2071,7 +2068,7 @@ private:
         dc[kDcIntStatus] = kVblankInt | kFrameEndInt | kVpulse2Int;
         vpulseProgrammed = vpulseSeen = false;
         color->detach();
-        dc = nullptr;
+        dc = SwitchMMIOWords();
         OSSafeReleaseNULL(dcMap);
         dcPending = 0;
     }
@@ -2304,7 +2301,7 @@ private:
         NativeLegacyDisplay *self = static_cast<NativeLegacyDisplay *>(owner);
         if (self->hwSuspended)
             return;  // unclocked for SC7
-        volatile uint32_t *dc = self->dc;
+        const SwitchMMIOWords dc = self->dc;
         __asm__ volatile("dsb sy" ::: "memory");
         dc[kDcWindowHeader] = kWindowASelect;
         if (!self->tapeStrideSet) {
@@ -2320,8 +2317,7 @@ private:
     static int tapeLatched(void *owner)
     {
         return static_cast<int>(
-            static_cast<int>((switch_mmio_read32_word(static_cast<NativeLegacyDisplay *>(owner)->dc, kDcStateControl) &
-                              kWinAActReq)) == 0u);
+            static_cast<int>((static_cast<NativeLegacyDisplay *>(owner)->dc[kDcStateControl] & kWinAActReq)) == 0u);
     }
 
     static int tapeWait(void *owner)
@@ -2361,7 +2357,8 @@ private:
         switch_interrupt_describe(kDisplayAInterrupt, gic, sizeof(gic));
         panic("SwitchDisplay: the console waited %u ms for a DC A frame end to scroll: INT_STATUS %#x MASK %#x "
               "ENABLE %#x, %s",
-              kTapeWaitMS, dc[kDcIntStatus], dc[kDcIntMask], dc[kDcIntEnable], gic);
+              kTapeWaitMS, static_cast<uint32_t>(dc[kDcIntStatus]), static_cast<uint32_t>(dc[kDcIntMask]),
+              static_cast<uint32_t>(dc[kDcIntEnable]), gic);
     }
 
     // Under the gate, once window A no longer scans the tape: the console (released at the first frame) leaves it, its pages go.
@@ -2401,7 +2398,8 @@ private:
                 return;
             panic("SwitchDisplay: window A never latched the console's last scroll in %u frames: STATE_CONTROL %#x "
                   "ACT_CONTROL %#x START %#x",
-                  kLatchFrames, dc[kDcStateControl], dc[kDcRegActControl], windowActive(kWinbufStartAddr));
+                  kLatchFrames, static_cast<uint32_t>(dc[kDcStateControl]), static_cast<uint32_t>(dc[kDcRegActControl]),
+                  windowActive(kWinbufStartAddr));
         }
         tapeSettle = false;
         if (kickDeferred) {
@@ -2436,8 +2434,9 @@ private:
               ring.pending != kNoBuffer ? surfaceAddress(ring.pending)
               : probe.onIova            ? (uint32_t)kProbeSlot
                                         : surfaceAddress(probeSurface),
-              kFlipDeadlineMS, frameEnds - flipRequested, dc[kDcStateControl], dc[kDcIntStatus], dc[kDcIntMask],
-              dc[kDcIntEnable], gic);
+              kFlipDeadlineMS, frameEnds - flipRequested, static_cast<uint32_t>(dc[kDcStateControl]),
+              static_cast<uint32_t>(dc[kDcIntStatus]), static_cast<uint32_t>(dc[kDcIntMask]),
+              static_cast<uint32_t>(dc[kDcIntEnable]), gic);
     }
 
     // Surface i's physical address (window A's START_ADDR); 0 is the boot framebuffer, also the pitch console's.
@@ -2619,7 +2618,7 @@ private:
                 return;
             panic("SwitchDisplay: window A never latched the flip to %#x in %u frames: STATE_CONTROL %#x "
                   "ACT_CONTROL %#x START %#x",
-                  surfaceAddress(asked), kLatchFrames, control, dc[kDcRegActControl], start);
+                  surfaceAddress(asked), kLatchFrames, control, static_cast<uint32_t>(dc[kDcRegActControl]), start);
         case TegraScanoutRing::kInconsistent:
             // Double-buffered already, this is the check the path had before r14: window A does not show the flip asked for.
             if (!ring.replace) {
@@ -2686,7 +2685,7 @@ private:
 
         void scan(bool iova) const
         {
-            volatile uint32_t *regs = d->dc;
+            const SwitchMMIOWords regs = d->dc;
             regs[kDcStateAccess] = regs[kDcStateAccess] & ~(kReadMuxActive | kWriteMuxActive);
             regs[kDcWindowHeader] = kWindowASelect;
             regs[kWinbufStartAddr] = iova ? static_cast<uint32_t>(kProbeSlot) : d->surfaceAddress(d->probeSurface);
@@ -3039,7 +3038,7 @@ private:
                 panic("SwitchDisplay: window A never latched the rotation in %u frames: STATE_CONTROL %#x "
                       "ACT_CONTROL %#x OPTIONS %#x "
                       "STRIDE %#x KIND %#x H %#x",
-                      kLatchFrames, control, dc[kDcRegActControl], windowActive(kWinOptions),
+                      kLatchFrames, control, static_cast<uint32_t>(dc[kDcRegActControl]), windowActive(kWinOptions),
                       windowActive(kWinLineStride), windowActive(kWinbufSurfaceKind), windowActive(kWinbufHOffset));
             }
             const uint32_t options = windowActive(kWinOptions);
