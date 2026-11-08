@@ -8,6 +8,7 @@
 // Both bind every buffer slot 0..kSlots-1 to the same tagged bytes (pack/probe.mm's scheme).
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
+#include <algorithm>
 #include <cstdio>
 #include <fstream>
 #include <map>
@@ -56,6 +57,13 @@ std::vector<uint32_t> texels(uint32_t t)
 // FRAME_BIG_BUFFER=<bytes>: slot kBigSlot bound to a buffer of that many bytes instead of its tag (a storage range past
 // a constant buffer's 64 KiB)
 constexpr uint32_t kBigSlot = 1;
+
+// FRAME_DISPATCHES=<n>: the dispatch n times in one serial encoder (the order between them)
+uint32_t dispatches()
+{
+    const char *n = getenv("FRAME_DISPATCHES");
+    return n ? std::max(1u, uint32_t(atoi(n))) : 1;
+}
 
 uint32_t bigBuffer()
 {
@@ -140,8 +148,9 @@ int runNvk(char **argv)
         sd.lodMaxClamp = 1 + t / 2.0f;
         [enc setSamplerState:[dev newSamplerStateWithDescriptor:sd] atIndex:t];
     }
-    [enc dispatchThreadgroups:MTLSizeMake(groups[0], groups[1], groups[2])
-        threadsPerThreadgroup:MTLSizeMake(threads[0], threads[1], threads[2])];
+    for (uint32_t n = 0; n < dispatches(); n++)
+        [enc dispatchThreadgroups:MTLSizeMake(groups[0], groups[1], groups[2])
+            threadsPerThreadgroup:MTLSizeMake(threads[0], threads[1], threads[2])];
     [enc endEncoding];
     [cb commit];
     [cb waitUntilCompleted];
@@ -297,10 +306,12 @@ int runRaw(char **argv)
         enc.setSampler(t, &samplers[t]);
     }
     const char *why = nullptr;
-    if (!enc.dispatch(groups, threads, &why)) {
-        fprintf(stderr, "refused: %s\n", why);
-        return 1;
-    }
+    enc.setSerial(true);
+    for (uint32_t n = 0; n < dispatches(); n++)
+        if (!enc.dispatch(groups, threads, &why)) {
+            fprintf(stderr, "refused: %s\n", why);
+            return 1;
+        }
     enc.end();
     uint32_t seq = 0;
     if (!cb->commit(seq) || !dev.wait(seq))

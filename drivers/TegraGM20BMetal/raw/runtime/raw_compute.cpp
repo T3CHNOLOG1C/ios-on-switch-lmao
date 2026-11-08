@@ -69,9 +69,12 @@ const ComputeState *computeState(Device &dev, uint64_t keyHash)
         return nullptr;
     ComputeState c;
     c.rec = k;
-    if (!dev.place(k->program, c.program, c.data)) {
-        dev.stats.heapFull++;
-        return nullptr;
+    {
+        std::lock_guard<std::mutex> l(dev.lock_);
+        if (!dev.place(k->program, c.program, c.data)) {
+            dev.stats.heapFull++;
+            return nullptr;
+        }
     }
     const PackProgram &p = dev.pack().section<PackProgram>(PackPrograms)[k->program];
     memcpy(c.cbufType, p.cbufType, std::min<size_t>(sizeof c.cbufType, p.cbufs));

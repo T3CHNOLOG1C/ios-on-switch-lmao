@@ -135,9 +135,6 @@ void Decoder::dispatch(uint64_t qmd)
     std::string prog;
     computeProgram(region + q[8], prog);
     fprintf(out_, "  prog=%s\n", prog.c_str());
-    static const bool probe = getenv("NVDEC_KERNELS") != nullptr;
-    if (probe)
-        probeKernel(q, prog);
     // set 0's handles whose sampler index is 0 read no sampler (a texture read: m2v's handle names none, and NVK hands
     // index 0 out like any other)
     Layout handles;
@@ -175,6 +172,10 @@ void Decoder::dispatch(uint64_t qmd)
         }
     }
     layout_ = nullptr;
+    // after the records above: the probe's scrub (NVDEC_SCRUB) zeroes the set and root they read
+    static const bool probe = getenv("NVDEC_KERNELS") != nullptr;
+    if (probe)
+        probeKernel(q, prog);
 }
 
 // NVDEC_KERNELS: what a probe dispatch shows of its kernel (raw_compute.h KernelRecord), for the pack's generator: the QMD, the

@@ -312,8 +312,8 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
     for (size_t at = from; at < to; at++) {
         const Cmd &c = cb->_tape[at];
         if (isKernelCommand(c.op)) {
-            if (!encodeKernel(*ce, *rc, cb, c, why))
-                return refused();
+            if (const char *w = nullptr; !encodeKernel(*ce, *rc, cb, c, &w))
+                return fail(PredCompute, w, c.op);
             continue;
         }
         switch (c.op) {
