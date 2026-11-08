@@ -470,6 +470,18 @@ static void giveRecording(RMCommandBuffer *b)
     return NSClassFromString(@"NBQueue");
 }
 
+- (instancetype)init
+{
+    if ((self = [super init]))
+        queuePriorityAdd(self);
+    return self;
+}
+
+- (void)dealloc
+{
+    queuePriorityRemove(self);
+}
+
 - (id)rmTwin
 {
     @synchronized(self) {

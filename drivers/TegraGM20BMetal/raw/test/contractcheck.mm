@@ -8,6 +8,8 @@
 //   the bytes in it; and the buffers a compute pass names, as arguments and in arrays, are marked written by the GPU once it
 //   completes (on m2v, which the replay hands their twins), so the CPU's next read of them invalidates its cached lines; and a
 //   command buffer whose raw submission the kernel refused after part of it ran completes with an error, not replayed.
+// - Either way: the queues' GPU priorities reach the kernel (Priority, method 18) as the most urgent any live queue asked for,
+//   with no m2v queue made for them.
 // usage: contractcheck <pack> <cache dir> [<nvk dylib>]
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
@@ -26,6 +28,7 @@
 extern "C" void mock_iokit_fail_next(unsigned method, unsigned count, int kr);
 extern "C" void mock_iokit_fail_after(unsigned method, unsigned skip, unsigned count, int kr);
 extern "C" unsigned long mock_iokit_calls(unsigned method);
+extern "C" void mock_iokit_priority(uint32_t out[2]);
 
 static int failed;
 
@@ -190,6 +193,39 @@ static void computeWrites(id<MTLDevice> dev)
     expect(gpuDirty(two) && gpuDirty(three), "buffers it names in an array are marked written");
 }
 
+@protocol QueuePrioritySPI
+- (BOOL)setGPUPriority:(NSUInteger)priority;
+- (BOOL)setBackgroundGPUPriority:(NSUInteger)priority;
+- (NSUInteger)getGPUPriority;
+- (NSUInteger)getBackgroundGPUPriority;
+@end
+
+static bool kernelPriority(uint32_t priority, uint32_t background)
+{
+    uint32_t now[2];
+    mock_iokit_priority(now);
+    return now[0] == priority && now[1] == background;
+}
+
+static void queuePriorities(id<MTLDevice> dev)
+{
+    id<MTLCommandQueue, QueuePrioritySPI> render = (id)[dev newCommandQueue], other = (id)[dev newCommandQueue];
+    expect([render setGPUPriority:0] && kernelPriority(0, 4), "a queue's priority 0 reaches the kernel");
+    expect([other setBackgroundGPUPriority:1] && kernelPriority(0, 1), "another's background priority 1 too");
+    expect(![other setGPUPriority:6] && kernelPriority(0, 1), "a priority Metal does not have is refused");
+    expect([render getGPUPriority] == 0 && [other getBackgroundGPUPriority] == 1, "each queue answers its own");
+    Ivar twin = class_getInstanceVariable(object_getClass(render), "_twin");
+    expect(twin && !object_getIvar(render, twin) && !object_getIvar(other, twin), "no m2v queue made for them");
+    @autoreleasepool {
+        render = nil;
+    }
+    expect(kernelPriority(2, 1), "the most urgent live queue's once the urgent one is gone");
+    @autoreleasepool {
+        other = nil;
+    }
+    expect(kernelPriority(2, 4), "Metal's defaults once no queue asks");
+}
+
 int main(int argc, char **argv)
 {
     @autoreleasepool {
@@ -213,6 +249,7 @@ int main(int argc, char **argv)
             fprintf(stderr, "NO DEVICE: %s\n", why.UTF8String);
             return 1;
         }
+        queuePriorities(dev);
         if (fallback) {
             bytesWithoutRoom(dev);
             computeWrites(dev);

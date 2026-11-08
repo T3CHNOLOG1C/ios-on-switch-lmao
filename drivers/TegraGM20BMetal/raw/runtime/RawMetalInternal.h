@@ -223,6 +223,10 @@ uint64_t surfaceWrites(IOSurfaceRef s);
 void noteSurfaceWrite(IOSurfaceRef s);
 void noteSurfaceWrites(RMCommandBuffer *cb, size_t from, size_t to);  // after [from, to) of `cb` was submitted
 
+// RawMetalQueuePriority.mm
+void queuePriorityAdd(RMQueue *queue);
+void queuePriorityRemove(RMQueue *queue);
+
 // RawMetalSubmit.mm
 void orderRefused(const char *what, int kr);
 void commitBuffer(RMCommandBuffer *cb);

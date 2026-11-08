@@ -218,6 +218,7 @@ inline Cmd cmd(Op op, uint8_t stage = 0, uint16_t index = 0)
 @interface RMQueue : RMObject {
 @public
     dispatch_queue_t _completionQueue;
+    uint32_t _gpuPriority, _backgroundGpuPriority;  // what it asked for (RawMetalQueuePriority.mm)
     raw::ResidencySets _residency;
 }
 @end
