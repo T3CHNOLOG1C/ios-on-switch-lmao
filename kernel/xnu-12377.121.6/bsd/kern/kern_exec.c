@@ -6844,16 +6844,23 @@ static const char *const native_switch_bluetoothd_environment[] = {
  * CA_DISABLE_LUMA_COMPUTE: QuartzCore 27 measures a luma-tracking backdrop (the home grabber, glass that adapts to what is
  * behind it) with compute kernels (compute_sum_luma, compute_average_luma) unless this debug option is set, which it reads
  * from the environment on release builds too; set, it takes the backdrop's average from a mipmapped copy (the 2D engine's
- * chain) and a one-texel readback. The raw GM20B path runs no compute, so each measurement sent its frame's command buffer
- * to m2v.
+ * chain) and a one-texel readback. The raw GM20B path dispatches only the kernels its pack holds (raw_compute.h), and the
+ * pack holds the dispatch shapes the device journal names: boot-arg switch-luma-compute=1 leaves the option out, so a
+ * boot's journal names Core Animation's luma dispatches (and m2v draws those the pack lacks).
  */
 #if NATIVE_SWITCH_CA_VBL
-static const char *const native_switch_backboardd_vbl_environment[] = {
+static const char *const native_switch_backboardd_environment[] = {
 	"CA_DISABLE_DETACHED=1", "CA_FORCE_TIMER=1", "CA_DISABLE_LUMA_COMPUTE=1", NULL
+};
+static const char *const native_switch_backboardd_luma_environment[] = {
+	"CA_DISABLE_DETACHED=1", "CA_FORCE_TIMER=1", NULL
 };
 #else
 static const char *const native_switch_backboardd_environment[] = {
 	"CA_DISABLE_DETACHED=1", "CA_DISABLE_LUMA_COMPUTE=1", NULL
+};
+static const char *const native_switch_backboardd_luma_environment[] = {
+	"CA_DISABLE_DETACHED=1", NULL
 };
 #endif
 
@@ -6872,18 +6879,15 @@ native_switch_exec_environment(const struct image_params *imgp)
 	}
 	static const char backboardd[] = "/usr/libexec/backboardd";
 	if (!strncmp(executable, backboardd, sizeof(backboardd))) {
+		static int luma = -1;
+		if (luma < 0) {
+			uint32_t value = 0;
+			luma = PE_parse_boot_argn("switch-luma-compute", &value, sizeof(value)) && value;
+		}
+		const char *const *environment = luma ? native_switch_backboardd_luma_environment
+		    : native_switch_backboardd_environment;
 		const int single = !native_legacy_detach_ready();
-#if NATIVE_SWITCH_CA_VBL
-		if (single) {
-			return native_switch_backboardd_vbl_environment;
-		}
-		return native_switch_backboardd_vbl_environment + 1;
-#else
-		if (single) {
-			return native_switch_backboardd_environment;
-		}
-		return native_switch_backboardd_environment + 1;
-#endif
+		return single ? environment : environment + 1;
 	}
 	return NULL;
 }
