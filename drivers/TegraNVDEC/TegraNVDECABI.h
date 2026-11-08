@@ -43,7 +43,7 @@ enum TegraNVDECMethod {
     TegraNVDECMethodPresent = 6,      // TegraNVDECPresent -> (the picture is in the IOSurface)
 };
 
-#define TEGRA_NVDEC_FEATURE_PRESENT (1u << 0)  // TegraNVDECInfo.features: Present is on (VIC proved block-linear input)
+#define TEGRA_NVDEC_FEATURE_PRESENT (1u << 0)  // TegraNVDECInfo.features: Present is on (VIC reads block linear)
 
 // NVDEC application ids (clc5b0.h NVC5B0_SET_APPLICATION_ID_ID_*). TegraNVDECInfo.codecs has bit n set for each
 // codec NVDEC decodes; Submit refuses the others.
