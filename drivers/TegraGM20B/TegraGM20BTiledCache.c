@@ -7,7 +7,8 @@
 
 void switch_tiled_cache_golden(struct nvkm_device *device)
 {
-	u32 ctrl[TGM_TC_CTRL_WORDS], addr[TGM_TC_ADDR_WORDS];
+	u32 ctrl[TGM_TC_CTRL_WORDS];
+	u32 addr[TGM_TC_ADDR_WORDS];
 	u32 i = 0;
 
 	if (!switch_tiled_cache_on()) {
