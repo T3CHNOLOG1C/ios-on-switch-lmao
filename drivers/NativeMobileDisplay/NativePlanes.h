@@ -136,7 +136,17 @@ struct Limits {
     uint32_t maxSrcBuffer = 2048;  // so rows x stride of any source fits one 20 MiB slot (8 KiB x 2048 = 16 MiB)
     uint32_t planeBaseAlignment = 64, strideAlignment = 128;
     uint32_t maxLayers = 2;
+    bool packedYuvUnsupported = false;  // published as IOMFBYUVPackedUnSupported (24B119 only, see kLimits24B119)
 };
+
+// QuartzCore 24B119 [V] reads every key above the same way (update_display_limits 0x1844e82f0; MaxSrcRectWidthForPipe and
+// MaxSrcRectHeightForPipe, absent, become MaxSrcRectWidth and MaxSrcRectTotal / MaxSrcRectWidth). Apple's packed 10-bit
+// YUV ('p420', 'pf20'...) is new with J181's chip id (0x8030), where 21H461 went by J120's (0x8011) to rule it out:
+// AppleDisplay::detachable_layer_impl (0x18443d2a0) takes it, and IOMFBDisplay::detach_layer makes the IOSurfaceAccelerator
+// copies for the display in it, unless the display says IOMFBYUVPackedUnSupported (supports_packed_yuv). Window B scans
+// none of it. 10-bit biplanar ('x420') and 'RGhA' have no such key: 24B119 gates the first by IOMFBYUVSupportKey alone
+// (all YUV) and the second by chip id and the surface's transfer function.
+constexpr Limits kLimits24B119 = {.packedYuvUnsupported = true};
 
 // The row and plane-base alignment published for every surface iPadOS sizes for this display (Core Animation's
 // framebuffers through update_display_limits, VideoToolbox's and MediaToolbox's outputs through

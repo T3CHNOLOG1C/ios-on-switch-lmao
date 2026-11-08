@@ -11,6 +11,7 @@ exports_files(["manifest.json"])
 filegroup(
     name = "overlay_sources",
     srcs = [
+        "//drivers/NativeMobileDisplay:overlay_files",
         "//drivers/SwitchAudio:overlay_files",
         "//drivers/SwitchJoyCon:overlay_files",
     ],

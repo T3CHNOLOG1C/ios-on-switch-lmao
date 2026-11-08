@@ -35,7 +35,9 @@
     "in the trust cache, in a union over /Applications. boot/BUILD.bazel gives each kind the app built for its iOS",
     "version; iOS 27 also gets SwitchHWTest27e.app, the same app built arm64e. Deploy asks for an upgrade migration",
     "when they change, so LaunchServices registers them the way it registers an OS update's system apps",
-    "(tools/deploy/system_apps.py)."
+    "(tools/deploy/system_apps.py).",
+    "Debug iOS 27 packages show iOS 27's com.apple.coreanimation logging profile with CADebug's info lines persisted, so the",
+    "pulled log holds the render server's detach results (drivers/NativeMobileDisplay/logging)."
   ],
   "files": [
     {
@@ -203,6 +205,12 @@
       "trust": true,
       "bundle": true,
       "union": "/Applications",
+      "debug": true,
+      "kind": "24B119"
+    },
+    {
+      "path": "/System/Library/Preferences/Logging/Subsystems/com.apple.coreanimation.plist",
+      "source": "drivers/NativeMobileDisplay/logging/com.apple.coreanimation.plist",
       "debug": true,
       "kind": "24B119"
     }

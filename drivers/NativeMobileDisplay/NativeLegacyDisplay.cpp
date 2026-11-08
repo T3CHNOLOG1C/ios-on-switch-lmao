@@ -5205,7 +5205,11 @@ public:
     // (native_legacy_detach_ready false) nothing is detached and these change nothing.
     void publishPlaneLimits()
     {
-        const native_planes::Limits limits;
+#if SWITCH_IPSW_KIND_24B119
+        constexpr native_planes::Limits limits = native_planes::kLimits24B119;
+#else
+        constexpr native_planes::Limits limits;
+#endif
 
         struct Entry {
             const char *key;
@@ -5243,6 +5247,8 @@ public:
         publish("DisplayPipePlaneBaseAlignment", base, 1, 64);
         const Entry layers[] = {{"MaxNumLayers", limits.maxLayers}};
         publish("IOMFBNumLayers", layers, 1, 32);
+        if (limits.packedYuvUnsupported)
+            setProperty("IOMFBYUVPackedUnSupported", true);
     }
 
     IOReturn getGammaTable(void *table) override

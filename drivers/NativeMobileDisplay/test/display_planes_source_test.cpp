@@ -43,18 +43,23 @@ void ExpectBefore(const std::string &text, const std::string &a, const std::stri
     EXPECT_LT(at, bt) << a << " before " << b;
 }
 
-// XNU's kern_exec.c (the vendored kernel/xnu-10063.141.1), by its runfiles path (XNU_KERN_EXEC, the BUILD's
-// $(rootpath)): not a file of this test's package.
-std::string XnuKernExec()
+// A file outside this test's package by its runfiles path (the BUILD's $(rootpath)).
+std::string Runfile(const char *path)
 {
-    std::ifstream file(XNU_KERN_EXEC, std::ios::binary);
+    std::ifstream file(path, std::ios::binary);
     if (!file) {
-        ADD_FAILURE() << "cannot read " << XNU_KERN_EXEC;
+        ADD_FAILURE() << "cannot read " << path;
         return {};
     }
     std::ostringstream text;
     text << file.rdbuf();
     return text.str();
+}
+
+// XNU's kern_exec.c (the vendored kernel/xnu-10063.141.1).
+std::string XnuKernExec()
+{
+    return Runfile(XNU_KERN_EXEC);
 }
 
 }  // namespace
@@ -127,8 +132,13 @@ TEST(DisplayPlanesSource, DriverFollowsTheRules)
     EXPECT_THAT(source, Not(HasSubstr("publishDetachAlignment")));
     EXPECT_THAT(Method(source, "    void publishStrideRequirements()\n"),
                 HasSubstr("OSNumber::withNumber(native_planes::kPublishedRowAlignment, 32)"));
-    EXPECT_THAT(Method(source, "    void publishPlaneLimits()\n"),
-                HasSubstr("{\"PlaneBaseAlignmentLinear\", native_planes::kPublishedBaseAlignment}"));
+    const std::string limits = Method(source, "    void publishPlaneLimits()\n");
+    EXPECT_THAT(limits, HasSubstr("{\"PlaneBaseAlignmentLinear\", native_planes::kPublishedBaseAlignment}"));
+    // iOS 27's own limits; iOS 17's dictionary has no key they add.
+    ExpectBefore(limits, "#if SWITCH_IPSW_KIND_24B119", "native_planes::kLimits24B119;");
+    EXPECT_THAT(
+        limits,
+        HasSubstr("if (limits.packedYuvUnsupported)\n            setProperty(\"IOMFBYUVPackedUnSupported\", true);"));
     // The service is found as J120's: IOServiceMatching("AppleCLCD").
     EXPECT_THAT(
         source,
@@ -191,4 +201,17 @@ TEST(DisplayPlanesSource, BackboarddDetachesOnlyWhenTheDisplaySaysSo)
     ASSERT_FALSE(exec.empty());
     EXPECT_THAT(exec, Not(HasSubstr("if (single_layer) {")));
     EXPECT_THAT(exec, Not(HasSubstr("if (vbl && single_layer) {")));
+}
+
+// Debug iOS 27 kernels have backboardd log why each layer was or was not detached; release kernels and iOS 17 do not.
+TEST(DisplayPlanesSource, DetachReasonsLoggedOnlyByDebugIos27Kernels)
+{
+    const std::string xnu27 = Runfile(XNU27_KERN_EXEC);
+    const std::string print =
+        Between(xnu27, "#if DEVELOPMENT || DEBUG\n#define NATIVE_SWITCH_CA_PRINT_DETACHING", "#endif");
+    EXPECT_THAT(print, HasSubstr("\"CA_PRINT_DETACHING=1\","));
+    EXPECT_THAT(print, HasSubstr("#else\n#define NATIVE_SWITCH_CA_PRINT_DETACHING\n"));
+    EXPECT_EQ(Count(xnu27, "CA_PRINT_DETACHING=1"), 1u);
+    EXPECT_EQ(Count(xnu27, "NATIVE_SWITCH_CA_PRINT_DETACHING NULL"), 2u);
+    EXPECT_THAT(XnuKernExec(), Not(HasSubstr("CA_PRINT_DETACHING")));
 }
