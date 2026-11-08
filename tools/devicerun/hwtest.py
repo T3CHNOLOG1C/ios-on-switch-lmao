@@ -41,6 +41,7 @@ TESTS: dict[str, bool] = {
             'gpu.msaa.resolve',
             'gpu.blur.mps',
             'gpu.blur.coreimage',
+            'gpu.compute.half_alu',
             'metal.device',
             'metal.compute',
             'metal.render.color',

@@ -16,8 +16,9 @@
 //     cleared as Linux max77620_irq_global_unmask does. Register map: hekate bdk/power/max77620.h.
 // A press and release that both happen before the work loop runs still give one press: two volume edges with the
 // level unchanged, or both EN0 edges latched, are reported as a press followed by a release.
-// Failures panic with a one-line reason; there is no polled mode. A 10 s watchdog checks that latched volume edges
-// reached the CPU (tegra_gpio_check_delivery), and a PMIC interrupt storm panics with the registers.
+// A volume key whose interrupt cannot be had panics with a one-line reason; there is no polled mode. A 10 s watchdog
+// checks that latched volume edges reached the CPU (tegra_gpio_check_delivery). A PMIC that does not answer on I2C5, or
+// whose interrupt storms, is one log line and the power key off for the boot; the volume keys keep working.
 // Waking (../SwitchSuspend/SwitchWake.h): a power-key press with the panel off is a wake source (journal line, wake
 // guarantee); the press itself goes to SpringBoard as always. Menu (0x0C/0x40, J120's Home button) and Snapshot
 // (0x0C/0x65, the screenshot key) are this device's fourth and fifth usages: switch_buttons_bt_click() clicks them
@@ -102,7 +103,8 @@ class SwitchButtons : public IOService {
     static void pmicInterrupt(OSObject *owner, IOInterruptEventSource *sender, int count);
     static void watchdogFired(OSObject *owner, IOTimerEventSource *sender);
     static void btClicks(OSObject *owner, IOInterruptEventSource *sender, int count);
-    void setUpPmic();
+    bool setUpPmic();
+    void powerKeyOff();
     void change(uint8_t button, bool pressed, bool pulse);
     void post();
 
@@ -147,11 +149,12 @@ OSDefineMetaClassAndStructors(SwitchButtons, IOService)
             buttons |= kVolume[i].button;
     }
 
-    setUpPmic();
-    pmic = IOInterruptEventSource::interruptEventSource(this, &SwitchButtons::pmicInterrupt,
-                                                        switch_interrupt_nub(kPmicIntid, false), 0);
-    if (!pmic || loop->addEventSource(pmic) != kIOReturnSuccess)
-        panic("SwitchButtons: cannot attach the MAX77620 interrupt (INTID 118)");
+    if (setUpPmic()) {
+        pmic = IOInterruptEventSource::interruptEventSource(this, &SwitchButtons::pmicInterrupt,
+                                                            switch_interrupt_nub(kPmicIntid, false), 0);
+        if (!pmic || loop->addEventSource(pmic) != kIOReturnSuccess)
+            panic("SwitchButtons: cannot attach the MAX77620 interrupt (INTID 118)");
+    }
 
     home = IOInterruptEventSource::interruptEventSource(this, &SwitchButtons::btClicks);
     if (!home || loop->addEventSource(home) != kIOReturnSuccess)
@@ -159,7 +162,8 @@ OSDefineMetaClassAndStructors(SwitchButtons, IOService)
 
     for (auto *source : volume)
         source->enable();
-    pmic->enable();
+    if (pmic)
+        pmic->enable();
     home->enable();
     switch_check_after_ms(watchdog, kWatchdogMS);
     IOLog("SwitchButtons: started\n");
@@ -191,7 +195,7 @@ void SwitchButtons::free()
 
 // PMC polarity first (the GIC line is still disabled), then the PMIC: stale EN0 edges read away, only EN0's edges
 // unmasked, global mask off.
-void SwitchButtons::setUpPmic()
+bool SwitchButtons::setUpPmic()
 {
     switch_pmc_rmw(kPmcCntrl, 0, kPmcIntrPolarity);
     const uint32_t control = switch_pmc_read(kPmcCntrl);
@@ -218,10 +222,20 @@ void SwitchButtons::setUpPmic()
         err = pmicWrite(IntEnLbt, static_cast<uint8_t>(global & ~kGlobalMask));
     if (!err)
         err = pmicRead(OnOffStat, &state);
-    if (err)
-        panic("SwitchButtons: MAX77620 (I2C5 0x3c) power-key interrupt setup failed: I2C error %d", err);
+    if (err) {
+        IOLog("SwitchButtons: power key off: MAX77620 (I2C5 0x3c) interrupt setup failed: I2C error %d\n", err);
+        return false;
+    }
     if (state & kEn0Pressed)
         buttons |= kSwitchButtonPower;
+    return true;
+}
+
+// Work loop: the PMIC's interrupt stays masked for the rest of the boot (nIRQ may stay low: nothing reads it again).
+void SwitchButtons::powerKeyOff()
+{
+    pmic->disable();
+    change(kSwitchButtonPower, false, false);
 }
 
 void SwitchButtons::post()
@@ -272,8 +286,11 @@ void SwitchButtons::pmicInterrupt(OSObject *owner, IOInterruptEventSource *, int
         switch_rtc_interrupt();
     if (!err)
         err = pmicRead(OnOffStat, &state);
-    if (err)
-        panic("SwitchButtons: reading the MAX77620 interrupt status failed: I2C error %d", err);
+    if (err) {
+        IOLog("SwitchButtons: power key off: reading the MAX77620 interrupt status failed: I2C error %d\n", err);
+        self->powerKeyOff();
+        return;
+    }
 
     const uint64_t now = mach_absolute_time();
     uint64_t elapsedNS = 0;
@@ -285,9 +302,11 @@ void SwitchButtons::pmicInterrupt(OSObject *owner, IOInterruptEventSource *, int
     if (++self->pmicCount > kPmicBurst) {
         char gic[160];
         switch_interrupt_describe(kPmicIntid, gic, sizeof(gic));
-        panic("SwitchButtons: MAX77620 interrupt (INTID 118) fired %u times in %llu ms: IRQTOP %#x ONOFFIRQ %#x "
-              "ONOFFSTAT %#x, %s",
+        IOLog("SwitchButtons: power key off: MAX77620 interrupt (INTID 118) fired %u times in %llu ms: IRQTOP %#x "
+              "ONOFFIRQ %#x ONOFFSTAT %#x, %s\n",
               self->pmicCount, elapsedNS / 1000000, top, edges, state, gic);
+        self->powerKeyOff();
+        return;
     }
     const bool wasPressed = (self->buttons & kSwitchButtonPower) != 0;
     self->change(kSwitchButtonPower, (state & kEn0Pressed) != 0,

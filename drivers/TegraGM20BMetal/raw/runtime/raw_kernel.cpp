@@ -47,6 +47,13 @@ Kernel::~Kernel()
         IOServiceClose(conn_);
 }
 
+static std::string failed(const char *what, int kr)
+{
+    char line[64];
+    snprintf(line, sizeof line, "%s failed (0x%x)", what, unsigned(kr));
+    return line;
+}
+
 int Kernel::call(uint32_t method, const void *in, size_t inSize, void *out, size_t outSize)
 {
     size_t outBytes = outSize;
@@ -326,8 +333,8 @@ bool Kernel::channel(uint32_t engines, uint32_t &channel, const volatile uint32_
 {
     TegraGM20BAbiChannelCreate in = {engines, 0};
     TegraGM20BAbiChannelCreateReply r = {};
-    if (call(TegraGM20BMethodChannelCreate, &in, sizeof in, &r, sizeof r) != KERN_SUCCESS) {
-        err_ = "ChannelCreate failed";
+    if (const int kr = call(TegraGM20BMethodChannelCreate, &in, sizeof in, &r, sizeof r); kr != KERN_SUCCESS) {
+        err_ = failed("ChannelCreate", kr);
         return false;
     }
     uint64_t size = 0;
@@ -419,7 +426,7 @@ bool Kernel::exec(uint32_t channel, const TegraGM20BAbiPush *pushes, uint32_t co
         if (kr == kIOReturnNotResponding)
             markLost(channel);
         if (kr != kIOReturnBusy || !last) {
-            err_ = "Exec failed";
+            err_ = failed("Exec", kr);
             return false;
         }
         // GPFIFO full: block on the last submission's fence (interrupt-driven in the kext), never spin
@@ -429,12 +436,20 @@ bool Kernel::exec(uint32_t channel, const TegraGM20BAbiPush *pushes, uint32_t co
 }
 
 // The kernel keeps a killed channel, and its cause, until ChannelDestroy (reopen), so GetStatus still answers for it here
-void Kernel::markLost(uint32_t channel)
+bool Kernel::status(uint32_t channel, TegraGM20BAbiStatus &st)
 {
     const TegraGM20BAbiChannel in = {channel, 0};
-    TegraGM20BAbiStatus st = {};
-    if (call(TegraGM20BMethodGetStatus, &in, sizeof in, &st, sizeof st) != KERN_SUCCESS)
-        st = {};  // the channel already destroyed (another thread's reopen): the cause unknown, not an earlier kill's
+    st = {};
+    if (call(TegraGM20BMethodGetStatus, &in, sizeof in, &st, sizeof st) == KERN_SUCCESS)
+        return true;
+    st = {};
+    return false;
+}
+
+void Kernel::markLost(uint32_t channel)
+{
+    TegraGM20BAbiStatus st;
+    status(channel, st);  // none: the channel already destroyed (another thread's reopen), the cause unknown
     lostFaultVa_.store(st.fault_va, std::memory_order_relaxed);
     lostError_.store(st.error, std::memory_order_relaxed);
     lostChannel_.store(channel, std::memory_order_relaxed);

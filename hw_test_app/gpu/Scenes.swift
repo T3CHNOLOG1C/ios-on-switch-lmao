@@ -9,6 +9,6 @@ public enum Scenes {
         firstSurface, CABlurChainScene(), GlyphAtlasScene(), ReplaceRegionScene(), BlitUploadScene(),
         SurfaceLockScene(), ClearFormatsScene(), ClearThenDrawScene(), InstancedDrawScene(), DepthBiasScene(),
         RenderThenSampleScene(), UnormBlendScene(), ExtendedBlendScene(), MipmapScene(), MSAAResolveScene(),
-        MPSBlurScene(), CoreImageBlurScene(),
+        MPSBlurScene(), CoreImageBlurScene(), HalfArithmeticScene(),
     ]
 }

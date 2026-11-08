@@ -9,7 +9,7 @@
 // BGRA8 texture, fragment sampler slot s (0..15) has max LOD clamp 1+s/2 (mip filter nearest; r8-rawca: 1+s made slot 14 look like any sampler with the default clamp, 15), linear min/mag when s&1, repeat U
 // when s&2. A sampler made before them takes NVK's sampler index 0. One command buffer (one submission) per state; stdout lines "PROBE <i> <state key>".
 // The corpus's lib= fields (the journal names each function's library since 11-04) are not part of the state key: the raw path
-// keys QuartzCore's functions by name and constants (RawMetal.mm raw_metal_pipeline_key). PROBE_LABEL (default
+// keys QuartzCore's functions by name and constants (RawMetalLibrary.mm raw_metal_pipeline_key). PROBE_LABEL (default
 // com.apple.coreanimation.): only R lines whose label starts with it (the render server's states; "" for every line), and the
 // lines that keep a lib= field (rawpack.py keeps it on another framework's states): their functions come from that library
 // under PROBE_LIB_ROOT (the crawl's root), and their key ends with " | l <framework>", as the raw path keys them.
