@@ -107,8 +107,10 @@ xcrun clang++ "${OBJC[@]}" -Wall -Wextra -x objective-c++ "$HERE/selcheck.mm" "$
     -x c++ "$RAW/runtime/raw_gpu.cpp" "$RAW/fx/fx_mip.cpp" "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_alias.cpp" "$RAW/runtime/raw_pack.cpp" "$RAW/runtime/raw_ycbcr.cpp" "$RAW/runtime/raw_zeta.cpp" "$RAW/runtime/raw_comp.cpp" "$RAW/runtime/raw_completed.cpp" "$RAW/runtime/raw_compute.cpp" "${COMPLETION[@]}" "$TREE/kits/SwitchRefusal/SwitchRefusal.c" -x none "$BRIDGE" "${LIBS[@]}" \
     -o "$OUT/selcheck" 2>&1 | grep -v "duplicate libraries" || true
 echo "built $OUT/selcheck"
-# selcover: every selector the kinds' system images send to a Metal object answered by the object the raw device hands out
-# (run: selcover <pack> <cache> <nvk dylib> <default.metallib> selgaps.txt <tree>/drivers/NativeMetal/abi/kinds/*.json)
+# selcover: who answers every selector the kinds' system images send to the objects the raw device hands out, and raw's API
+# inventory against m2v's (run: selcover <pack> <cache> <nvk dylib> <default.metallib> <tree>
+# <tree>/drivers/NativeMetal/abi/kinds/*.json; SELCOVER_WRITE=1 rewrites raw/test/selgaps.txt and inventory.tsv,
+# SELCOVER_STRICT=1 is m2v's deletion gate)
 xcrun clang++ "${OBJC[@]}" -Wall -Wextra -x objective-c++ "$HERE/selcover.mm" "${FACADE[@]}" "$FRONT/NativeBridgeMetalFrontend.mm" \
     -x c++ "$RAW/runtime/raw_gpu.cpp" "$RAW/fx/fx_mip.cpp" "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_alias.cpp" "$RAW/runtime/raw_pack.cpp" "$RAW/runtime/raw_ycbcr.cpp" "$RAW/runtime/raw_zeta.cpp" "$RAW/runtime/raw_comp.cpp" "$RAW/runtime/raw_compute.cpp" "$RAW/runtime/raw_completed.cpp" "${COMPLETION[@]}" "$TREE/kits/SwitchRefusal/SwitchRefusal.c" -x none "$BRIDGE" "${LIBS[@]}" \
     -o "$OUT/selcover" 2>&1 | grep -v "duplicate libraries" || true

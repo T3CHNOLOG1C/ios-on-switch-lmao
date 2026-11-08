@@ -21,6 +21,8 @@
 #   raw_comp_test     raw/runtime/raw_comp.h: the compressible kinds the raw path binds are the kernel kind table's (nouveau
 #                     gm200_mmu_kind) and demote as it says; the boot ZBC values read alike by Metal and NV format
 #   stage_test        stage-tegra-gm20b-metal.py on a directory standing in for the Data volume
+#   inventory_test    raw/test/inventory.tsv, selgaps.txt and refused.txt still describe the kinds' sent tables (selcover,
+#                     over the host harness, writes them from the raw device's objects)
 #   raw_ycbcr_test    raw/runtime/raw_ycbcr.cpp: the two-plane YCbCr textures the raw path converts (m2v's rules) and the
 #                     conversion's shape; its texels against Metal's reads are raw/test/ycbcroracle.mm's (this Mac's GPU)
 #   raw_xr_test       raw/runtime/raw_xr.h: the extended-range formats the raw path keeps and the codes Metal's Clear
@@ -178,6 +180,18 @@ py_test(
     name = "stage_test",
     srcs = ["stage_test.py"],
     data = ["//drivers/TegraGM20BMetal:stage-tegra-gm20b-metal.py"],
+)
+
+py_test(
+    name = "inventory_test",
+    srcs = ["inventory_test.py"],
+    data = [
+        "//drivers/NativeMetal/abi:kinds/21H461.json",
+        "//drivers/NativeMetal/abi:kinds/24B119.json",
+        "//drivers/TegraGM20BMetal:raw/test/inventory.tsv",
+        "//drivers/TegraGM20BMetal:raw/test/refused.txt",
+        "//drivers/TegraGM20BMetal:raw/test/selgaps.txt",
+    ],
 )
 
 py_test(

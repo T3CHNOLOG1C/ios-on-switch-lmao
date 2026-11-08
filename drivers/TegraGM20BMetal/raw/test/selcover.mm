@@ -13,7 +13,10 @@
 // baseline line that is no longer one. Then every zero-argument selector the facade answers zero is sent to its object, and
 // every zero-argument method of an m2v class its facade object lacks (none a kind sends: m2v's own accessors): the rates line
 // must count the first answered zero, the second missing (tw=../f), and no object may have made a twin.
-// usage: selcover <pack> <cache> <nvk dylib> <default.metallib> <baseline> <kinds/<kind>.json>...
+// Last, the API inventory (selcover_inventory.h): the run fails where it differs from raw/test/inventory.tsv. SELCOVER_WRITE=1
+// writes the baseline and the inventory instead; SELCOVER_STRICT=1 is m2v's deletion gate: it fails on any inventory row
+// raw neither answers, reads nor refuses.
+// usage: selcover <pack> <cache> <nvk dylib> <default.metallib> <tree> <tree>/drivers/NativeMetal/abi/kinds/<kind>.json...
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #import <objc/runtime.h>
@@ -25,6 +28,7 @@
 #include "../runtime/RawMetal.h"
 #include "NativeBridgeMetalFrontend.h"
 #include "bridge/NativeMetalObjects.h"
+#include "selcover_inventory.h"
 
 namespace {
 
@@ -254,14 +258,58 @@ std::set<std::pair<std::string, std::string>> m2vOnly(const std::map<std::string
     return out;
 }
 
+// Lines of the inventory that differ from the file's (written instead with `write`)
+unsigned inventoryDrift(const std::vector<inventory::Row> &rows, const std::string &path, bool write)
+{
+    std::vector<std::string> now, had;
+    for (const auto &r : rows)
+        now.push_back(r.line());
+    if (write) {
+        std::ofstream out(path);
+        out << "# raw's API inventory, written by raw/test/selcover (SELCOVER_WRITE=1; selcover_inventory.h says what "
+               "each\n"
+               "# column holds): container, item, selector, m2v, sent by, raw\n"
+            << inventory::totals(rows);
+        for (const std::string &l : now)
+            out << l << "\n";
+        return 0;
+    }
+    for (const auto &f : inventory::tsv(path)) {
+        std::string l;
+        for (size_t i = 0; i < f.size(); i++)
+            l += (i ? "\t" : "") + f[i];
+        had.push_back(l);
+    }
+    const std::set<std::string> a(now.begin(), now.end()), b(had.begin(), had.end());
+    unsigned differ = 0;
+    for (const std::string &l : now)
+        if (!b.count(l) && differ++ < 20)
+            printf("INVENTORY + %s\n", l.c_str());
+    for (const std::string &l : had)
+        if (!a.count(l) && differ++ < 20)
+            printf("INVENTORY - %s\n", l.c_str());
+    return differ;
+}
+
+void writeBaseline(const std::set<std::string> &gaps, const std::string &path)
+{
+    std::ofstream out(path);
+    out << "# selcover's gaps: <kind> <protocol> <selector> <m2v|m2vobj|base|none>, every sent selector raw does not "
+           "answer "
+           "itself or\n# answer zero (raw/test/selcover.mm says who each is). A line goes when raw answers it; a new "
+           "gap "
+           "fails the run.\n";
+    for (const std::string &g : gaps)
+        out << g << "\n";
+}
+
 }  // namespace
 
 int main(int argc, char **argv)
 {
     @autoreleasepool {
         if (argc < 7) {
-            fprintf(stderr,
-                    "usage: selcover <pack> <cache> <nvk dylib> <default.metallib> <baseline> <kind json>...\n");
+            fprintf(stderr, "usage: selcover <pack> <cache> <nvk dylib> <default.metallib> <tree> <kind json>...\n");
             return 2;
         }
         setenv("NMB_DEVICE_BASE_NSOBJECT", "1", 1);
@@ -273,9 +321,15 @@ int main(int argc, char **argv)
             fprintf(stderr, "selcover: no device or objects (%s)\n", m2v ? why.UTF8String : nmb_last_error());
             return 1;
         }
+        const std::string tree = argv[5], test = tree + "/drivers/TegraGM20BMetal/raw/test/";
+        const bool write = getenv("SELCOVER_WRITE") != nullptr;
         std::set<std::string> gaps, baseline;
         std::set<std::pair<std::string, std::string>> zeros, sentAll;
-        NSString *text = [NSString stringWithContentsOfFile:@(argv[5]) encoding:NSUTF8StringEncoding error:nil];
+        std::map<std::pair<std::string, std::string>, std::string> sentBy;
+        NSMutableDictionary *bases = [NSMutableDictionary dictionary];
+        NSString *text = [NSString stringWithContentsOfFile:@((test + "selgaps.txt").c_str())
+                                                   encoding:NSUTF8StringEncoding
+                                                      error:nil];
         for (NSString *line in [text componentsSeparatedByString:@"\n"])
             if (line.length && ![line hasPrefix:@"#"])
                 baseline.insert(line.UTF8String);
@@ -285,6 +339,7 @@ int main(int argc, char **argv)
                                                                    error:nil];
             NSString *name = kind[@"kind"];
             NSDictionary *base = kind[@"MTLDevice"][@"methods"];
+            [bases addEntriesFromDictionary:base];
             NSDictionary<NSString *, NSDictionary *> *sent = kind[@"sent"];
             std::map<std::string, unsigned> totals;
             for (NSString *protocol in [sent.allKeys sortedArrayUsingSelector:@selector(compare:)]) {
@@ -293,6 +348,8 @@ int main(int argc, char **argv)
                 unsigned open = 0;
                 for (NSString *selector in [sent[protocol].allKeys sortedArrayUsingSelector:@selector(compare:)]) {
                     sentAll.insert({protocol.UTF8String, selector.UTF8String});
+                    std::string &by = sentBy[{protocol.UTF8String, selector.UTF8String}];
+                    by += (by.empty() ? "" : ",") + std::string(name.UTF8String);
                     const char *how = who(o, sel_registerName(selector.UTF8String),
                                           [protocol isEqualToString:@"MTLDevice"] ? base : nil);
                     totals[how]++;
@@ -315,19 +372,34 @@ int main(int argc, char **argv)
         }
         unsigned added = 0, gone = 0;
         for (const std::string &g : gaps)
-            if (!baseline.count(g)) {
+            if (!write && !baseline.count(g)) {
                 printf("NEW GAP %s\n", g.c_str());
                 added++;
             }
         for (const std::string &b : baseline)
-            if (!gaps.count(b)) {
+            if (!write && !gaps.count(b)) {
                 printf("NO LONGER A GAP (remove it from the baseline) %s\n", b.c_str());
                 gone++;
             }
         const bool zerosOk = sendUnanswered(objects.byProtocol, zeros, m2vOnly(objects.byProtocol, sentAll));
-        const bool pass = !added && !gone && zerosOk;
-        printf("%s: selcover (%u new gaps, %u baseline lines answered now%s)\n", pass ? "PASS" : "FAIL", added, gone,
-               zerosOk ? "" : ", unanswered selectors miscounted");
+        const auto rows = inventory::make(
+            tree + "/third_party/m2v/scripts/metal-coverage/coverage.tsv", test + "refused.txt",
+            tree + "/drivers/TegraGM20BMetal/raw/runtime", sentBy, [&](const std::string &protocol, SEL sel) {
+                const auto it = objects.byProtocol.find(protocol);
+                return std::string(who(it == objects.byProtocol.end() ? Object{nil, nil, false} : it->second, sel,
+                                       protocol == "MTLDevice" ? bases : nil));
+            });
+        const unsigned drift = inventoryDrift(rows, test + "inventory.tsv", write);
+        if (write)
+            writeBaseline(gaps, test + "selgaps.txt");
+        const unsigned open = inventory::open(rows);
+        printf("inventory: %zu rows, %u neither raw's, read nor refused\n%s", rows.size(), open,
+               inventory::totals(rows).c_str());
+        const bool strict = getenv("SELCOVER_STRICT") && open;
+        const bool pass = !added && !gone && zerosOk && !drift && !strict;
+        printf("%s: selcover (%u new gaps, %u baseline lines answered now, %u inventory lines differ%s%s)\n",
+               pass ? "PASS" : "FAIL", added, gone, drift, zerosOk ? "" : ", unanswered selectors miscounted",
+               strict ? ", the deletion gate's rows open" : "");
         return pass ? 0 : 1;
     }
 }
