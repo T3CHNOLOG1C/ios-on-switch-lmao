@@ -40,6 +40,7 @@
 #include <vector>
 #include "GpuMemoryRelease.h"
 #include "LimitsTable.h"
+#include "raw_invocation.h"
 #include "SwitchFrameTimeline.h"
 #include "../../../../kits/SwitchRefusal/SwitchRefusalSite.h"
 #include "RawAlias.h"
@@ -2043,6 +2044,10 @@ static inline void hit(RMCommandBuffer *cb, RMPred p, uint64_t a = 0, uint64_t b
 - (void)forwardInvocation:(NSInvocation *)inv
 {
     [inv retainArguments];
+    if (!raw::keepPointedArguments(inv))
+        SWITCH_REFUSE_DETAIL("raw", "call.pointer", uintptr_t(inv.selector),
+                             "-[%s %s] recorded with a pointer argument of no known extent",
+                             class_getName(object_getClass(self)), sel_getName(inv.selector));
     [_cb retain:inv];
     Cmd c = cmd(OpInvocation);
     c.obj = (__bridge void *)inv;
@@ -2240,9 +2245,7 @@ static void forwardCall(RMEncoder *e, SEL selector, const void *argument)
         [_cb takeReason:WhyCall why:@"an index buffer not made by this device"];
         hit(_cb, PredCallBufForeign, 0xffff, 0);
     } else if ((indexType != MTLIndexTypeUInt16 && indexType != MTLIndexTypeUInt32) ||
-               offset % (indexType == MTLIndexTypeUInt16 ? 2 : 4) ||
-               offset + uint64_t(count) * (indexType == MTLIndexTypeUInt16 ? 2 : 4) >
-                   ((RMBuffer *)buffer)->_raw.length) {
+               !((RMBuffer *)buffer)->_raw.cpu) {
         [_cb takeReason:WhyEncode why:@"an indexed draw the raw path does not take"];
         hit(_cb, PredEncIndexedRange, offset, indexType == MTLIndexTypeUInt16 ? 2 : 4);
     }
@@ -2754,6 +2757,81 @@ static id<MTLSamplerState> clampedSampler(id<MTLSamplerState> s, float lodMin, f
 {
     (void)heap;
     (void)stages;
+}
+
+- (void)useResources:(const id<MTLResource> __unsafe_unretained[])resources
+               count:(NSUInteger)count
+               usage:(MTLResourceUsage)usage
+              stages:(MTLRenderStages)stages
+{
+    for (NSUInteger k = 0; k < count; k++)
+        [self useResource:resources[k] usage:usage stages:stages];
+}
+
+- (void)useResources:(const id<MTLResource> __unsafe_unretained[])resources
+               count:(NSUInteger)count
+               usage:(MTLResourceUsage)usage
+{
+    [self useResources:resources count:count usage:usage stages:MTLRenderStageVertex | MTLRenderStageFragment];
+}
+
+- (void)useHeaps:(const id<MTLHeap> __unsafe_unretained[])heaps count:(NSUInteger)count
+{
+    (void)heaps;
+    (void)count;
+}
+
+- (void)useHeaps:(const id<MTLHeap> __unsafe_unretained[])heaps count:(NSUInteger)count stages:(MTLRenderStages)stages
+{
+    (void)heaps;
+    (void)count;
+    (void)stages;
+}
+
+// A barrier on some resources is the scope barrier over all of them
+- (void)memoryBarrierWithResources:(const id<MTLResource> __unsafe_unretained[])resources
+                             count:(NSUInteger)count
+                       afterStages:(MTLRenderStages)after
+                      beforeStages:(MTLRenderStages)before
+{
+    (void)resources;
+    (void)count;
+    [self memoryBarrierWithScope:MTLBarrierScopeBuffers | MTLBarrierScopeTextures | MTLBarrierScopeRenderTargets
+                     afterStages:after
+                    beforeStages:before];
+}
+
+// The count forms at one viewport or scissor are the single ones; more go to m2v with the call
+- (void)forwardCall:(SEL)selector pointer:(const void *)pointer count:(NSUInteger)count
+{
+    NSInvocation *inv = [NSInvocation invocationWithMethodSignature:[self methodSignatureForSelector:selector]];
+    inv.selector = selector;
+    [inv setArgument:&pointer atIndex:2];
+    [inv setArgument:&count atIndex:3];
+    [self forwardInvocation:inv];
+}
+
+- (void)setViewports:(const MTLViewport[])viewports count:(NSUInteger)count
+{
+    if (count == 1)
+        [self setViewport:viewports[0]];
+    else
+        [self forwardCall:_cmd pointer:viewports count:count];
+}
+
+- (void)setScissorRects:(const MTLScissorRect[])rects count:(NSUInteger)count
+{
+    if (count == 1)
+        [self setScissorRect:rects[0]];
+    else
+        [self forwardCall:_cmd pointer:rects count:count];
+}
+
+// Metal's default clips; clamping goes to m2v with the call
+- (void)setDepthClipMode:(MTLDepthClipMode)mode
+{
+    if (mode != MTLDepthClipModeClip)
+        forwardCall(self, _cmd, &mode);
 }
 
 - (void)updateFence:(id<MTLFence>)fence afterStages:(MTLRenderStages)stages
@@ -3765,6 +3843,10 @@ static void giveRecording(RMCommandBuffer *b)
 - (void)forwardInvocation:(NSInvocation *)inv
 {
     [inv retainArguments];
+    if (!raw::keepPointedArguments(inv))
+        SWITCH_REFUSE_DETAIL("raw", "call.pointer", uintptr_t(inv.selector),
+                             "-[MTLCommandBuffer %s] recorded with a pointer argument of no known extent",
+                             sel_getName(inv.selector));
     [self retain:inv];
     Cmd c = cmd(OpInvocation);
     c.obj = (__bridge void *)inv;
@@ -3882,9 +3964,7 @@ static void replayInvocation(NSInvocation *inv, id target)
 {
     NSMethodSignature *sig = inv.methodSignature;
     for (NSUInteger i = 2; i < sig.numberOfArguments; i++) {
-        const char *t = [sig getArgumentTypeAtIndex:i];
-        while (*t == 'r' || *t == 'n' || *t == 'N' || *t == 'o' || *t == 'O' || *t == 'R' || *t == 'V')
-            t++;
+        const char *t = raw::argumentType(sig, i);
         if (*t == '@') {
             __unsafe_unretained id arg = nil;
             [inv getArgument:&arg atIndex:i];
@@ -3894,20 +3974,11 @@ static void replayInvocation(NSInvocation *inv, id target)
                 [inv setArgument:&m atIndex:i];
             }
         } else if (t[0] == '^' && t[1] == '@') {
-            // an array of objects (set...s:withRange:, useResources:count:): mapped in place over a copy the invocation keeps
+            // an array of objects (set...s:withRange:, useResources:count:), the invocation's own copy
+            // (keepPointedArguments): mapped in place over another copy the invocation keeps
             id __unsafe_unretained *array = nullptr;
             [inv getArgument:&array atIndex:i];
-            NSUInteger count = 0;
-            for (NSUInteger k = i + 1; k < sig.numberOfArguments && !count; k++) {
-                const char *u = [sig getArgumentTypeAtIndex:k];
-                if (u[0] == '{') {  // NSRange
-                    NSRange r = {};
-                    [inv getArgument:&r atIndex:k];
-                    count = r.location + r.length;
-                } else if (u[0] == 'Q' || u[0] == 'L' || u[0] == 'I') {
-                    [inv getArgument:&count atIndex:k];
-                }
-            }
+            const NSUInteger count = raw::pointedElements(inv, i);
             if (array && count) {
                 NSMutableData *copy = [NSMutableData dataWithLength:count * sizeof(id)];
                 id __unsafe_unretained *out = (id __unsafe_unretained *)copy.mutableBytes;

@@ -2510,12 +2510,31 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
     readBits_ |= pl->fetchBits;
     if (!count || !instances)
         return true;
-    if (!ib || (indexSize != 2 && indexSize != 4) || offset % indexSize ||
-        offset + uint64_t(count) * indexSize > ib->length) {
+    if (!ib || (indexSize != 2 && indexSize != 4) || !ib->cpu) {
         *why = "an indexed draw the raw path does not take";
         cb_->refusal = {RefIndexedRange, uint32_t(offset), indexSize,
                         ib ? uint32_t(std::min<uint64_t>(ib->length, ~0u)) : 0};
         return false;
+    }
+    // Metal's fetch (m2v render.rs draw_indexed_primitives, measured): the offset's low 32 bits rounded down to the index size,
+    // indices read up to the length rounded up to 4 bytes, index 0 at every position past that: drawn from a zero-padded copy
+    offset = uint32_t(offset);
+    offset -= offset % indexSize;
+    const uint64_t fetchEnd = offset < ib->length ? (ib->length + 3) & ~uint64_t(3) : ib->length,
+                   inside = fetchEnd > offset ? (fetchEnd - offset) / indexSize : 0;
+    Buffer padded;
+    if (count > inside) {
+        const uint64_t bytes = uint64_t(count) * indexSize;
+        uint8_t *m =
+            dev_->alloc(dev_->upload_, (bytes + kUboChunk - 1) & ~uint64_t(kUboChunk - 1), kUboChunk, padded.va);
+        memcpy(m, ib->cpu + offset, inside * indexSize);
+        memset(m + inside * indexSize, 0, bytes - inside * indexSize);
+        padded.cpu = m;
+        padded.length = bytes;
+        padded.wc = true;
+        dev_->stats.uploadBytes += bytes;
+        ib = &padded;
+        offset = 0;
     }
     // the vertices it reads: up to its largest index (the indices are CPU-written, as the vertices). A restart (the all-ones
     // index) reads as 0, which never raises the largest: branch-free per index size, so clang vectorizes it (UMAXV; r9-simd)
