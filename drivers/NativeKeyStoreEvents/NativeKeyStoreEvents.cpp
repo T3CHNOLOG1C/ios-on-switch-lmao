@@ -21,6 +21,7 @@
 //   31, 139  aks_get_configuration / aks_memento_get_state: e00002f0 not found (no configuration, no recovery passcode), which
 //            MobileKeyBag maps instead of logging "Unexpected AppleKeyStore error"
 // Malformed requests answer e00002c2, a keybag other than 0 e00002f0; every other selector e00002c7 and one console line.
+// aks_register_for_notifications (IOConnectSetNotificationPort, keybagd at start) is accepted.
 #include <IOKit/IOService.h>
 #include <IOKit/IOUserClient.h>
 #include <pexpert/pexpert.h>
@@ -221,6 +222,16 @@ class AppleKeyStoreUserClient final : public IOUserClient {
 OSDeclareDefaultStructors(AppleKeyStoreUserClient) public : IOReturn clientClose() override
     {
         terminate();
+        return kIOReturnSuccess;
+    }
+
+    // keybagd's port for recovery completion and system keybag updates (24B119: "aks notification for recovery completion
+    // %d"); neither happens to a keybag with no passcode and no SEP, so the right is dropped once accepted. A refusal costs
+    // keybagd's "Can't register for notifications with AppleKeyStore" at every start.
+    IOReturn registerNotificationPort(mach_port_t port, UInt32, UInt32) override
+    {
+        if (port != MACH_PORT_NULL)
+            releaseNotificationPort(port);
         return kIOReturnSuccess;
     }
 
