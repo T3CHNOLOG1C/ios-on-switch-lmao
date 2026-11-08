@@ -951,6 +951,14 @@ uint32_t Device::allocTic()
     return nextTic_ < kTicCount ? nextTic_++ : 0;
 }
 
+// A freed header holds header 0's null descriptor until it is reused: zeroes would read as a buffer texture at VA 0, which a
+// draw still in flight, or one binding a stale index, would sample (a fault).
+void Device::freeTic(uint32_t tic)
+{
+    memcpy(tic_.cpu + 32 * tic, tic_.cpu, 32);
+    freeTic_.push_back(tic);
+}
+
 // Texture header of a pitch-linear 2D texture (Mesa NIL nvb097_fill_image_view_desc for a linear image: HEADER_VERSION PITCH,
 // TEXTURE_TYPE TWO_D_NO_MIPMAP), word 0 NVK's for the format
 void Device::writeTic(const Texture &t)
@@ -1423,8 +1431,7 @@ void Device::destroyTexture(Texture &t)
     if (t.view) {
         std::lock_guard<std::mutex> l(lock_);
         if (t.tic) {
-            memset(tic_.cpu + 32 * t.tic, 0, 32);
-            freeTic_.push_back(t.tic);
+            freeTic(t.tic);
         }
         t = {};
         return;
@@ -1448,14 +1455,12 @@ void Device::destroyTexture(Texture &t)
     }
     std::lock_guard<std::mutex> l(lock_);
     if (t.tic) {
-        memset(tic_.cpu + 32 * t.tic, 0, 32);
-        freeTic_.push_back(t.tic);
+        freeTic(t.tic);
     }
     if (t.chain) {
         for (const uint32_t level : t.chain->levelTic)
             if (level) {
-                memset(tic_.cpu + 32 * level, 0, 32);
-                freeTic_.push_back(level);
+                freeTic(level);
             }
         blFree(t.chain->span);
         delete t.chain;
@@ -1923,8 +1928,7 @@ Texture *Device::backing(const Texture &m, uint32_t tag, bool blockLinear)
 void Device::freeBacking(Texture &t)
 {
     if (t.tic) {
-        memset(tic_.cpu + 32 * t.tic, 0, 32);
-        freeTic_.push_back(t.tic);
+        freeTic(t.tic);
     }
     if (t.zeta)
         tiledFree(zChunks_, t.span);

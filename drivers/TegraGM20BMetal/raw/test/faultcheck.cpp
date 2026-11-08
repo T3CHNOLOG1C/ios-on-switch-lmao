@@ -8,6 +8,7 @@
 // - A draw whose vertex buffer is unbound fetches from NVK's empty stream (the zero page, its limit before its start), never
 //   from VA 0 with no limit.
 // - A pass with an empty color slot below a target disables the slot, as NVK does, and counts through the target.
+// - A freed texture header is the null descriptor, never zeroes (a buffer texture at VA 0).
 // - A channel the kernel killed is made again with its context before any command buffer is encoded for it: one whose
 //   ChannelCreate or context Exec the kernel refused gives no command buffer, and the next begin() tries again.
 // - Programs placed in the shader heap are behind an instruction-cache invalidate before any draw runs them, even when the
@@ -27,6 +28,7 @@
 
 extern "C" uint64_t cap_draws(void);
 extern "C" uint32_t cap_reg3d(uint32_t mthd);
+extern "C" bool cap_read(uint64_t va, void *out, uint64_t bytes);
 extern "C" uint64_t cap_instruction_invalidates(void);
 extern "C" void mock_iokit_kill_next(uint32_t error);
 extern "C" void mock_iokit_fail_next(unsigned method, unsigned count, int kr);
@@ -151,6 +153,30 @@ void holeTarget(raw::Device &dev, Pass &pass, const Expect &expect)
 uint64_t method64(uint32_t hi)
 {
     return uint64_t(cap_reg3d(hi)) << 32 | cap_reg3d(hi + 4);
+}
+
+// A freed texture header (a texture's, a view's) reads as header 0, the null descriptor, never as zeroes (a buffer texture at
+// VA 0)
+void freedHeader(raw::Device &dev, const Expect &expect)
+{
+    constexpr uint32_t kHeaderPool = 0x1574;  // SET_TEX_HEADER_POOL_A
+    const uint64_t pool = method64(kHeaderPool);
+    raw::Texture t, v;
+    if (!pool || !dev.createTexture(64, 64, kBGRA8, t) || !dev.createView(t, kBGRA8sRGB, v)) {
+        expect(false, "the header pool, a texture and a view");
+        return;
+    }
+    const uint32_t tic = t.tic, view = v.tic;
+    dev.destroyTexture(v);
+    dev.destroyTexture(t);
+    uint32_t null[8], freed[8], freedView[8];
+    expect(cap_read(pool, null, 32) && cap_read(pool + 32 * tic, freed, 32) &&
+               cap_read(pool + 32 * view, freedView, 32),
+           "the headers read back");
+    std::printf("freed header %u: %08x %08x %08x; null %08x %08x %08x\n", tic, freed[0], freed[1], freed[2], null[0],
+                null[1], null[2]);
+    expect(null[0] && !memcmp(freed, null, 32) && !memcmp(freedView, null, 32),
+           "the freed texture's and view's headers are the null descriptor");
 }
 
 void unboundStream(raw::Device &dev, Pass &pass, const Expect &expect)
@@ -333,6 +359,7 @@ int main(int argc, char **argv)
     instances(dev, pass, expect);
     unboundStream(dev, pass, expect);
     holeTarget(dev, pass, expect);
+    freedHeader(dev, expect);
     reopenRefused(dev, expect);
     invalidateRefused(dev, expect);
     waitRefused(dev, expect);
