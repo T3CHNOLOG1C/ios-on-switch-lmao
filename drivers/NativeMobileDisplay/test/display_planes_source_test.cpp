@@ -177,14 +177,24 @@ TEST(DisplayPlanesSource, TheConsoleHoldKeepsTheScreen)
     EXPECT_THAT(Function(planes, "void kickPlaneOnly("), HasSubstr("retireUnshown(seq);"));
 }
 
-// A plane slot holds what window B scans from it as a direct slot does (the surface, its wired memory, its layout), and a
-// surface the GPU renders block-linear never goes to window B, which scans rows.
+// A plane slot holds what window B scans from it as a direct slot does (the surface, its wired memory, its layout), and
+// window B scans a surface the GPU renders block-linear so: the image is made for the GPU's layout of it, and a slot whose
+// held layout is not that one is not used.
 TEST(DisplayPlanesSource, PlaneSlotsHoldTheSurfaceTheyScan)
 {
     const std::string planes = SourceText("../NativePlanesDisplay.h");
     const std::string make = Function(planes, "int planeSlotFor(");
     EXPECT_THAT(make, HasSubstr("surface->retain();"));
-    ExpectBefore(make, "tegra_gm20b_surface_hold(", "if (tiled) {");
+    EXPECT_THAT(make, HasSubstr("planeSlots[k].tiled == tiled"));
+    ExpectBefore(make, "tegra_gm20b_surface_hold(", "(held != 0) != tiled");
+    const std::string decide = Function(planes, "void planeDecide(");
+    ExpectBefore(decide, "surfaceLayout(r.surface, block)", "image.surfaceKind != 0);");
+    EXPECT_THAT(Function(planes, "static const tgm_layout *surfaceLayout("),
+                HasSubstr("tegra_gm20b_surface_layout(pa & ~0xfffULL, &block) == 1"));
+    const std::string write = Function(planes, "void planeWriteRegisters(const PlaneSet &p)");
+    EXPECT_THAT(write, HasSubstr("buf[kSurfaceKind] = m.surfaceKind;"));
+    EXPECT_THAT(write, HasSubstr("buf[kVOffset] = m.vOffset;"));
+    EXPECT_THAT(Function(planes, "static bool planeSame("), HasSubstr("x.surfaceKind == y.surfaceKind"));
     const std::string drop = Function(planes, "void planeDropSlot(unsigned k)");
     ExpectBefore(drop, "probeDomain.unmap(", "tegra_gm20b_surface_unhold(slot.layout);");
     ExpectBefore(drop, "tegra_gm20b_surface_unhold(slot.layout);", "slot.memory->release();");
@@ -214,4 +224,35 @@ TEST(DisplayPlanesSource, DetachReasonsLoggedOnlyByDebugIos27Kernels)
     EXPECT_EQ(Count(xnu27, "CA_PRINT_DETACHING=1"), 1u);
     EXPECT_EQ(Count(xnu27, "NATIVE_SWITCH_CA_PRINT_DETACHING NULL"), 2u);
     EXPECT_THAT(XnuKernExec(), Not(HasSubstr("CA_PRINT_DETACHING")));
+}
+
+// Window B changes whose surface the GPU renders follow NativePlaneFence.h: they ride on the window A frame's present,
+// which also waits for the plane surface's writers, or on a fence of their own whose completion writes them; a frame no
+// present carries drops such a change; nothing writes them from the kick.
+TEST(DisplayPlanesSource, WindowBWaitsForTheGpuOnSurfacesItRenders)
+{
+    const std::string source = SourceText("../NativeLegacyDisplay.cpp");
+    const std::string planes = SourceText("../NativePlanesDisplay.h");
+    const std::string fence = SourceText("../NativePlaneFenceDisplay.h");
+    for (const char *offer : {"    bool offerGpuCopy(", "    bool offerDirect("}) {
+        const std::string body = Method(source, offer);
+        ExpectBefore(body, "copy.alsoWritten = planeNextAlsoWritten();", "tegra_gm20b_scanout_copy(&copy)");
+    }
+    const std::string kick = Method(source, "    void kickOnce()\n");
+    ExpectBefore(kick, "planeNextUnfenced();  // no GPU present carries this frame from here on",
+                 "native_legacy_gpu_offer(this, memory, sourceStride, width, height)");
+    ExpectBefore(kick, "offerGpuCopy(request, memory, sourceStride, allocation, width, height, tiled, kickAt)",
+                 "planeNextUnfenced();  // no GPU present carries this frame from here on");
+    const std::string only = Function(planes, "void kickPlaneOnly(");
+    ExpectBefore(only, "native_planes::planeRoute(planeFenced(p), false, false) == native_planes::PlaneRoute::kNow",
+                 "planeOut(p);");
+    ExpectBefore(only, "} else if (planeFence(p)) {", "transferred = true;");
+    EXPECT_THAT(Function(fence, "bool planeFence(const PlaneSet &p)"),
+                HasSubstr("tegra_gm20b_scanout_fence(this, pa)"));
+    const std::string done = Function(fence, "void finishPlaneFence(int status)");
+    ExpectBefore(done, "if (status || !planesOn) {", "planeOut(planeFencing);");
+    EXPECT_THAT(Method(source, "    void finishGpuSwap(int status)\n"),
+                HasSubstr("if (gpuScanout && planeFencePending) {\n            finishPlaneFence(status);"));
+    EXPECT_THAT(Function(fence, "uint64_t planeFencePa(const PlaneSet &p) const"),
+                HasSubstr("planeSlots[p.slot].memory->getPhysicalSegment(0, &length, kIOMemoryMapperNone)"));
 }

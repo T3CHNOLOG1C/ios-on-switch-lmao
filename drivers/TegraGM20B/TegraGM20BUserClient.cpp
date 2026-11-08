@@ -2649,12 +2649,25 @@ extern "C" int tegra_gm20b_scanout_copy(const struct TegraScanoutCopy *copy)
 						    : 0;
 	const int ret =
 		(target || fenceOnly) && source
-			? tgm_present_copy(source, sourcePa, copy->sourceStride,
-					   static_cast<int>(sourceBlock), copy->width, copy->height,
-					   target, copy->targetPitch, copy->blockHeightLog2,
-					   presentDone, copy->display)
+			? tgm_present_copy(source, sourcePa, copy->alsoWritten & ~0xfffULL,
+					   copy->sourceStride, static_cast<int>(sourceBlock),
+					   copy->width, copy->height, target, copy->targetPitch,
+					   copy->blockHeightLog2, presentDone, copy->display)
 			: -12;  // ENOMEM: the target or the surface could not be mapped
 	IOLockUnlock(gPresentLock);
+	return ret ? ioreturn(ret) : 0;
+}
+
+extern "C" int tegra_gm20b_scanout_fence(void *display, uint64_t pa)
+{
+	if (!display || !pa || tgm_stage() < 3)
+		return kIOReturnNotReady;
+	tgm_vm *vm = nullptr;
+	if (tgm_present_open(&vm))
+		return kIOReturnNotReady;
+	// No copy (dst_va 0): only the acquires on the surface's writers and the fence; nothing of it is mapped.
+	const int ret =
+		tgm_present_copy(0, pa & ~0xfffULL, 0, 0, 0, 1, 1, 0, 0, 0, presentDone, display);
 	return ret ? ioreturn(ret) : 0;
 }
 
