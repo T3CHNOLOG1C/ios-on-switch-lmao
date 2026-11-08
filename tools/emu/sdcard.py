@@ -11,6 +11,7 @@ files.
 
 import hashlib
 import json
+import shutil
 import struct
 import subprocess
 import uuid
@@ -112,6 +113,8 @@ def container_extents(image: manifest.Manifest, parts: list[str]) -> list[list]:
 
 
 def _mtools(fat: Path, *args: str) -> None:
+    if not shutil.which(args[0]):
+        raise SystemExit('the emulated SD card needs mtools: brew install mtools')
     subprocess.run([args[0], '-i', str(fat), *args[1:]], check=True, capture_output=True)
 
 

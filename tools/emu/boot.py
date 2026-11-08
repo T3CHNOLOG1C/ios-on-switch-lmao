@@ -3,8 +3,8 @@
     bazel run //tools/emu:boot -- --kind=ios17|ios27 [--sd IMAGE|none] [--seconds N] [--bootargs ARGS]
 
 Builds //:boot for the kind in this workspace and output base (--bazel-flag passes flags to that build), gets the
-patched tegra_qemu from the shared cache, boots a clone of the shared SD card for N seconds of wall time, stops the
-machine and saves what it shows. The run directory holds the UART log, the kernel log, the panic, the screen and
+patched tegra_qemu from the shared cache, boots it on a card over the shared SD base for N seconds of wall time, stops
+the machine and saves what it shows. The run directory holds the UART log, the kernel log, the panic, the screen and
 summary.txt.
 """
 
