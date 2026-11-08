@@ -147,6 +147,17 @@ static bool rawDepthStencil(MTLRenderPassDescriptor *pass)
     return true;
 }
 
+// A resolve the raw path draws after the pass (the pack's resolve state of its format, RawMetalEncode.mm): of a multisampled
+// attachment into level, slice and depth plane 0 of a one-sample 2D texture of its format the raw path renders to
+static bool rawResolve(MTLRenderPassColorAttachmentDescriptor *a, RMTexture *from)
+{
+    RMTexture *r = (RMTexture *)a.resolveTexture;
+    return from->_raw.samples > 1 && [(id)r isKindOfClass:[RMTexture class]] && r->_rawOk &&
+           (r->_raw.renderable || r->_raw.shadowTarget) && !r->_raw.planar && !r->_raw.ycbcr &&
+           r->_raw.type == raw::fx::kTexTwoD && r->_raw.samples == 1 && r->_raw.format == from->_raw.format &&
+           !a.resolveLevel && !a.resolveSlice && !a.resolveDepthPlane && gRM->raw->resolvePipeline(from->_raw.format);
+}
+
 @implementation RMCommandBuffer (Encoders)
 
 - (void)begin:(RMEncoder *)e
@@ -184,6 +195,9 @@ static bool rawDepthStencil(MTLRenderPassDescriptor *pass)
         RMTexture *x = (RMTexture *)t;
         if ([(id)x isKindOfClass:[RMTexture class]])
             declareGpuWrites(x);
+        if (RMTexture *r = (RMTexture *)pass.colorAttachments[c].resolveTexture;
+            [(id)r isKindOfClass:[RMTexture class]])
+            declareGpuWrites(r);
         if (![(id)x isKindOfClass:[RMTexture class]] || !x->_rawOk || !(x->_raw.renderable || x->_raw.shadowTarget)) {
             [self takeReason:WhyPass why:@"a color attachment the raw path does not render to"];
             const bool own = [(id)x isKindOfClass:[RMTexture class]];
@@ -205,12 +219,12 @@ static bool rawDepthStencil(MTLRenderPassDescriptor *pass)
             [self takeReason:WhyPass why:@"a planar texture as a render target"];
             hit(self, PredEncPlanarRT, t.pixelFormat, c);
         } else if (pass.colorAttachments[c].slice || pass.colorAttachments[c].depthPlane ||
-                   pass.colorAttachments[c].resolveTexture ||
+                   (pass.colorAttachments[c].resolveTexture && !rawResolve(pass.colorAttachments[c], x)) ||
                    (x->_raw.type != raw::fx::kTexTwoD && x->_raw.type != raw::fx::kTexOneD) ||
                    (pass.colorAttachments[c].level &&
                     (!x->_raw.chain || pass.colorAttachments[c].level >= x->_raw.chain->layout.levels))) {
-            // A slice or depth plane needs an array or 3D texture and a resolve a multisampled one; the raw path keeps no
-            // multisampled texture and renders into no layer of an array or cube or plane of a 3D one
+            // A slice or depth plane needs an array or 3D texture; the raw path renders into no layer of an array or cube or
+            // plane of a 3D one
             [self takeReason:WhyPass why:@"a color attachment slice, depth plane or resolve"];
             hit(self, PredPassAttLevel, pass.colorAttachments[c].level | pass.colorAttachments[c].slice << 8,
                 pass.colorAttachments[c].resolveTexture != nil);

@@ -400,7 +400,7 @@ void registers(const std::map<uint32_t, uint32_t> &regs, uint32_t colors, const 
 
 uint64_t packKeyHash(const std::string &key)
 {
-    for (const char *lib : {"ycbcr", "xr", "two_plane"}) {
+    for (const char *lib : {"ycbcr", "xr", "two_plane", "resolve"}) {
         const size_t own = key.find(std::string("| f ") + lib + "_");
         if (own == std::string::npos)
             continue;

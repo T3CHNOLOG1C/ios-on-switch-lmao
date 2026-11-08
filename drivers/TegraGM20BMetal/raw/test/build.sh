@@ -154,3 +154,6 @@ echo "built $OUT/standinoracle"
 xcrun clang++ -O1 -std=c++17 -fobjc-arc "$HERE/xroracle.mm" -framework Metal -framework Foundation -framework CoreVideo \
     -framework IOSurface -o "$OUT/xroracle"
 echo "built $OUT/xroracle"
+# resolveoracle: the multisample resolves against this Mac's Metal ($OUT/resolveoracle pack/resolve.metal)
+xcrun clang++ -O1 -std=c++17 -fobjc-arc "$HERE/resolveoracle.mm" -framework Metal -framework Foundation -o "$OUT/resolveoracle"
+echo "built $OUT/resolveoracle"

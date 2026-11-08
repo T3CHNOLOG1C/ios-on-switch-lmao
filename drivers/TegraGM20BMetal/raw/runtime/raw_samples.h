@@ -60,4 +60,32 @@ inline bool sampleLayout(uint32_t samples, SampleLayout &out)
     return true;
 }
 
+// The pack's resolve state into a target of MTLPixelFormat `format` (pack/resolve.metal), keyed "raw.resolve.<fragment
+// function>"; null for a format it has none for. An 8-bit sRGB target's state writes codes, into its UNORM twin
+// (resolveTargetFormat).
+inline const char *resolveState(uint32_t format)
+{
+    switch (format) {
+    case 70:
+        return "raw.resolve.resolve_rgba8_frag";
+    case 71:
+        return "raw.resolve.resolve_rgba8_srgb_frag";
+    case 80:
+        return "raw.resolve.resolve_bgra8_frag";
+    case 81:
+        return "raw.resolve.resolve_bgra8_srgb_frag";
+    case 92:
+        return "raw.resolve.resolve_rg11b10f_frag";
+    case 115:
+        return "raw.resolve.resolve_rgba16f_frag";
+    default:
+        return nullptr;
+    }
+}
+
+inline uint32_t resolveTargetFormat(uint32_t format)
+{
+    return format == 71 ? 70 : format == 81 ? 80 : format;
+}
+
 }  // namespace raw
