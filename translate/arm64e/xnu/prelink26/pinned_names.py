@@ -416,6 +416,11 @@ NAMES = {
     # OSMetaClass::getMetaClassWithName: NULL for no name, then sAllClassesDict->getObject(name) under
     # sAllClassesLock (the virtual call's ptrauth discriminator 0x5837 is OSDictionary::getObject(const OSSymbol *)'s).
     0xFFFFFFF00A7A17B8: '__ZN11OSMetaClass20getMetaClassWithNameEPK8OSSymbol',
+    # vfs_vnodecovered: mp->mnt_vnodecovered (+0x38, its signed pointer's discriminator 0x7e60) through
+    # vnode_getwithref, else NULL, as ours. The sandbox's only entry between vfs_statfs and vm_deallocate, where its
+    # 21H461 import was vm_allocate_external: the GOT pass named it that, and the sandbox's mount_notify_mount hook took
+    # a kern_return_t for the covered vnode at devfs's mount in bsd_init (a data abort in vnode_vtype).
+    0xFFFFFFF00A3218C8: '_vfs_vnodecovered',
 }
 
 
