@@ -18,6 +18,8 @@ HEADER = """\
 #include <cstdint>
 
 #define SWITCH_METAL_KIND "{kind}"
+// The MTLCompiler image Metal itself loads: the frontend's in-process compiler (24B119 keeps it only under Versions/).
+#define SWITCH_METAL_COMPILER "{compiler}"
 
 inline constexpr size_t kMTLDeviceInstanceSize = {instance_size};
 inline constexpr size_t kMTLDeviceLimitsBytes = {limits_bytes};
@@ -40,6 +42,7 @@ def header(table: dict) -> str:
     fields = '\n'.join(f'    {{"{name}", 0x{offset:x}, {widths[name]}}},' for name, offset in device['limits'].items())
     return HEADER.format(
         kind=table['kind'],
+        compiler=table['compiler'],
         instance_size=device['instance_size'],
         limits_bytes=device['limits_bytes'],
         fields=fields,

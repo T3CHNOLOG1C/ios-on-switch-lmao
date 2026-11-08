@@ -227,6 +227,29 @@ void raw_metal_complete_states(const char *cacheDir)
             std::make_unique<raw::Completion>(*gRM->raw, gRM->fallback, cacheDir, gRM->raw->pack().header()->stack);
 }
 
+// libdispatch SPI (dispatch/private/queue_private.h): a root queue over threads of its own, `configure` run on each as it
+// starts.
+extern "C" dispatch_queue_global_t dispatch_pthread_root_queue_create(const char *label, unsigned long flags,
+                                                                      const pthread_attr_t *attr,
+                                                                      dispatch_block_t configure);
+
+// Scheduled handlers hold up the frame as the submit and completion threads do (Core Animation's render thread waits for
+// them in waitUntilScheduled), so they run on threads that follow the committers (raw_follow.h), not on a QoS queue's
+// workers, which XNU clamps to 37 in a daemon: below the fixed-priority render thread waiting on them.
+static dispatch_queue_t followingSerialQueue(const char *label)
+{
+    static dispatch_queue_global_t root =
+        dispatch_pthread_root_queue_create("com.brunostjohn.switch.raw.following", 0, nullptr, ^{
+            pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+            raw::followers().join();
+        });
+    dispatch_queue_t queue =
+        dispatch_queue_create(label, dispatch_queue_attr_make_initially_inactive(DISPATCH_QUEUE_SERIAL));
+    dispatch_set_target_queue(queue, root);
+    dispatch_activate(queue);
+    return queue;
+}
+
 id<MTLDevice> raw_metal_device_open(const char *packPath, uint64_t stack, id<MTLDevice> fallback, NSString **error)
 {
     static std::mutex once;
@@ -319,9 +342,7 @@ id<MTLDevice> raw_metal_device_open(const char *packPath, uint64_t stack, id<MTL
             });
         }
     }
-    r->handlers = dispatch_queue_create(
-        "com.brunostjohn.switch.raw.handlers",
-        dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INTERACTIVE, 0));
+    r->handlers = followingSerialQueue("com.brunostjohn.switch.raw.handlers");
     r->rawSignals = [NSMapTable weakToStrongObjectsMapTable];
     r->m2vSignals = [NSMapTable weakToStrongObjectsMapTable];
     r->listener = [[MTLSharedEventListener alloc] initWithDispatchQueue:r->handlers];

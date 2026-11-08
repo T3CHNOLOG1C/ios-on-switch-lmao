@@ -6,8 +6,9 @@ static uint64_t gPredRates[PredCount];  // the rates line's last gPredCbs (its t
 // ---- the rates line ----
 static struct {
     uint64_t raw, m2v, encodeUs, draws, passes, copies, deferred, aborted, reasons[WhyCount], ringWaits, lastUs,
-        switches, cpuOrdered, acquires, poolStalls, eventsReleased, heldReturns, abortUs, replayUs, replayClean,
-        rtUnaligned, rtMixed, predOnly[PredCount], splits, splitM2v, levelPasses, mirrorsOut, mirrorsIn;
+        switches, cpuOrdered, acquires, poolStalls, eventsReleased, heldReturns, scheduledWaits, scheduledWaitUs,
+        completedWaits, completedWaitUs, abortUs, replayUs, replayClean, rtUnaligned, rtMixed, predOnly[PredCount],
+        splits, splitM2v, levelPasses, mirrorsOut, mirrorsIn;
 } gRates;
 
 bool raw_metal_texture_kept(id<MTLTexture> texture)
@@ -134,7 +135,7 @@ size_t raw_metal_rates(char *out, size_t size)
         out, size,
         "raw %.0fs c=%llu(%.1f/s) m2v=%llu%s%s%s sw=%llu cpu=%llu acq=%llu enc=%.0fus/c d=%.1f p=%.1f b=%.2f "
         "defer=%llu abort=%llu rw=%llu pool=%lluMB/%llu grow=%llu imp=%llu/%lluMB clean=%.1fKB/c ce=%llu/%.0fKB "
-        "ev=%llu/%llu%s",
+        "ev=%llu/%llu ws=%llu/%lluus wc=%llu/%lluus%s",
         secs, (unsigned long long)c, c / secs, (unsigned long long)f, *reasons ? "(" : "", reasons, *reasons ? ")" : "",
         (unsigned long long)(s.switches.load() - gRates.switches),
         (unsigned long long)(s.cpuOrdered.load() - gRates.cpuOrdered),
@@ -147,7 +148,11 @@ size_t raw_metal_rates(char *out, size_t size)
         (unsigned long long)k.imports.load(), (unsigned long long)(k.importBytes.load() >> 20),
         k.cleanBytes.exchange(0) / 1024.0 / per, (unsigned long long)k.ceOps.exchange(0),
         k.ceBytes.exchange(0) / 1024.0, (unsigned long long)(s.eventsReleased.load() - gRates.eventsReleased),
-        (unsigned long long)(s.heldReturns.load() - gRates.heldReturns), diag);
+        (unsigned long long)(s.heldReturns.load() - gRates.heldReturns),
+        (unsigned long long)(s.scheduledWaits.load() - gRates.scheduledWaits),
+        (unsigned long long)(s.scheduledWaitUs.load() - gRates.scheduledWaitUs),
+        (unsigned long long)(s.completedWaits.load() - gRates.completedWaits),
+        (unsigned long long)(s.completedWaitUs.load() - gRates.completedWaitUs), diag);
     gRates.raw = raw;
     gRates.m2v = m2v;
     gRates.encodeUs = s.encodeUs.load();
@@ -163,6 +168,10 @@ size_t raw_metal_rates(char *out, size_t size)
     gRates.ringWaits = k.ringWaits.load();
     gRates.eventsReleased = s.eventsReleased.load();
     gRates.heldReturns = s.heldReturns.load();
+    gRates.scheduledWaits = s.scheduledWaits.load();
+    gRates.scheduledWaitUs = s.scheduledWaitUs.load();
+    gRates.completedWaits = s.completedWaits.load();
+    gRates.completedWaitUs = s.completedWaitUs.load();
     gRates.lastUs = now;
     return n > 0 ? std::min(size_t(n), size - 1) : 0;
 }

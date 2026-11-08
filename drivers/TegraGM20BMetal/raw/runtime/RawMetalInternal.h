@@ -68,6 +68,9 @@ struct Stats {
     std::atomic<uint64_t> splits{0}, splitM2v{0};
     // command buffers completed (finish): with the commits, what the stall line (rawStall) watches
     std::atomic<uint64_t> finished{0};
+    // waitUntilScheduled / waitUntilCompleted calls that blocked, and the time they blocked: CPU waits on the caller's thread
+    // (Core Animation's render thread flushes with waitUntilScheduled every frame)
+    std::atomic<uint64_t> scheduledWaits{0}, scheduledWaitUs{0}, completedWaits{0}, completedWaitUs{0};
 #if SWITCH_FRAME_TIMELINE
     // the m2v replay's parts (noteReplay)
     std::atomic<uint64_t> replaySlotUs{0}, replayTwinUs{0}, replayCommitUs{0}, replayMaxUs{0};
@@ -75,6 +78,32 @@ struct Stats {
     std::atomic<uint64_t> replayDraws{0}, twinTextures{0}, twinBuffers{0}, twinMips{0}, twinOthers{0}, twinTextureUs{0};
     // command buffers completed before their submitting thread scheduled them (finish() ran their scheduled handlers)
     std::atomic<uint64_t> scheduledByFinish{0};
+#endif
+};
+
+// A wait that blocked, counted with its time into two Stats counters when it ends (debug builds; nothing in release).
+class BlockedWait {
+public:
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    BlockedWait(std::atomic<uint64_t> &waits, std::atomic<uint64_t> &waitedUs)
+        : waits_(waits), waitedUs_(waitedUs), began_(nowUs())
+    {}
+
+    ~BlockedWait()
+    {
+        waits_.fetch_add(1, std::memory_order_relaxed);
+        waitedUs_.fetch_add(nowUs() - began_, std::memory_order_relaxed);
+    }
+
+    BlockedWait(const BlockedWait &) = delete;
+    BlockedWait &operator=(const BlockedWait &) = delete;
+
+private:
+    std::atomic<uint64_t> &waits_, &waitedUs_;
+    uint64_t began_;
+#else
+    BlockedWait(std::atomic<uint64_t> &, std::atomic<uint64_t> &)
+    {}
 #endif
 };
 

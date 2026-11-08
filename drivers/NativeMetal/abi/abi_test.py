@@ -67,6 +67,7 @@ class Tables(unittest.TestCase):
             )
             self.assertIn(f'kMTLDeviceInstanceSize = {table["MTLDevice"]["instance_size"]};', text)
             self.assertIn(f'kMTLDeviceLimitsBytes = {table["MTLDevice"]["limits_bytes"]};', text)
+            self.assertIn(f'#define SWITCH_METAL_COMPILER "{table["compiler"]}"', text)
 
 
 if __name__ == '__main__':
