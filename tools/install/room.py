@@ -95,9 +95,9 @@ def with_room[T](image: Path, need: Callable[[Path], int], work: Callable[[Path]
 def fit(image: Path, apfs_tool: str, check: Callable[[Path], None], log: host.Log, what: str) -> int:
     """Cut the detached container in `image` to the smallest it fits (apfs_tool), and the file with it; return bytes.
 
-    The fit is made on a clone and kept only if check(clone) passes: macOS refuses some fitted containers that
-    fsck_apfs passes (a 64 MiB container fitted below 13633 blocks, whatever it holds), and a cryptex macOS cannot
-    attach would not attach on the device either. Then `image` stays as it was.
+    The fit is made on a clone and kept only if check(clone) passes: fsck_apfs passes containers the kernel refuses
+    (apfs_tool once kept free queue limits that no longer matched the size), and a cryptex macOS cannot attach would
+    not attach on the device either. Then `image` stays as it was.
     """
     blocks, minimum, _, _ = map(int, host.run(apfs_tool, str(image), '0', log=log).split())
     if minimum >= blocks:
