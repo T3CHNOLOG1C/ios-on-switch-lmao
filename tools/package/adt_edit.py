@@ -127,6 +127,9 @@ def _chosen(tree: list, portrait: bool) -> list:
         put(chosen, key, u32(0))
     for key in ('certificate-security-mode', 'effective-security-mode-sep'):
         put(chosen, key, u32(1))
+    # xnu-12377 asserts that iBoot reported whether kernel text gets locked (ml_unsafe_kernel_text, which dtrace asks
+    # before patching text). No CTRR here, but the kernel maps its text read-only all the same.
+    put(chosen, 'kernel-ctrr-to-be-enabled', u32(1))
     return chosen
 
 
