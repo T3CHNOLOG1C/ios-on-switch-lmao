@@ -321,7 +321,7 @@ static int find_islands(const struct a64x_macho *m, struct a64x_image_xlate *x, 
         }
     }
     /* the pass sees instruction sections only, not the islands it is finding; it adds them to the same bitmap */
-    struct a64x_islands is = {x->data, fs, 0, 0, false, false, 0, 0};
+    struct a64x_islands is = {x->data, fs, 0, 0, false, false, 0, 0, 0};
     struct img_ctx c = {m, NULL};
     struct a64x_code_map cm = {&c, img_is_code, map_flags, NULL};
     for (uint32_t pg = 0; pg < x->npages; pg++) {

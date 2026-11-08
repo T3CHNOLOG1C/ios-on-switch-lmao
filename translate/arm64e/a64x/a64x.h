@@ -187,9 +187,16 @@ struct a64x_islands {
     uint64_t piece, pnun;  /* open piece: first word, unallocated words in it */
     bool open, sticky;
     uint64_t runs, words; /* stats: data runs and words found */
+    uint32_t last;        /* the open piece's last word */
 };
 
 bool a64x_unallocated(uint32_t w);
+/*
+ * Whether code can stop at w and have padding (a zero or UDF word) or the end of the section next: w ends its block
+ * unconditionally (B, BR, RET, BRK) or calls (BL, BLR) a function that does not return. Code never runs into padding,
+ * so a run of words that does is data, whatever its words decode as.
+ */
+bool a64x_ends_code(uint32_t w);
 /* feed words [first, first + n) of the segment (va of the first one, code map as for translation), in order */
 void a64x_islands_page(struct a64x_islands *is, const uint32_t *w, uint32_t n, uint64_t first, uint64_t va,
                        const struct a64x_code_map *code);

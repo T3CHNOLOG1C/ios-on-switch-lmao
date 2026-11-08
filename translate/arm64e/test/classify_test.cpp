@@ -2,6 +2,8 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <initializer_list>
+#include <vector>
 
 extern "C" {
 #include "../a64x/a64x.h"
@@ -132,6 +134,31 @@ TEST(Stubs, LseStubEndsWithTheReturnBranch)
     for (int i = 0; i < n; i++)
         EXPECT_FALSE(a64x_class_is_baseline(a64x_classify(st[i]))) << i;
     EXPECT_EQ(-1, a64x_stub(0x8B020020, site, stub, 0, st, A64X_STUB_MAX));  // nothing to replace
+}
+
+// The words of a page found data by the island rule, as a mask over them.
+uint64_t islandMask(const std::initializer_list<uint32_t> words)
+{
+    const std::vector<uint32_t> w(words);
+    uint8_t data[8] = {};
+    a64x_islands is = {data, nullptr, 0, 0, false, false, 0, 0, 0};
+    a64x_islands_page(&is, w.data(), static_cast<uint32_t>(w.size()), 0, 0x1000, nullptr);
+    a64x_islands_end(&is, w.size());
+    uint64_t mask = 0;
+    for (size_t i = 0; i < w.size(); i++)
+        mask |= static_cast<uint64_t>((data[i >> 3] >> (i & 7)) & 1) << i;
+    return mask;
+}
+
+TEST(Islands, ATableOfSmallSixtyFourBitValuesIsData)
+{
+    // lzfse's mask table behind lzfse_decode_literals: the low half of 2^29 - 1 decodes as an FP16 FNMSUB.
+    EXPECT_EQ(0b0001010100u, islandMask({0xAA0003E8, kRet, 0x1FFFFFFF, 0, 0x3FFFFFFF, 0, 0x7FFFFFFF, 0, 0, 0}));
+}
+
+TEST(Islands, CodeThatEndsInACallOrABranchBeforePaddingStaysCode)
+{
+    EXPECT_EQ(0u, islandMask({0xAA0003E8, 0x94000010, 0, 0xAA0003E8, 0xD65F0FFF, 0, 0xAA0003E8, 0xD63F0100}));
 }
 
 }  // namespace

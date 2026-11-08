@@ -747,9 +747,10 @@ static void reach_pass(void)
  * Data islands in __text (assembler tables such as corecrypto's K256, libm's sincos coefficients, AudioCodecs' Hann
  * windows). Recursive descent from the validated function starts, the landing pads and the resolved jump tables marks code.
  * What it does not reach is cut into runs at UDF/zero padding; a run dense in unallocated encodings (at least one word in
- * 32), or starting at a function start that failed its probe, is data and leaves the code map: nothing in it is rewritten, here or by the
- * kernel, which takes its code ranges from the plan. Other unreached runs (dead __auth_stubs left by the cache builder's
- * stub elimination, code behind unresolved indirect branches) stay code.
+ * 32), starting at a function start that failed its probe, or running into padding without ending its code (lzfse's
+ * 64-bit mask table, single words between zero halves) is data and leaves the code map: nothing in it is rewritten, here
+ * or by the kernel, which takes its code ranges from the plan. Other unreached runs (dead __auth_stubs left by the cache
+ * builder's stub elimination, code behind unresolved indirect branches) stay code.
  */
 static uint64_t isl_runs, isl_words, isl_mod, isl_sites, code_runs, code_runs_mod, code_mod_words, code_sites,
     reached_impossible;
@@ -827,6 +828,10 @@ static void drop_data_islands(void)
 			 * through register branches carries a stray junk word per few hundred instructions. One in 32 separates them.
 			 */
             if (nun && (uint64_t)nun * 32 >= y - x)
+                bad = true;
+            /* Into padding (not into reached code) without ending its code: data (a64x_ends_code). */
+            const bool padded = y == xn || !BITV(codebits[f], y) || !(u32(fb[f], 4 * y) >> 16);
+            if (padded && !a64x_ends_code(u32(fb[f], 4 * (y - 1))))
                 bad = true;
             if (bad) {
                 isl_runs++;
@@ -1725,7 +1730,7 @@ int a64x_cmd_plan2(int argc, char **argv)
             for (uint64_t k = 0; k < n; k++)
                 if (BITV(fsbits[f], x0 + k))
                     fsl[k >> 3] |= 1 << (k & 7);
-            struct a64x_islands is = {data, fsl, 0, 0, false, false, 0, 0};
+            struct a64x_islands is = {data, fsl, 0, 0, false, false, 0, 0, 0};
 
             struct ctx_t {
                 uint8_t *bits;
