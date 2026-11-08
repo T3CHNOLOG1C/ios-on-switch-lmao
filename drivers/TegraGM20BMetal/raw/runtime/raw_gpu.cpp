@@ -1053,7 +1053,7 @@ bool Device::createSurfaceTexture(uint64_t surfaceId, void *base, uint64_t alloc
     Texture *sampled = nullptr;
     if (unaligned) {
         sampled = new Texture;
-        if (!createTexture(width, height, format, *sampled)) {
+        if (!createTexture(width, height, format, *sampled, false, true)) {
             delete sampled;
             return false;
         }
@@ -2225,14 +2225,14 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
     e.dev_ = dev_;
     e.pass_ = pass;
     // the render hardware takes one memory layout for all of a pass's color targets (nvk_rendering_linear): block-linear when
-    // one of them is or beside a zeta, its pitch ones then rendered through block-linear shadows as NVK does; memoryless ones
-    // get a backing of the pass's layout
+    // one of them is, or is a pitch target the hardware cannot take (rendered through a shadow either way), or beside a zeta,
+    // its pitch ones then rendered through block-linear shadows as NVK does; memoryless ones get a backing of the pass's layout
     const Texture *zeta = pass.depthStencil.texture;
     if (zeta && (!zeta->zeta || !zeta->memoryless))
         return nullptr;
     bool blockLinear = zeta != nullptr;
     for (uint32_t j = 0; j < pass.count && j < 8; j++)
-        if (const Texture *t = pass.color[j].texture; t && !t->memoryless && t->blockLinear)
+        if (const Texture *t = pass.color[j].texture; t && !t->memoryless && (t->blockLinear || t->shadowTarget))
             blockLinear = true;
     if (zeta) {
         std::lock_guard<std::mutex> l(dev_->lock_);
