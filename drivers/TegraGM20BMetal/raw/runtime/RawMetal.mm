@@ -478,6 +478,8 @@ struct Stats {
 #if SWITCH_FRAME_TIMELINE
     // the m2v replay's parts (noteReplay)
     std::atomic<uint64_t> replaySlotUs{0}, replayTwinUs{0}, replayCommitUs{0}, replayMaxUs{0};
+    // the draws it replayed, and the twins it made: textures, buffers, mip chains (rmMipTwin), anything else
+    std::atomic<uint64_t> replayDraws{0}, twinTextures{0}, twinBuffers{0}, twinMips{0}, twinOthers{0}, twinTextureUs{0};
 #endif
 };
 
@@ -1108,6 +1110,9 @@ static void cpuTiled(RMTexture *t, MTLRegion r, uint8_t *bytes, NSUInteger row, 
         if (_mipTwin)
             return _mipTwin;
     }
+#if SWITCH_FRAME_TIMELINE
+    gRM->stats.twinMips++;
+#endif
     return twinPublish(self, _mipTwin, [gRM->fallback newTextureWithDescriptor:_descriptor]);
 }
 
@@ -3937,8 +3942,16 @@ static inline id twinOf(id object)
     if (!((RMObject *)object)->_twin) {
         const uint64_t began = mach_absolute_time();
         id twin = [(RMObject *)object rmTwin];
-        tTwinTicks += mach_absolute_time() - began;
+        const uint64_t took = mach_absolute_time() - began;
+        tTwinTicks += took;
         gTwinsMade.fetch_add(1, std::memory_order_relaxed);
+        Stats &s = gRM->stats;
+        if ([object isKindOfClass:[RMTexture class]]) {
+            s.twinTextures++;
+            s.twinTextureUs += took * 1000 / switch_frame::ticksPerMs();
+        } else {
+            ([object isKindOfClass:[RMBuffer class]] ? s.twinBuffers : s.twinOthers)++;
+        }
         return twin;
     }
 #endif
@@ -4585,6 +4598,12 @@ static id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, 
     __asm__ volatile("dsb sy" ::: "memory");
 #endif
     gRM->stats.replayClean += cleaned;
+#if SWITCH_FRAME_TIMELINE
+    gRM->stats.replayDraws +=
+        uint64_t(std::count_if(cb->_tape.begin() + from, cb->_tape.begin() + to, [](const Cmd &c) {
+            return c.op == OpDraw || c.op == OpDrawIndexed;
+        }));
+#endif
     return m;
 }
 
@@ -6912,7 +6931,7 @@ size_t raw_metal_rates(char *out, size_t size)
     const uint64_t aborts = s.aborted.load() - gRates.aborted, segs = s.splitM2v.load() - gRates.splitM2v,
                    m2vs = f + segs ? f + segs : 1;
     const raw::Compiler::Stats made = gRM->completion ? gRM->completion->stats() : raw::Compiler::Stats();
-    char diag[768];
+    char diag[1024];
     snprintf(diag, sizeof diag,
              " sp=%llu/%llu abortenc=%.0fus/a replay=%.0fus/m rclean=%.0fKB/m rt128=%llu(pitch %u va&255 %u) "
              "rtmix=%llu lvl=%llu "
@@ -6932,10 +6951,13 @@ size_t raw_metal_rates(char *out, size_t size)
     {
         const size_t used = strlen(diag);
         snprintf(diag + used, sizeof diag - used,
-                 " rsplit=%.0f/%.0f/%.0fus/m rmax=%lluus fb=%llu/%llu/%llu/%llu(%s) clr=%llu/%llu"
-                 " so=%llu/%llu/%llu/%lluus",
+                 " rsplit=%.0f/%.0f/%.0fus/m rmax=%lluus rdraw=%.1f/m tw=t%llu/%lluus/b%llu/m%llu/o%llu"
+                 " fb=%llu/%llu/%llu/%llu(%s) clr=%llu/%llu so=%llu/%llu/%llu/%lluus",
                  (s.replaySlotUs.exchange(0) / double(m2vs)), (s.replayTwinUs.exchange(0) / double(m2vs)),
                  (s.replayCommitUs.exchange(0) / double(m2vs)), (unsigned long long)s.replayMaxUs.exchange(0),
+                 s.replayDraws.exchange(0) / double(m2vs), (unsigned long long)s.twinTextures.exchange(0),
+                 (unsigned long long)s.twinTextureUs.exchange(0), (unsigned long long)s.twinBuffers.exchange(0),
+                 (unsigned long long)s.twinMips.exchange(0), (unsigned long long)s.twinOthers.exchange(0),
                  (unsigned long long)k.fetchBarriers.exchange(0), (unsigned long long)k.fetchBarriersElided.exchange(0),
                  (unsigned long long)k.fetchBarriersAnyColor.exchange(0),
                  (unsigned long long)k.fetchBarriersInterlocked.exchange(0),
