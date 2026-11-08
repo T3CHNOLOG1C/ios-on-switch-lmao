@@ -60,6 +60,7 @@ host_library(
     srcs = [
         "//kits/SwitchLinux:SwitchLinux.cpp",
         "//kits/SwitchLinux:SwitchLinux.h",
+        "//kits/SwitchTime:SwitchTime.h",
     ],
     deps = [":kernel"],
 )

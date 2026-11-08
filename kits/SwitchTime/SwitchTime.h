@@ -44,9 +44,24 @@ static inline uint64_t switch_abs_to_ms(uint64_t abs)
     return switch_abs_to_ns(abs) / NSEC_PER_MSEC;
 }
 
-static inline uint64_t switch_now_us()
+static inline uint64_t switch_now_ns(void)  // NOLINT(modernize-redundant-void-arg): a C header
+{
+    return switch_abs_to_ns(mach_absolute_time());
+}
+
+static inline uint64_t switch_now_us(void)  // NOLINT(modernize-redundant-void-arg): a C header
 {
     return switch_abs_to_us(mach_absolute_time());
+}
+
+static inline uint64_t switch_now_ms(void)  // NOLINT(modernize-redundant-void-arg): a C header
+{
+    return switch_abs_to_ms(mach_absolute_time());
+}
+
+static inline uint64_t switch_ns_since(uint64_t start_abs)
+{
+    return switch_abs_to_ns(mach_absolute_time() - start_abs);
 }
 
 static inline uint64_t switch_us_since(uint64_t start_abs)

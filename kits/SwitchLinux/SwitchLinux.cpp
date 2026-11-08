@@ -6,6 +6,7 @@
 #include <kern/locks.h>
 #include <kern/sched_prim.h>
 #include <kern/thread_call.h>
+#include "../SwitchTime/SwitchTime.h"
 
 extern "C" {
 vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
@@ -52,14 +53,6 @@ void *lazy(void **slot, void *(*alloc)(), void (*release)(void *))
         return fresh;
     release(fresh);
     return have;
-}
-
-// Also turns a switch_linux_nanotime() deadline into a mach_absolute_time() one.
-uint64_t absFromNs(uint64_t ns)
-{
-    uint64_t abs = 0;
-    nanoseconds_to_absolutetime(ns, &abs);
-    return abs;
 }
 
 event_t eventOf(const void *event)
@@ -151,9 +144,7 @@ extern "C" uint64_t switch_linux_nanotime(void)
 
 extern "C" uint64_t switch_linux_abstime_to_ns(uint64_t abstime)
 {
-    uint64_t ns = 0;
-    absolutetime_to_nanoseconds(abstime, &ns);
-    return ns;
+    return switch_abs_to_ns(abstime);
 }
 
 extern "C" void switch_linux_udelay(uint64_t us)
@@ -177,7 +168,7 @@ extern "C" void switch_linux_wait_prepare(const void *event, uint64_t deadline_n
     if (deadline_ns == kNoDeadline) {
         assert_wait(eventOf(event), THREAD_UNINT);
     } else {
-        assert_wait_deadline(eventOf(event), THREAD_UNINT, absFromNs(deadline_ns));
+        assert_wait_deadline(eventOf(event), THREAD_UNINT, switch_abs_from_ns(deadline_ns));
     }
 }
 
@@ -230,10 +221,10 @@ extern "C" bool switch_linux_mutex_trylock(void *mutex)
 extern "C" bool switch_linux_mutex_sleep(void *mutex, const void *event, uint64_t deadline_ns)
 {
     auto *lock = static_cast<lck_mtx_t *>(mutex);
-    const wait_result_t result =
-        deadline_ns == kNoDeadline
-            ? lck_mtx_sleep(lock, LCK_SLEEP_DEFAULT, eventOf(event), THREAD_UNINT)
-            : lck_mtx_sleep_deadline(lock, LCK_SLEEP_DEFAULT, eventOf(event), THREAD_UNINT, absFromNs(deadline_ns));
+    const wait_result_t result = deadline_ns == kNoDeadline
+                                     ? lck_mtx_sleep(lock, LCK_SLEEP_DEFAULT, eventOf(event), THREAD_UNINT)
+                                     : lck_mtx_sleep_deadline(lock, LCK_SLEEP_DEFAULT, eventOf(event), THREAD_UNINT,
+                                                              switch_abs_from_ns(deadline_ns));
     return result != THREAD_TIMED_OUT;
 }
 
@@ -297,7 +288,7 @@ extern "C" bool switch_linux_call_enter_after(void *call, uint64_t delay_ns)
 {
     if (!delay_ns)
         return switch_linux_call_enter(call);
-    return thread_call_enter_delayed(callOf(call), mach_absolute_time() + absFromNs(delay_ns)) != FALSE;
+    return thread_call_enter_delayed(callOf(call), mach_absolute_time() + switch_abs_from_ns(delay_ns)) != FALSE;
 }
 
 extern "C" bool switch_linux_call_cancel(void *call)

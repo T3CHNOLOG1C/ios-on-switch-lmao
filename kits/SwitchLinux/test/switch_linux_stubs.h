@@ -30,6 +30,7 @@ typedef struct lck_rw lck_rw_t;
 typedef int lck_sleep_action_t;
 
 #define NSEC_PER_USEC             1000u
+#define NSEC_PER_MSEC             1000000u
 #define THREAD_UNINT              0
 #define THREAD_AWAKENED           0
 #define THREAD_TIMED_OUT          1
@@ -55,6 +56,7 @@ void IOFree(void *address, vm_size_t size);
 uint64_t mach_absolute_time(void);
 void absolutetime_to_nanoseconds(uint64_t abs, uint64_t *ns);
 void nanoseconds_to_absolutetime(uint64_t ns, uint64_t *abs);
+void clock_interval_to_deadline(uint32_t interval, uint32_t scale, uint64_t *deadline);
 void delay_for_interval(uint32_t interval, uint32_t scale);
 void delay_for_interval_with_leeway(uint32_t interval, uint32_t leeway, uint32_t scale);
 wait_result_t assert_wait(event_t event, wait_interrupt_t interruptible);

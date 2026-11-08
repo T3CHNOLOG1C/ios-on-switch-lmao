@@ -7,10 +7,9 @@
 #include <IOKit/IOLib.h>
 #include <IOKit/IOLocks.h>
 #include "../../kits/SwitchCAR/SwitchUPHY.h"
+#include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
 #include "XusbLanes.h"
 #include "XusbSuperSpeed.h"
-
-extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 
 namespace {
 constexpr uint64_t kPadctlPA = 0x7009F000;
@@ -21,12 +20,12 @@ bool gUp;  // under gLock; read without it for switch_usb_ss_up
 
 uint32_t r(uint32_t offset)
 {
-    return *reinterpret_cast<volatile uint32_t *>(gPadctl + offset);
+    return switch_mmio_read32(gPadctl, offset);
 }
 
 void w(uint32_t offset, uint32_t value)
 {
-    *reinterpret_cast<volatile uint32_t *>(gPadctl + offset) = value;
+    switch_mmio_write32(gPadctl, offset, value);
 }
 
 bool pllLocked()
@@ -62,7 +61,7 @@ void laneUp()
 bool switch_usb_ss_init(void)
 {
     if (!gPadctl)
-        gPadctl = reinterpret_cast<volatile uint8_t *>(ml_io_map(kPadctlPA, 0x1000));
+        gPadctl = switch_mmio_map(kPadctlPA, 0x1000);
     if (!gLock)
         gLock = IOLockAlloc();
     return (gPadctl != nullptr) && (gLock != nullptr);
