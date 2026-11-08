@@ -45,6 +45,16 @@ inline void colorTargetWords(const ColorTargetDesc &d, uint32_t w[kColorTargetWo
     w[7] = uint32_t(d.layerBytes >> 2);
 }
 
+// A slot with no target below the pass's last one, as NVK writes it (nvk_CmdBeginRendering): FORMAT DISABLED, VA 0. Left as it
+// was, the slot would still name the target of an earlier pass, which CT_SELECT's count makes the hardware render to.
+inline void disabledTargetWords(uint32_t w[kColorTargetWords])
+{
+    for (uint32_t i = 0; i < kColorTargetWords; i++)
+        w[i] = 0;
+    w[2] = 64;  // WIDTH
+    w[6] = 1;   // THIRD_DIMENSION
+}
+
 // Level `level` (1 .. levels - 1) of the chain at `chainVa` as a block-linear target; false: not a level of it
 inline bool chainLevelDesc(const fx::MipChain &c, uint64_t chainVa, uint32_t level, uint32_t rtFormat,
                            ColorTargetDesc &d)

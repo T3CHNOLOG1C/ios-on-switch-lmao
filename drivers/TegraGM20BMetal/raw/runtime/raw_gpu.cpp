@@ -950,6 +950,14 @@ uint32_t Device::allocTic()
     return nextTic_ < kTicCount ? nextTic_++ : 0;
 }
 
+// A freed header holds header 0's null descriptor until it is reused: zeroes would read as a buffer texture at VA 0, which a
+// draw still in flight, or one binding a stale index, would sample (a fault).
+void Device::freeTic(uint32_t tic)
+{
+    memcpy(tic_.cpu + 32 * tic, tic_.cpu, 32);
+    freeTic_.push_back(tic);
+}
+
 // Texture header of a pitch-linear 2D texture (Mesa NIL nvb097_fill_image_view_desc for a linear image: HEADER_VERSION PITCH,
 // TEXTURE_TYPE TWO_D_NO_MIPMAP), word 0 NVK's for the format
 void Device::writeTic(const Texture &t)
@@ -1379,8 +1387,7 @@ void Device::destroyTexture(Texture &t)
     if (t.view) {
         std::lock_guard<std::mutex> l(lock_);
         if (t.tic) {
-            memset(tic_.cpu + 32 * t.tic, 0, 32);
-            freeTic_.push_back(t.tic);
+            freeTic(t.tic);
         }
         t = {};
         return;
@@ -1404,14 +1411,12 @@ void Device::destroyTexture(Texture &t)
     }
     std::lock_guard<std::mutex> l(lock_);
     if (t.tic) {
-        memset(tic_.cpu + 32 * t.tic, 0, 32);
-        freeTic_.push_back(t.tic);
+        freeTic(t.tic);
     }
     if (t.chain) {
         for (const uint32_t level : t.chain->levelTic)
             if (level) {
-                memset(tic_.cpu + 32 * level, 0, 32);
-                freeTic_.push_back(level);
+                freeTic(level);
             }
         delete t.chain;
         t.chain = nullptr;
@@ -1878,8 +1883,7 @@ Texture *Device::backing(const Texture &m, uint32_t tag, bool blockLinear)
 void Device::freeBacking(Texture &t)
 {
     if (t.tic) {
-        memset(tic_.cpu + 32 * t.tic, 0, 32);
-        freeTic_.push_back(t.tic);
+        freeTic(t.tic);
     }
     if (t.zeta)
         tiledFree(zChunks_, t.span);
@@ -2131,6 +2135,7 @@ CommandBuffer *Device::begin()
     cb.surfaces_.clear();
     cb.draws = cb.passes = cb.blits = 0;
     cb.refusal = {};
+    cb.partial = false;
     cb.pushStart_ = push_.head;
     cb.uploadStart_ = upload_.head;
     memcpy(cb.rootPush_, rootPush_, sizeof rootPush_);
@@ -2335,6 +2340,11 @@ bool CommandBuffer::commit(uint32_t &seqno)
             if (!at && invalidates) {  // its prologue never reached the GPU: the next submission's invalidates
                 std::lock_guard<std::mutex> l(d.lock_);
                 d.heapInvalidated_ = invalidatedBefore;
+            }
+            if (at) {  // its first batches run on: abandon() may give their ring words back only once they completed
+                partial = true;
+                d.wait(d.lastSeqno_);
+                d.contextless_ = true;
             }
             return false;
         }
@@ -3377,13 +3387,19 @@ void RenderEncoder::end()
         p.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
     }
     uint32_t ct = 0, count = 0;
-    for (uint32_t j = 0; j < pass_.count && j < 8; j++) {
-        const Texture *t = pass_.color[j].texture;
-        if (!t)
-            continue;
-        targetWords(p, COLOR_TARGET + 0x40 * j, *t);
-        p.m(COLOR_COMPRESSION + 4 * j, 0);
-        count++;
+    for (uint32_t j = 0; j < pass_.count && j < 8; j++)
+        if (pass_.color[j].texture)
+            count = j + 1;
+    for (uint32_t j = 0; j < count; j++) {
+        if (const Texture *t = pass_.color[j].texture) {
+            targetWords(p, COLOR_TARGET + 0x40 * j, *t);
+            p.m(COLOR_COMPRESSION + 4 * j, 0);
+        } else {
+            uint32_t w[kColorTargetWords];
+            disabledTargetWords(w);
+            p.incArray(COLOR_TARGET + 0x40 * j, w, kColorTargetWords);
+            p.m(COLOR_COMPRESSION + 4 * j, 1);
+        }
     }
     // targets map to themselves (NVK writes all eight slots of the map; the hardware reads the first `count`)
     for (uint32_t k = 0; k < 8; k++)

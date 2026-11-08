@@ -522,8 +522,11 @@ public:
     // `invalidate`: also dropped from the CPU's caches (memory the GPU writes, so no dirty line lands on it later).
     void clean(const void *cpu, uint64_t bytes, bool invalidate = false);
     // One Exec (more when the segments exceed one Exec's 255): the submission prologue, then every pass and blit in order.
+    // false with `partial`: the kernel refused a later Exec after earlier ones were submitted; those completed before it
+    // returned, and the next command buffer gets a new channel (the GPU's state after them is not what the device tracks).
     bool commit(uint32_t &seqno);
-    // Nothing of it is submitted: the rings get back what it took, the root table's shadow what it was.
+    bool partial = false;
+    // Nothing of it is on the GPU any more: the rings get back what it took, the root table's shadow what it was.
     void abandon();
 
     // A host import the submission reads or writes (a surface's, a no-copy buffer's), for the kernel's order with other
@@ -1047,6 +1050,7 @@ private:
     uint8_t *alloc(Ring &r, uint32_t bytes, uint32_t align, uint64_t &va);
     void retire(Ring &r, uint32_t seqno);
     uint32_t allocTic();
+    void freeTic(uint32_t tic);  // lock_ held
     void writeTic(const Texture &t);
     bool poolAlloc(uint64_t bytes, Span &s);
     void poolFree(Span &s);

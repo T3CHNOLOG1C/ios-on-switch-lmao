@@ -557,8 +557,10 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
         if (standInPass(t, true))
             return false;
     uint32_t seq = 0;
-    if (!rc->commit(seq))
+    if (!rc->commit(seq)) {
+        cb->_partial = rc->partial;
         return fail(PredEncKernel, "the kernel refused the submission");
+    }
     for (const Conversion &c : converted) {  // (submitted: their images hold the surfaces at these seeds)
         c.t->_imageSeed = c.seed;
         c.t->_imageWrites = c.writes;

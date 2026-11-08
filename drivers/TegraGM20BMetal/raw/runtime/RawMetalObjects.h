@@ -244,6 +244,8 @@ struct RMSegment {
     NSError *_error;
     RMQueue *_queue;
     bool _committed, _scheduledDone, _completedDone, _m2v;
+    bool
+        _partial;  // the kernel refused its raw submission after part of it ran (raw::CommandBuffer::partial): never replayed
     // scheduled() and finish() ran (their handlers taken): a handler added after goes at once, and scheduled() runs once (a
     // command buffer held for a shared event is scheduled at its commit, eventHeld)
     bool _scheduledSent, _completedSent;
