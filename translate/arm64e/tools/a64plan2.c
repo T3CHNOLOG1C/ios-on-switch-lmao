@@ -1898,6 +1898,8 @@ int a64x_cmd_plan2(int argc, char **argv)
     /* holes and sites, page by page (the kernel's rule for holes) */
     struct site *sites = NULL;
     size_t nsites = 0, capsites = 0;
+    void *walk_buf = malloc(A64X_WALK_BYTES(65536));
+    struct a64x_walk walk = a64x_walk_in(walk_buf, 65536);
     for (int q = 0; q < nfm; q++) {
         if (!(fm[q].prot & 4))
             continue;
@@ -1940,10 +1942,10 @@ int a64x_cmd_plan2(int argc, char **argv)
                     /* the whole function: loops back to before the site and tail calls are understood */
                     const uint32_t *fp = (const uint32_t *)vmptr(fstart, fend - fstart);
                     lr = a64x_dead_regs_flow_fn(fp, (int)((fend - fstart) / 4), (int)((base + 4 * k0 - fstart) / 4),
-                                                cand, wide_budget);
+                                                cand, wide_budget, &walk);
                     if (cmp_out) {
                         static uint64_t nx30;
-                        uint32_t lw = a64x_dead_regs_flow(wp, wn, 0, cand, wide_budget);
+                        uint32_t lw = a64x_dead_regs_flow(wp, wn, 0, cand, wide_budget, &walk);
                         if (lw & ~lr)
                             fprintf(cmp_out, "LOST %llx %08x win %08x fn %08x\n", (unsigned long long)(base + 4 * k0),
                                     w, lw, lr);
@@ -1954,16 +1956,16 @@ int a64x_cmd_plan2(int argc, char **argv)
                         }
                     }
                 } else {
-                    lr = a64x_dead_regs_flow(wp, wn, 0, cand, wide_budget);
+                    lr = a64x_dead_regs_flow(wp, wn, 0, cand, wide_budget, &walk);
                 }
                 uint32_t vd = 0;
                 if (a64x_class_uses_vtemps(c)) {
                     if (q2 >= 0 && fend > fstart && fend <= fm[q2].addr + fm[q2].size && fend - fstart <= 4u * 65536) {
                         const uint32_t *fp = (const uint32_t *)vmptr(fstart, fend - fstart);
                         vd = a64x_dead_vregs_flow(fp, (int)((fend - fstart) / 4), (int)((base + 4 * k0 - fstart) / 4),
-                                                  0xFFFFFFFFu, wide_budget, true);
+                                                  0xFFFFFFFFu, wide_budget, true, &walk);
                     } else {
-                        vd = a64x_dead_vregs_flow(wp, wn, 0, 0xFFFFFFFFu, wide_budget, false);
+                        vd = a64x_dead_vregs_flow(wp, wn, 0, 0xFFFFFFFFu, wide_budget, false, &walk);
                     }
                     if (getenv("A64X_NO_VLIVE"))
                         vd = 0;
@@ -1984,6 +1986,7 @@ int a64x_cmd_plan2(int argc, char **argv)
             }
         }
     }
+    free(walk_buf);
     qsort(holes, nholes, sizeof(*holes), cmp_hole);
     {
         size_t dup = 0, o = 0;
