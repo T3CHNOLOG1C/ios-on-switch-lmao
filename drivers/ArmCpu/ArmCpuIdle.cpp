@@ -97,8 +97,8 @@ const char *check()
     gTmr = switch_mmio_map(kTmrPA, 0x400);
     if (!gTmr)
         return "TMR not mapped";
-    if (armcpu::tmr::clockHz(switch_mmio_read32(gTmr, kTimerUsecConfig)) != frequency)
-        return "TMR10-13's clock (clk_m, from TIMERUS_USEC_CFG) is not the timebase";
+    if (switch_mmio_read32(gTmr, kTimerUsecConfig) != armcpu::tmr::kUsecConfig19M2)
+        return "the timers' clock is not the 19.2 MHz timebase (TIMERUS_USEC_CFG)";
     gEntryPA = ml_static_vtop(reinterpret_cast<vm_offset_t>(switch_secondary_entry));
     if (!gEntryPA || gEntryPA >= UINT64_C(0x100000000))
         return "the PSCI entry is not a usable physical address";
