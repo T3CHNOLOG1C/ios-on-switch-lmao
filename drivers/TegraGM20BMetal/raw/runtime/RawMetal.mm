@@ -3965,40 +3965,9 @@ static MTLRenderPassDescriptor *twinPass(MTLRenderPassDescriptor *pass)
 // An invocation recorded on a facade encoder or command buffer, sent to the m2v one: object arguments become their twins.
 static void replayInvocation(NSInvocation *inv, id target)
 {
-    NSMethodSignature *sig = inv.methodSignature;
-    for (NSUInteger i = 2; i < sig.numberOfArguments; i++) {
-        const char *t = raw::argumentType(sig, i);
-        if (*t == '@') {
-            __unsafe_unretained id arg = nil;
-            [inv getArgument:&arg atIndex:i];
-            id mapped = twinOf(arg);
-            if (mapped != arg) {
-                __unsafe_unretained id m = mapped;
-                [inv setArgument:&m atIndex:i];
-            }
-        } else if (t[0] == '^' && t[1] == '@') {
-            // an array of objects (set...s:withRange:, useResources:count:), the invocation's own copy
-            // (keepPointedArguments): mapped in place over another copy the invocation keeps
-            id __unsafe_unretained *array = nullptr;
-            [inv getArgument:&array atIndex:i];
-            const NSUInteger count = raw::pointedElements(inv, i);
-            if (array && count) {
-                NSMutableData *copy = [NSMutableData dataWithLength:count * sizeof(id)];
-                id __unsafe_unretained *out = (id __unsafe_unretained *)copy.mutableBytes;
-                NSMutableArray *keep = [NSMutableArray array];
-                for (NSUInteger k = 0; k < count; k++) {
-                    id m = twinOf(array[k]);
-                    if (m)
-                        [keep addObject:m];
-                    out[k] = m;
-                }
-                objc_setAssociatedObject(inv, (__bridge const void *)copy, @[ copy, keep ], OBJC_ASSOCIATION_RETAIN);
-                id __unsafe_unretained *p = out;
-                [inv setArgument:&p atIndex:i];
-            }
-        }
-    }
-    [inv invokeWithTarget:target];
+    raw::invokeMapped(inv, target, [](id o) {
+        return twinOf(o);
+    });
 }
 
 static uint64_t extra(RMCommandBuffer *cb, uint64_t i)
@@ -4491,16 +4460,10 @@ static id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, 
             break;
         case OpInvocation: {
             NSInvocation *inv = (__bridge NSInvocation *)c.obj;
-            for (NSUInteger i = 2; i < inv.methodSignature.numberOfArguments;
-                 i++) {  // buffers it names get cleaned too
-                const char *t = [inv.methodSignature getArgumentTypeAtIndex:i];
-                if (*t != '@')
-                    continue;
-                __unsafe_unretained id arg = nil;
-                [inv getArgument:&arg atIndex:i];
-                if ([arg isKindOfClass:[RMBuffer class]])
-                    buffers.insert((RMBuffer *)arg);
-            }
+            raw::forEachObject(inv, [&](id o) {  // buffers it names get cleaned too
+                if ([o isKindOfClass:[RMBuffer class]])
+                    buffers.insert((RMBuffer *)o);
+            });
             replayInvocation(inv, c.stage == 0xff ? m : enc);
             break;
         }
@@ -5349,17 +5312,11 @@ static void markWritten(RMCommandBuffer *cb)
             if (compute)
                 markDirty(c.obj);
             break;
-        case OpInvocation: {  // compute and other recorded calls: every buffer and texture they name
-            NSInvocation *inv = (__bridge NSInvocation *)c.obj;
-            for (NSUInteger i = 2; i < inv.methodSignature.numberOfArguments; i++) {
-                if (*[inv.methodSignature getArgumentTypeAtIndex:i] != '@')
-                    continue;
-                __unsafe_unretained id arg = nil;
-                [inv getArgument:&arg atIndex:i];
-                markDirty((__bridge void *)arg);
-            }
+        case OpInvocation:  // compute and other recorded calls: every buffer and texture they name
+            raw::forEachObject((__bridge NSInvocation *)c.obj, [](id o) {
+                markDirty((__bridge void *)o);
+            });
             break;
-        }
         default:
             break;
         }

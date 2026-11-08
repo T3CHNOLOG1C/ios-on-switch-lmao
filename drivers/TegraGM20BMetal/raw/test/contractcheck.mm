@@ -4,7 +4,8 @@
 // - Without an m2v device (no nvk dylib given): a command buffer that never reaches a GPU (the kernel refuses the raw path's
 //   channel, and there is no m2v to replay it) runs its scheduled handlers, before its completed ones.
 // - With one: newBufferWithBytes: while the raw pool has no room (the kernel refuses its allocations) gives m2v's buffer with
-//   the bytes in it.
+//   the bytes in it; and the buffers a compute pass names, as arguments and in arrays, are marked written by the GPU once it
+//   completes (on m2v, which the replay hands their twins), so the CPU's next read of them invalidates its cached lines.
 // usage: contractcheck <pack> <cache dir> [<nvk dylib>]
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
@@ -80,6 +81,36 @@ static void bytesWithoutRoom(id<MTLDevice> dev)
     expect(b && b.contents && !memcmp(b.contents, bytes.data(), bytes.size()), "m2v's buffer, holding the bytes");
 }
 
+// RMBuffer's _gpuDirty (std::atomic<bool>), read through the runtime: the facade has no accessor for it
+static bool gpuDirty(id<MTLBuffer> b)
+{
+    Ivar dirty = class_getInstanceVariable(object_getClass(b), "_gpuDirty");
+    return dirty && *reinterpret_cast<const bool *>(reinterpret_cast<const uint8_t *>((__bridge void *)b) +
+                                                    ivar_getOffset(dirty));
+}
+
+static void computeWrites(id<MTLDevice> dev)
+{
+    id<MTLCommandQueue> q = [dev newCommandQueue];
+    id<MTLBuffer> one = [dev newBufferWithLength:4096 options:MTLResourceStorageModeShared],
+                  two = [dev newBufferWithLength:4096 options:MTLResourceStorageModeShared],
+                  three = [dev newBufferWithLength:4096 options:MTLResourceStorageModeShared];
+    id<MTLCommandBuffer> cb = [q commandBuffer];
+    id<MTLComputeCommandEncoder> e = [cb computeCommandEncoder];
+    [e setBuffer:one offset:0 atIndex:0];
+    const id<MTLBuffer> pair[2] = {two, three};
+    const NSUInteger offsets[2] = {0, 0};
+    [e setBuffers:pair offsets:offsets withRange:NSMakeRange(1, 2)];
+    [e endEncoding];
+    [cb commit];
+    [cb waitUntilCompleted];
+    usleep(100000);
+    printf("a compute pass's buffers after it completed: dirty %d (argument), %d %d (array)\n", gpuDirty(one),
+           gpuDirty(two), gpuDirty(three));
+    expect(gpuDirty(one), "a buffer it names as an argument is marked written");
+    expect(gpuDirty(two) && gpuDirty(three), "buffers it names in an array are marked written");
+}
+
 int main(int argc, char **argv)
 {
     @autoreleasepool {
@@ -101,9 +132,10 @@ int main(int argc, char **argv)
             fprintf(stderr, "NO DEVICE: %s\n", why.UTF8String);
             return 1;
         }
-        if (fallback)
+        if (fallback) {
             bytesWithoutRoom(dev);
-        else
+            computeWrites(dev);
+        } else
             handlersRun(dev);
         printf("%s: contractcheck\n", failed ? "FAIL" : "PASS");
         return failed ? 1 : 0;
