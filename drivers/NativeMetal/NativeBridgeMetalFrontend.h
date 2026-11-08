@@ -80,6 +80,13 @@ id native_bridge_metal_render_pipeline_lazy(id device, id descriptor, NSUInteger
 // The metallib a function of this device was made from: its library, which keeps `bytes` while it lives; nil when the
 // function has none (the raw path names a function's AIR by its entry there).
 id native_bridge_metal_function_metallib(id function, const void **bytes, size_t *length);
+// The raw GM20B path's direct compile of a render state (bridge/NativeMetalDirect.h) of this device's functions: false with
+// `why` (valid until the next call on the thread) when the translator refuses it or `each` returns false.
+struct NmbDirectState;
+bool native_bridge_metal_render_direct(id descriptor, bool barrier, NSUInteger textureFormat,
+                                       bool (*each)(const struct NmbDirectState *, void *), void *ctx, const char **why);
+// A symbol of the NVK this device opened (null: none)
+void *native_bridge_metal_nvk_symbol(const char *name);
 
 // Memory another driver of this process keeps bound in the GPU VM it shares with NVK (the raw GM20B path's: raw_gpu.h Alias): the
 // BO's first byte for the CPU, its size, handle and GPU address, the PTE kind of that binding, and the lease a view holds.

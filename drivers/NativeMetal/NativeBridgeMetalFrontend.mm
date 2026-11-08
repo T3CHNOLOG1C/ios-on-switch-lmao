@@ -33,6 +33,7 @@
 #include <mach/mach.h>
 #include <mach/mach_time.h>
 #include <os/proc.h>
+#include "bridge/NativeMetalDirect.h"
 #include "bridge/NativeMetalObjects.h"
 #include "NativeBridgeMetalFrontend.h"
 #include "AsyncPipelines.h"
@@ -2168,6 +2169,11 @@ extern "C" id native_bridge_metal_function_metallib(id function, const void **by
     *bytes = library.bytes;
     *length = library.length;
     return library;
+}
+
+extern "C" void *native_bridge_metal_nvk_symbol(const char *name)
+{
+    return nvkSymbol(name);
 }
 
 // TegraGM20BMetal: the m2v twin of a state its raw path draws, made at its first set (AsyncPipelines.h startLazy); made
@@ -5160,6 +5166,23 @@ static bool renderDescriptor(MTLRenderPipelineDescriptor *d, NmbRenderPipelineDe
         }
     }
     return true;
+}
+
+extern "C" bool native_bridge_metal_render_direct(id descriptor, bool barrier, NSUInteger textureFormat,
+                                                  bool (*each)(const struct NmbDirectState *, void *), void *ctx,
+                                                  const char **why)
+{
+    NmbRenderPipelineDescriptor p = {};
+    std::vector<NmbFunction *> linked;
+    NSError *error = nil;
+    if (!gDevice || !renderDescriptor((MTLRenderPipelineDescriptor *)descriptor, &p, linked, &error)) {
+        *why = gDevice ? "a function of another device" : "no device";
+        return false;
+    }
+    if (nmb_render_pipeline_direct(gDevice, &p, barrier, textureFormat, each, ctx))
+        return true;
+    *why = nmb_last_error();
+    return false;
 }
 
 // ---- heaps ----

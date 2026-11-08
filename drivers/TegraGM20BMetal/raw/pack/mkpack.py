@@ -346,6 +346,12 @@ def foreign(m: int, n: int) -> bool:
     )
 
 
+# SET_VERTEX_STREAM_A_FORMAT(j) with ENABLE (bit 12) clear: a stream the hardware does not fetch, whose stride the probe saw
+# as an earlier state's leftover. Taken as 0, which the direct compile (runtime/raw_emit.cpp) makes too
+def disabled_stream(m: int, v: int) -> bool:
+    return 0x1C00 <= m < 0x1E00 and (m - 0x1C00) % 0x10 == 0 and not v & 0x1000
+
+
 def split_registers(simple: list[dict], post: dict[int, dict[int, int]]) -> tuple[list[int], dict[int, int]]:
     # registers: varying across states -> per-pipeline blob; equal -> baseline (when it differs from post-init)
     allregs = set(post[0])
@@ -580,7 +586,9 @@ def main() -> None:
     skipped += aside
     for p in simple:
         n = targets(p['key'])
-        p['records'][0]['regs'] = {m: v for m, v in p['records'][0]['regs'].items() if not foreign(m, n)}
+        p['records'][0]['regs'] = {
+            m: 0 if disabled_stream(m, v) else v for m, v in p['records'][0]['regs'].items() if not foreign(m, n)
+        }
     varying, baseline = split_registers(simple, post)
     report.append(
         f'{len(probes)} records probed, {len(simple)} taken ({sum(1 for p in simple if p["form"])} of them barrier '

@@ -53,6 +53,7 @@ rust_static_library(
     name = "bridge",
     srcs = [
         METAL + ":bridge/NativeMetalBridge.rs",
+        METAL + ":bridge/NativeMetalDirect.rs",
         METAL + ":bridge/NativeMetalFailure.rs",
         METAL + ":bridge/NativeMetalObjects.rs",
         METAL + ":bridge/NativeMetalTarget.rs",
@@ -83,6 +84,7 @@ rust_static_library(
         "//kits/SwitchRefusal:switch_refusal_rs",
         "//third_party/m2v/crates/metal2vulkan",
         "//third_party/m2v/crates/metal2vulkan-runtime",
+        "@rust_crates//:ash",
         "@rust_crates//:libc",
         "@rust_crates//:sha2",
     ],
@@ -116,6 +118,7 @@ raw_stack(
     name = "raw_stack",
     srcs = [
         METAL + ":bridge/NativeMetalBridge.rs",
+        METAL + ":bridge/NativeMetalDirect.rs",
         METAL + ":bridge/NativeMetalFailure.rs",
         METAL + ":bridge/NativeMetalObjects.rs",
         METAL + ":bridge/NativeMetalTarget.rs",
@@ -166,6 +169,9 @@ metal_plugin(
         GM20B_METAL + ":raw/runtime/raw_comp.cpp",
         GM20B_METAL + ":raw/runtime/raw_capture.cpp",
         GM20B_METAL + ":raw/runtime/raw_record.cpp",
+        GM20B_METAL + ":raw/runtime/raw_record_parts.cpp",
+        GM20B_METAL + ":raw/runtime/raw_direct.cpp",
+        GM20B_METAL + ":raw/runtime/raw_emit.cpp",
         GM20B_METAL + ":raw/runtime/raw_cache.cpp",
         GM20B_METAL + ":raw/runtime/raw_compiler.cpp",
         GM20B_METAL + ":raw/runtime/raw_metallib.cpp",

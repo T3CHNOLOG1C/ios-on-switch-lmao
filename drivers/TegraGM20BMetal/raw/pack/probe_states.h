@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 // A corpus R line (the frontend journal's render pipeline state) as the descriptor it names, made with a library's functions: the
-// pack generator's probe (probe.mm) and the host check of the runtime's own probe (raw/test/completecheck.mm) read lines alike.
+// pack generator's probe (probe.mm) and the host checks of the runtime's records (raw/test/completecheck.mm, directcheck.mm) read
+// lines alike.
 #pragma once
+#import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #include <cstdlib>
 #include <string>
@@ -134,6 +136,92 @@ inline bool parseState(id<MTLLibrary> qc, const std::string &line, State &s)
     s.key = key + line.substr(bar1, (bar3 == std::string::npos ? line.size() : bar3) - bar1);
     s.d = d;
     return true;
+}
+
+// A line's library (its vertex function's lib= path) where it is a framework's default.metallib other than QuartzCore's
+inline std::string libraryPath(const std::string &line)
+{
+    const size_t at = line.find(" lib=");
+    if (at == std::string::npos)
+        return "";
+    const std::string path = line.substr(at + 5, line.find(' ', at + 5) - at - 5);
+    const std::string suffix = ".framework/default.metallib";
+    if (path.size() < suffix.size() || path.compare(path.size() - suffix.size(), suffix.size(), suffix) ||
+        path.find("/QuartzCore.framework/") != std::string::npos)
+        return "";
+    return path;
+}
+
+inline std::string frameworkName(const std::string &path)
+{
+    const size_t end = path.rfind(".framework/"), begin = path.rfind('/', end) + 1;
+    return path.substr(begin, end - begin);
+}
+
+// A framework's library under PROBE_LIB_ROOT (the crawl's root), loaded once
+inline id<MTLLibrary> frameworkLibrary(id<MTLDevice> dev, const std::string &path)
+{
+    static NSMutableDictionary<NSString *, id<MTLLibrary>> *loaded = [NSMutableDictionary dictionary];
+    NSString *key = @(path.c_str());
+    if (!loaded[key]) {
+        const char *root = getenv("PROBE_LIB_ROOT");
+        NSError *e = nil;
+        if (id<MTLLibrary> l =
+                [dev newLibraryWithURL:[NSURL fileURLWithPath:@((std::string(root ? root : "") + path).c_str())]
+                                 error:&e])
+            loaded[key] = l;
+    }
+    return loaded[key];
+}
+
+// The states a corpus names, in probe order: Core Animation's R lines (PROBE_LABEL, default com.apple.coreanimation.: only lines
+// whose label starts with it; "" for every line) with their lib= fields dropped, and another framework's lines marked "@L <its
+// library path> "; with `own`, the raw path's own states after them, marked "@O ": the conversions of YCbCr textures
+// (pack/ycbcr.metal) and the extended-range stand-ins (pack/xr.metal), and the moves between an RGB8_444_2P target's planes and its
+// RGBA16Float stand-in (TwoPlaneStandIn.metal)
+inline std::vector<std::string> corpusLines(NSString *text, bool own)
+{
+    std::vector<std::string> lines;
+    const char *labelPrefix = getenv("PROBE_LABEL") ? getenv("PROBE_LABEL") : "com.apple.coreanimation.";
+    NSRegularExpression *lib = [NSRegularExpression regularExpressionWithPattern:@" lib=\\S+" options:0 error:nil];
+    for (NSString *l in [text componentsSeparatedByString:@"\n"]) {
+        if (![l hasPrefix:@"R "] || ![l containsString:@" ok=1 "])
+            continue;
+        if (const std::string path = libraryPath(l.UTF8String); !path.empty()) {
+            lines.push_back("@L " + path + " " +
+                            [lib stringByReplacingMatchesInString:l
+                                                          options:0
+                                                            range:NSMakeRange(0, l.length)
+                                                     withTemplate:@""]
+                                .UTF8String);
+            continue;
+        }
+        if (*labelPrefix && ![l containsString:[@" label=" stringByAppendingString:@(labelPrefix)]])
+            continue;
+        NSString *plain = [lib stringByReplacingMatchesInString:l
+                                                        options:0
+                                                          range:NSMakeRange(0, l.length)
+                                                   withTemplate:@""];
+        lines.push_back(plain.UTF8String);
+    }
+    if (!own)
+        return lines;
+    for (const char *out :
+         {"115 | v ycbcr_vert | f ycbcr_converted_frag", "125 | v ycbcr_vert | f ycbcr_srgb_frag",
+          "70 | v ycbcr_vert | f ycbcr_codes_frag", "90 | v ycbcr_vert | f ycbcr_codes10_frag",
+          "115 | v xr_vert | f xr_bgr10_frag", "115 | v xr_vert | f xr_bgra10_frag", "115 | v xr_vert | f xr_planes_frag",
+          "70 | v resolve_vert | f resolve_rgba8_frag", "70 | v resolve_vert | f resolve_rgba8_srgb_frag",
+          "80 | v resolve_vert | f resolve_bgra8_frag", "80 | v resolve_vert | f resolve_bgra8_srgb_frag",
+          "92 | v resolve_vert | f resolve_rg11b10f_frag", "115 | v resolve_vert | f resolve_rgba16f_frag"}) {
+        std::string o = out;
+        const size_t bar = o.find(' ');
+        lines.push_back("@O R ok=1 label=raw.own samples=1 topo=0 ds=0/0 c0=" + o.substr(0, bar) + ":15:0:1:0:0:1:0:0" +
+                        o.substr(bar));
+    }
+    for (const char *out : {"c0=115:15:0:1:0:0:1:0:0 | v two_plane_cover | f two_plane_load",
+                            "c0=10:15:0:1:0:0:1:0:0 c1=30:15:0:1:0:0:1:0:0 | v two_plane_cover | f two_plane_store"})
+        lines.push_back(std::string("@O R ok=1 label=raw.own samples=1 topo=0 ds=0/0 ") + out);
+    return lines;
 }
 
 }  // namespace probe

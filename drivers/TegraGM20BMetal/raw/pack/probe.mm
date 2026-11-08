@@ -53,41 +53,6 @@ static std::set<unsigned> writtenFormats(const std::vector<std::string> &lines)
     return out;
 }
 
-// A line's library (its vertex function's lib= path) where it is a framework's default.metallib other than QuartzCore's
-static std::string libraryPath(const std::string &line)
-{
-    const size_t at = line.find(" lib=");
-    if (at == std::string::npos)
-        return "";
-    const std::string path = line.substr(at + 5, line.find(' ', at + 5) - at - 5);
-    const std::string suffix = ".framework/default.metallib";
-    if (path.size() < suffix.size() || path.compare(path.size() - suffix.size(), suffix.size(), suffix) ||
-        path.find("/QuartzCore.framework/") != std::string::npos)
-        return "";
-    return path;
-}
-
-static std::string frameworkName(const std::string &path)
-{
-    const size_t end = path.rfind(".framework/"), begin = path.rfind('/', end) + 1;
-    return path.substr(begin, end - begin);
-}
-
-static id<MTLLibrary> frameworkLibrary(id<MTLDevice> dev, const std::string &path)
-{
-    static NSMutableDictionary<NSString *, id<MTLLibrary>> *loaded = [NSMutableDictionary dictionary];
-    NSString *key = @(path.c_str());
-    if (!loaded[key]) {
-        const char *root = getenv("PROBE_LIB_ROOT");
-        NSError *e = nil;
-        if (id<MTLLibrary> l =
-                [dev newLibraryWithURL:[NSURL fileURLWithPath:@((std::string(root ? root : "") + path).c_str())]
-                                 error:&e])
-            loaded[key] = l;
-    }
-    return loaded[key];
-}
-
 constexpr MTLPixelFormat kRGB8_444_2P = MTLPixelFormat(542);
 
 // RGB10A8_2P_XR10, BGRA10_XR, BGR10_XR and their _sRGB twins (550 to 555). m2v holds such an attachment as its raw codes and
@@ -146,29 +111,6 @@ int main(int argc, char **argv)
             return 1;
         }
         NSString *text = [NSString stringWithContentsOfFile:@(argv[4]) encoding:NSUTF8StringEncoding error:nil];
-        std::vector<std::string> lines;
-        const char *labelPrefix = getenv("PROBE_LABEL") ? getenv("PROBE_LABEL") : "com.apple.coreanimation.";
-        NSRegularExpression *lib = [NSRegularExpression regularExpressionWithPattern:@" lib=\\S+" options:0 error:nil];
-        for (NSString *l in [text componentsSeparatedByString:@"\n"]) {
-            if (![l hasPrefix:@"R "] || ![l containsString:@" ok=1 "])
-                continue;
-            if (const std::string path = libraryPath(l.UTF8String); !path.empty()) {
-                lines.push_back("@L " + path + " " +
-                                [lib stringByReplacingMatchesInString:l
-                                                              options:0
-                                                                range:NSMakeRange(0, l.length)
-                                                         withTemplate:@""]
-                                    .UTF8String);
-                continue;
-            }
-            if (*labelPrefix && ![l containsString:[@" label=" stringByAppendingString:@(labelPrefix)]])
-                continue;
-            NSString *plain = [lib stringByReplacingMatchesInString:l
-                                                            options:0
-                                                              range:NSMakeRange(0, l.length)
-                                                       withTemplate:@""];
-            lines.push_back(plain.UTF8String);
-        }
         // PROBE_OWN_LIB=<metallib>: the raw path's own states after Core Animation's, drawn and read alike, lines marked "@O ":
         // the conversions of YCbCr textures (pack/ycbcr.metal) and the extended-range stand-ins (pack/xr.metal), that library's,
         // and the moves between an RGB8_444_2P target's planes and its RGBA16Float stand-in, the frontend's own library's
@@ -184,24 +126,8 @@ int main(int argc, char **argv)
                 fprintf(stderr, "own library: %s\n", error.localizedDescription.UTF8String);
                 return 1;
             }
-            for (const char *out :
-                 {"115 | v ycbcr_vert | f ycbcr_converted_frag", "125 | v ycbcr_vert | f ycbcr_srgb_frag",
-                  "70 | v ycbcr_vert | f ycbcr_codes_frag", "90 | v ycbcr_vert | f ycbcr_codes10_frag",
-                  "115 | v xr_vert | f xr_bgr10_frag", "115 | v xr_vert | f xr_bgra10_frag",
-                  "115 | v xr_vert | f xr_planes_frag", "70 | v resolve_vert | f resolve_rgba8_frag",
-                  "70 | v resolve_vert | f resolve_rgba8_srgb_frag", "80 | v resolve_vert | f resolve_bgra8_frag",
-                  "80 | v resolve_vert | f resolve_bgra8_srgb_frag", "92 | v resolve_vert | f resolve_rg11b10f_frag",
-                  "115 | v resolve_vert | f resolve_rgba16f_frag"}) {
-                std::string o = out;
-                const size_t bar = o.find(' ');
-                lines.push_back("@O R ok=1 label=raw.own samples=1 topo=0 ds=0/0 c0=" + o.substr(0, bar) +
-                                ":15:0:1:0:0:1:0:0" + o.substr(bar));
-            }
-            for (const char *out :
-                 {"c0=115:15:0:1:0:0:1:0:0 | v two_plane_cover | f two_plane_load",
-                  "c0=10:15:0:1:0:0:1:0:0 c1=30:15:0:1:0:0:1:0:0 | v two_plane_cover | f two_plane_store"})
-                lines.push_back(std::string("@O R ok=1 label=raw.own samples=1 topo=0 ds=0/0 ") + out);
         }
+        const std::vector<std::string> lines = corpusLines(text, own != nil);
         id<MTLCommandQueue> queue = [dev newCommandQueue];
         // tagged textures and samplers: BGRA8, for the stand-ins' conversions the integer formats they read codes as
         // (pack/xr.metal), for the two-plane store the RGBA16Float stand-in it reads (the texture's class decides the push

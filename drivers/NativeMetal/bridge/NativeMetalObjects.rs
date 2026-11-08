@@ -48,7 +48,7 @@ fn set_error(why: String) {
 }
 
 /// Runs `body`, turning an error or a panic into the per-thread reason and `fallback`.
-fn guard<T>(fallback: T, body: impl FnOnce() -> Result<T, String>) -> T {
+pub(crate) fn guard<T>(fallback: T, body: impl FnOnce() -> Result<T, String>) -> T {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
         Ok(Ok(value)) => value,
         Ok(Err(why)) => {
@@ -67,7 +67,7 @@ fn boxed<T>(value: T) -> *mut T {
 }
 
 /// The object a handle points at.
-fn get<'a, T>(handle: *const T) -> Result<&'a T, String> {
+pub(crate) fn get<'a, T>(handle: *const T) -> Result<&'a T, String> {
     // SAFETY: handles come from `boxed` and live until their release call (the header's contract).
     unsafe { handle.as_ref() }.ok_or_else(|| "null handle".to_string())
 }
@@ -96,7 +96,7 @@ fn copy_out(text: &str, out: *mut c_char, size: usize) -> usize {
     text.len()
 }
 
-fn raw<T: TryFrom<u32>>(value: u64, what: &str) -> Result<T, String>
+pub(crate) fn raw<T: TryFrom<u32>>(value: u64, what: &str) -> Result<T, String>
 where
     T::Error: std::fmt::Debug,
 {
@@ -110,7 +110,7 @@ where
 /// in the process (kits/SwitchRefusal: an error line, kept in release). The kind is the error's variant and first field
 /// (`NotImplemented(Format`, `Unsupported(Unsupported { feature: FramebufferFetch`) without digits, so a value that varies
 /// per call makes no line of its own.
-fn e<E: std::fmt::Debug>(what: &'static str) -> impl FnOnce(E) -> String {
+pub(crate) fn e<E: std::fmt::Debug>(what: &'static str) -> impl FnOnce(E) -> String {
     move |error| {
         let text = format!("{what}: {error:?}");
         let kind: String = text[what.len() + 2..]
@@ -172,6 +172,10 @@ pub unsafe extern "C" fn nmb_function_constant_air(length: *mut usize) -> *const
 pub struct NmbDevice(Device, std::sync::OnceLock<PrivateProperties>, std::sync::Mutex<()>);
 
 impl NmbDevice {
+    pub(crate) fn device(&self) -> &Device {
+        &self.0
+    }
+
     /// The runtime judges the private properties by the family rows once.
     fn private(&self) -> &PrivateProperties {
         self.1.get_or_init(|| self.0.private_properties())
@@ -1873,7 +1877,9 @@ fn stage_linked(
     Ok(linked)
 }
 
-fn render_descriptor(descriptor: *const NmbRenderPipelineDescriptor) -> Result<RenderPipelineDescriptor, String> {
+pub(crate) fn render_descriptor(
+    descriptor: *const NmbRenderPipelineDescriptor,
+) -> Result<RenderPipelineDescriptor, String> {
     let d = get(descriptor)?;
     let vertex_linked = stage_linked(
         d.vertex_linked,
