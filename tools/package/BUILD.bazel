@@ -137,6 +137,7 @@ py_test(
     name = "native_profile_test",
     srcs = ["native_profile_test.py"],
     data = [
+        "//boot:loader/copy.h",
         "//ipsw:pins.bzl",
         "//kernel/switch:include/switch/boot_layout.h",
         "//kernel/switch:ram/ram.c",
