@@ -50,6 +50,10 @@ static void markWritten(RMCommandBuffer *cb)
             if (compute)
                 markDirty(c.obj);
             break;
+        case OpKernelBuffer:
+        case OpKernelTexture:
+            markDirty(c.obj);
+            break;
         case OpInvocation: {  // compute and other recorded calls: every buffer and texture they name
             NSInvocation *inv = (__bridge NSInvocation *)c.obj;
             for (NSUInteger i = 2; i < inv.methodSignature.numberOfArguments; i++) {

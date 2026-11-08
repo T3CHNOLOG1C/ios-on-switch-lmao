@@ -306,7 +306,9 @@ static id<MTLRenderPipelineState> pipelineTwin(MTLRenderPipelineDescriptor *d, M
 
 - (id<MTLComputePipelineState>)newComputePipelineStateWithFunction:(id<MTLFunction>)f error:(NSError **)error
 {
-    return [self wrapCarried:[gRM->fallback newComputePipelineStateWithFunction:twinOf(f) error:error]];
+    MTLComputePipelineDescriptor *d = [MTLComputePipelineDescriptor new];
+    d.computeFunction = f;
+    return rmComputeState(self, [gRM->fallback newComputePipelineStateWithFunction:twinOf(f) error:error], f, d);
 }
 
 - (id<MTLComputePipelineState>)newComputePipelineStateWithFunction:(id<MTLFunction>)f
@@ -314,10 +316,10 @@ static id<MTLRenderPipelineState> pipelineTwin(MTLRenderPipelineDescriptor *d, M
                                                         reflection:(MTLAutoreleasedComputePipelineReflection *)r
                                                              error:(NSError **)error
 {
-    return [self wrapCarried:[gRM->fallback newComputePipelineStateWithFunction:twinOf(f)
-                                                                        options:o
-                                                                     reflection:r
-                                                                          error:error]];
+    MTLComputePipelineDescriptor *d = [MTLComputePipelineDescriptor new];
+    d.computeFunction = f;
+    return rmComputeState(
+        self, [gRM->fallback newComputePipelineStateWithFunction:twinOf(f) options:o reflection:r error:error], f, d);
 }
 
 - (id<MTLComputePipelineState>)newComputePipelineStateWithDescriptor:(MTLComputePipelineDescriptor *)d
@@ -327,10 +329,9 @@ static id<MTLRenderPipelineState> pipelineTwin(MTLRenderPipelineDescriptor *d, M
 {
     MTLComputePipelineDescriptor *t = [d copy];
     t.computeFunction = twinOf(d.computeFunction);
-    return [self wrapCarried:[gRM->fallback newComputePipelineStateWithDescriptor:t
-                                                                          options:o
-                                                                       reflection:r
-                                                                            error:error]];
+    return rmComputeState(self,
+                          [gRM->fallback newComputePipelineStateWithDescriptor:t options:o reflection:r error:error],
+                          d.computeFunction, d);
 }
 
 - (id<MTLRenderPipelineState>)newRenderPipelineStateWithTileDescriptor:(MTLTileRenderPipelineDescriptor *)d

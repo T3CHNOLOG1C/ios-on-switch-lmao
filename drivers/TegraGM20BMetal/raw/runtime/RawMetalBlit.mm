@@ -398,12 +398,3 @@ static bool sameSizeLevels(id<MTLTexture> s, id<MTLTexture> d, NSUInteger &sl, N
 }
 
 @end
-
-@implementation RMComputeEncoder  // everything recorded as invocations (the command buffer is m2v's): see RMEncoder
-
-+ (Class)twinClass
-{
-    return NSClassFromString(@"NBComputeEncoder");
-}
-
-@end

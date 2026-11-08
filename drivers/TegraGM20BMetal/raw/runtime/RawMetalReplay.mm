@@ -138,6 +138,10 @@ id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool pa
     MirrorWrites toMirrors;    // later levels of mipmapped textures the open encoder writes (mipWritten)
     for (size_t at = from; at < to; at++) {
         const Cmd &c = cb->_tape[at];
+        if (isKernelCommand(c.op)) {
+            replayKernel(enc, cb, c, buffers);
+            continue;
+        }
         switch (c.op) {
         case OpRender: {
             MTLRenderPassDescriptor *pass = (__bridge MTLRenderPassDescriptor *)c.obj, *twin = twinPass(pass);
@@ -421,6 +425,8 @@ id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool pa
             break;
         case OpVisibility:
             [enc setVisibilityResultMode:MTLVisibilityResultMode(c.a) offset:c.c];
+            break;
+        default:  // a compute encoder's: replayKernel, above
             break;
         }
     }

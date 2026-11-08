@@ -18,6 +18,9 @@
 #include "bridge/NativeMetalObjects.h"
 #include "../runtime/raw_compute.h"
 #include "../runtime/raw_compute_key.h"
+#ifdef RAW_FACADE  // computefacade: the nvk mode's dispatch through the raw path's Metal facade (runtime/RawMetal.mm)
+#include "../runtime/RawMetal.h"
+#endif
 
 extern "C" void pushcount_report(const char *what);
 
@@ -87,6 +90,15 @@ int runNvk(char **argv)
         fprintf(stderr, "NO DEVICE %s\n", nmb_last_error());
         return 1;
     }
+#ifdef RAW_FACADE
+    // the raw facade over the m2v device, as the render server opens it, with the pack FRAME_PACK names
+    NSString *why = nil;
+    dev = raw_metal_device_open(getenv("FRAME_PACK"), 0, dev, &why);
+    if (!dev) {
+        fprintf(stderr, "NO FACADE %s\n", why.UTF8String);
+        return 1;
+    }
+#endif
     NSError *e = nil;
     id<MTLLibrary> lib = [dev newLibraryWithURL:[NSURL fileURLWithPath:@(argv[4])] error:&e];
     id<MTLFunction> f = [lib newFunctionWithName:@(argv[5])];
@@ -133,6 +145,11 @@ int runNvk(char **argv)
     [cb commit];
     [cb waitUntilCompleted];
     pushcount_report("computeframe nvk");
+#ifdef RAW_FACADE
+    char rates[2048];
+    raw_metal_rates(rates, sizeof rates);
+    fprintf(stderr, "facade rates: %s\n", rates);
+#endif
     return cb.status == MTLCommandBufferStatusCompleted ? 0 : 1;
 }
 
@@ -298,7 +315,7 @@ int runRaw(char **argv)
 int main(int argc, char **argv)
 {
     @autoreleasepool {
-        if (argc >= 8 && !strcmp(argv[1], "nvk"))
+        if (argc >= 8 && (!strcmp(argv[1], "nvk") || !strcmp(argv[1], "facade")))
             return runNvk(argv);
         if (argc >= 7 && (!strcmp(argv[1], "raw") || !strcmp(argv[1], "pack")))
             return runRaw(argv);

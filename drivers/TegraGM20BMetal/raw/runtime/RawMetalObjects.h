@@ -5,6 +5,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <mutex>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -197,6 +198,17 @@ enum Op : uint8_t {
     OpWaitEvent,
     OpDrawIndexed,
     OpVisibility,
+    // a compute encoder's (RawMetalCompute.mm)
+    OpKernelState,
+    OpKernelBytes,
+    OpKernelBuffer,
+    OpKernelBufferOffset,
+    OpKernelTexture,
+    OpKernelSampler,
+    OpKernelMemory,
+    OpKernelUse,
+    OpKernelBarrier,
+    OpDispatch,
 };
 
 // one record: `stage` 1 vertex, 2 fragment; `obj` unretained (the command buffer keeps it); `x` into the extras
@@ -322,8 +334,19 @@ static inline void hit(RMCommandBuffer *cb, RMPred p, uint64_t a = 0, uint64_t b
 @end
 @interface RMBlitEncoder : RMEncoder
 @end
-@interface RMComputeEncoder : RMEncoder
+@interface RMComputeEncoder : RMEncoder {
+@public
+    MTLDispatchType _type;
+}
 @end
+
+// RawMetalCompute.mm: a compute state over m2v's (`twin`), with what the raw pack keys its kernels by
+id rmComputeState(id device, id twin, id<MTLFunction> function, MTLComputePipelineDescriptor *descriptor);
+// m2v's replay and the raw encode of a compute encoder's commands (the Op*Kernel* ones and OpDispatch): false from the raw
+// encode where it refuses one (*why)
+bool isKernelCommand(Op op);
+void replayKernel(id encoder, RMCommandBuffer *cb, const Cmd &c, std::set<RMBuffer *> &buffers);
+bool encodeKernel(raw::ComputeEncoder &e, raw::CommandBuffer &rc, RMCommandBuffer *cb, const Cmd &c, const char **why);
 
 static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger index, id object, uint64_t c)
 {

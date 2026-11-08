@@ -54,14 +54,23 @@ public:
         state_ = k;
     }
 
+    // MTLDispatchTypeSerial: each dispatch after the encoder's first waits for the one before, its writes visible
+    void setSerial(bool serial)
+    {
+        serial_ = serial;
+    }
+
     void setBytes(uint32_t slot, const void *bytes, uint32_t length);
     void setBuffer(uint32_t slot, const Buffer *buffer, uint64_t offset);
+    void setBufferOffset(uint32_t slot, uint64_t offset);
     void setTexture(uint32_t slot, const Texture *t);
     void setSampler(uint32_t slot, const Sampler *s);
 
     // dispatchThreadgroups: `groups` threadgroups of `threads` threads, the shape the kernel's record was made at. False:
     // refused (*why), nothing encoded
     bool dispatch(const uint32_t groups[3], const uint32_t threads[3], const char **why);
+    // memoryBarrier...: the dispatches before have written, and their writes are visible to the ones after
+    void barrier();
     void end();
 
 private:
@@ -80,6 +89,7 @@ private:
     Bound bufs_[31];
     const Texture *textures_[31] = {};
     const Sampler *samplers_[16] = {};
+    bool serial_ = false, dispatched_ = false;
     void room(uint32_t words);
 };
 

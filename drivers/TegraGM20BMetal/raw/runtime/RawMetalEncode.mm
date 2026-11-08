@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalInternal.h"
+#include <optional>
+#include "raw_compute.h"
 
 // The copy engine's copies of those rows: one copy of every row where they lie a pitch apart, else one per row
 static void copyRows(raw::BlitEncoder *be, uint64_t bufferVa, const BufferRows &r, uint64_t offset,
@@ -48,6 +50,7 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
     }
     raw::RenderEncoder *re = nullptr;
     raw::BlitEncoder *be = nullptr;
+    std::optional<raw::ComputeEncoder> ce;
 
     // mipmapped textures' states this encode changes (raw::Texture::Chain, RMTexture's _mipL0/_mipLevels): put back when it is
     // abandoned (its work never runs; the command buffer or segment goes to m2v, whose replay keeps them from what ran)
@@ -368,7 +371,16 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
     };
     for (size_t at = from; at < to; at++) {
         const Cmd &c = cb->_tape[at];
+        if (isKernelCommand(c.op)) {
+            if (!encodeKernel(*ce, *rc, cb, c, why))
+                return refused();
+            continue;
+        }
         switch (c.op) {
+        case OpCompute:
+            ce.emplace(*rc, d);
+            ce->setSerial(c.a == MTLDispatchTypeSerial);
+            break;
         case OpRender: {
             MTLRenderPassDescriptor *pass = (__bridge MTLRenderPassDescriptor *)c.obj;
             if (cb->_sampledShadows)
@@ -512,6 +524,10 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
                 re->end();
             if (be)
                 be->end();
+            if (ce) {
+                ce->end();
+                ce.reset();
+            }
             if (re && !afterPass.empty()) {
                 raw::BlitEncoder *x = rc->blit();
                 for (const LevelCopy &l : afterPass)
@@ -702,6 +718,8 @@ bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
         re->end();
     if (be)
         be->end();
+    if (ce)
+        ce->end();
     for (RMTexture *t : standInStores)
         if (standInPass(t, true))
             return false;

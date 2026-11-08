@@ -16,6 +16,8 @@ enum : uint32_t {
     INVALIDATE_SKED_CACHES = 0x0298,
     SEND_PCAS_A = 0x02b4,
     SEND_SIGNALING_PCAS_B = 0x02bc,
+    INVALIDATE_SHADER_CACHES = 0x021c,
+    INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI = 0x1288,
     INVALIDATE_SHADER_CACHES_NO_WFI_3D = 0x0da4,
     INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI_3D = 0x1338,
     INVALIDATE_SAMPLER_CACHE_NO_WFI = 0x1424,
@@ -23,7 +25,7 @@ enum : uint32_t {
 
 constexpr uint32_t kRootBytes = 0x800, kRootSets = 0x38, kRootPush = 0x700, kUploadChunk = 0x100;
 constexpr uint32_t kPcasInvalidateSchedule = 3;
-constexpr uint32_t kInvalidateData = 1u << 4, kInvalidateConstant = 1u << 12;
+constexpr uint32_t kInvalidateData = 1u << 4, kFlushData = 1u << 2, kInvalidateConstant = 1u << 12;
 constexpr uint32_t kEncoderWords = 1 << 12;
 
 // QMDV01_07 (cla1c0qmd.h) words
@@ -151,6 +153,19 @@ void ComputeEncoder::setBuffer(uint32_t slot, const Buffer *b, uint64_t offset)
                    b, offset};
 }
 
+void ComputeEncoder::setBufferOffset(uint32_t slot, uint64_t offset)
+{
+    if (slot < 31 && bufs_[slot].buffer)
+        setBuffer(slot, bufs_[slot].buffer, offset);
+}
+
+void ComputeEncoder::barrier()
+{
+    room(8);
+    p_.m(INVALIDATE_SHADER_CACHES, kInvalidateData | kFlushData, SUBC_COMPUTE);
+    p_.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0, SUBC_COMPUTE);
+}
+
 void ComputeEncoder::setTexture(uint32_t slot, const Texture *t)
 {
     if (slot < 31)
@@ -258,6 +273,9 @@ bool ComputeEncoder::dispatch(const uint32_t groups[3], const uint32_t threads[3
         qmd[qmdCbufLo(i) + 1] = (qmd[qmdCbufLo(i) + 1] & ~0xffu) | uint32_t(va >> 32);
     }
     dev_.stats.uploadBytes += setBytes + kRootBytes + kQmdWords * 4;
+    if (serial_ && dispatched_)
+        barrier();
+    dispatched_ = true;
     room(8);
     p_.m(SEND_PCAS_A, uint32_t(qmdVa >> 8), SUBC_COMPUTE);
     p_.m(SEND_SIGNALING_PCAS_B, kPcasInvalidateSchedule, SUBC_COMPUTE);
