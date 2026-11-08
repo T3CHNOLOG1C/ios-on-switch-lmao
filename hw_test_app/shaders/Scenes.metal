@@ -31,6 +31,13 @@ fragment DualSource dual_fragment(constant float4 *colors [[buffer(0)]])
     return DualSource{colors[0], colors[1]};
 }
 
+/// gpu.xr_blend: row y's S in red, green and blue and its source1 alpha (XRBlendScene.row), colour alpha one
+fragment DualSource xr_blend_fragment(float4 position [[position]], constant float4 *rows [[buffer(0)]])
+{
+    const float4 row = rows[uint(position.y)];
+    return DualSource{float4(row.rgb, 1), float4(0, 0, 0, row.a)};
+}
+
 struct TexturedVertex {
     float4 position [[position]];
     float2 uv;
@@ -89,6 +96,16 @@ kernel void sm53_probe(device const half *a [[buffer(0)]], device const half *b 
     out[5 * id + 2] = float(x) + float(y);
     out[5 * id + 3] = float(x) * float(y);
     out[5 * id + 4] = fma(float(x), float(y), float(z));
+}
+
+/// gpu.sm53_probe: an f32 narrowed to half and its round trip through half, which NAK_DEBUG=sm53_probe emits as one
+/// HADD2 each, reading the f32 through HADD2's F32 swizzle
+kernel void sm53_f32_source(device const float *x [[buffer(0)]], device half *narrowed [[buffer(1)]],
+                            device float *roundTrip [[buffer(2)]], uint id [[thread_position_in_grid]])
+{
+    const half h = half(x[id]);
+    narrowed[id] = h;
+    roundTrip[id] = float(h);
 }
 
 /// gpu.sm53_probe: the half of bits row * 256 + column (a NaN at the last pixel) written as computed, which a blend
