@@ -49,6 +49,25 @@ class SplitTest(unittest.TestCase):
         self.assertEqual(sum(text.count(DISPATCH) for text in self.split(corpus)), 1)
 
 
+RB = ' lib=/System/Library/PrivateFrameworks/RenderBox.framework/default.metallib'
+ICONS = ' lib=/System/Library/PrivateFrameworks/IconRendering.framework/default.metallib'
+LINKED = (
+    'R ok=1 label=custom_effect:clampToEdges_v1 samples=1 topo=0 ds=260/260 c0=550:15:1:1:5:0:1:5:0'
+    f' | v custom_effect_vertex{RB}  | f custom_effect_fragment{RB} #0:36:6504'
+    f' | fp clampToEdges_v1{ICONS} as=custom_fn #1:33:00000000 | '
+)
+
+
+class StateKeyTest(unittest.TestCase):
+    def test_a_linked_function_is_keyed_without_its_library(self):
+        # RawMetalLibrary.mm raw_metal_pipeline_key: the stages, the linked functions, then the stages' framework
+        self.assertEqual(
+            rawpack.state_key(LINKED),
+            'samples=1 topo=0 ds=260/260 c0=550:15:1:1:5:0:1:5:0  | v custom_effect_vertex  | f custom_effect_fragment'
+            ' #0:36:6504 | fp clampToEdges_v1 as=custom_fn #1:33:00000000 | l RenderBox',
+        )
+
+
 class ProbeLogTest(unittest.TestCase):
     def test_an_empty_submission_is_no_probes(self):
         with tempfile.TemporaryDirectory() as scratch:

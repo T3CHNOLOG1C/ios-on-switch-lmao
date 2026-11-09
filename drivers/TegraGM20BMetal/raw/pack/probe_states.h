@@ -59,13 +59,58 @@ inline id<MTLFunction> function(id<MTLLibrary> qc, const std::vector<std::string
                              error:&e];
 }
 
+inline id<MTLLibrary> frameworkLibrary(id<MTLDevice> dev, const std::string &path);
+
+// One linked function of an R line ("<vl|vp|fl|fp> <function> [from=<library>] [as=<specialized name>] <constants>", the
+// frontend's linkedText; corpusLines renames its lib= from=) added to its stage's list, made from the library from= names (`own`
+// without one) under its specialized name; its key part is the segment without from=, as the raw path keys it
+// (RawMetalLibrary.mm linkedKey)
+inline bool linkedFunction(MTLRenderPipelineDescriptor *d, id<MTLLibrary> own, const std::string &segment,
+                           std::string &key)
+{
+    const std::vector<std::string> tokens = split(segment);
+    if (tokens.size() < 2)
+        return false;
+    MTLFunctionDescriptor *fd = [MTLFunctionDescriptor functionDescriptor];
+    fd.name = @(tokens[1].c_str());
+    id<MTLLibrary> library = own;
+    std::vector<std::string> values;
+    std::string kept = tokens[0] + " " + tokens[1], text;
+    for (size_t i = 2; i < tokens.size(); i++) {
+        if (tokens[i].rfind("from=", 0) == 0)
+            library = frameworkLibrary(own.device, tokens[i].substr(5));
+        else if (tokens[i].rfind("as=", 0) == 0) {
+            fd.specializedName = @(tokens[i].c_str() + 3);
+            kept += " " + tokens[i];
+        } else {
+            values.push_back(tokens[i]);
+            text += (text.empty() ? "" : " ") + tokens[i];
+        }
+    }
+    kept += " " + text;
+    if (!values.empty())
+        fd.constantValues = constants(values);
+    NSError *e = nil;
+    id<MTLFunction> f = [library newFunctionWithDescriptor:fd error:&e];
+    if (!f)
+        return false;
+    MTLLinkedFunctions *l = tokens[0][0] == 'v' ? d.vertexLinkedFunctions : d.fragmentLinkedFunctions;
+    if (tokens[0][1] == 'l')
+        l.functions = [(l.functions ?: @[]) arrayByAddingObject:f];
+    else
+        l.privateFunctions = [(l.privateFunctions ?: @[]) arrayByAddingObject:f];
+    key += " | " + kept;
+    return true;
+}
+
 struct State {
     std::string key, label;
     MTLRenderPipelineDescriptor *d;
     unsigned vertexBuffer = 99, vertexStride = 0;
 };
 
-// precompile.mm's R-line parser (the frontend's journal format), key = every descriptor field but the label.
+// precompile.mm's R-line parser (the frontend's journal format), key = every descriptor field but the label, then the linked
+// functions after the stages.
 inline bool parseState(id<MTLLibrary> qc, const std::string &line, State &s)
 {
     size_t bar1 = line.find(" | v "), bar2 = line.find(" | f "), bar3 = line.find(" | ", bar2 + 5);
@@ -134,6 +179,15 @@ inline bool parseState(id<MTLLibrary> qc, const std::string &line, State &s)
     if (!d.vertexFunction || (!d.fragmentFunction && !f.empty() && f[0] != "-"))
         return false;
     s.key = key + line.substr(bar1, (bar3 == std::string::npos ? line.size() : bar3) - bar1);
+    for (size_t at = bar3; at != std::string::npos && at + 3 < line.size();) {
+        const size_t next = line.find(" | ", at + 3);
+        const std::string segment = line.substr(at + 3, (next == std::string::npos ? line.size() : next) - at - 3);
+        const std::string tag = segment.substr(0, 3);
+        const bool linked = tag == "vl " || tag == "vp " || tag == "fl " || tag == "fp ";
+        if (linked && !linkedFunction(d, qc, segment, s.key))
+            return false;
+        at = next;
+    }
     s.d = d;
     return true;
 }
@@ -176,7 +230,7 @@ inline id<MTLLibrary> frameworkLibrary(id<MTLDevice> dev, const std::string &pat
 
 // The states a corpus names, in probe order: Core Animation's R lines (PROBE_LABEL, default com.apple.coreanimation.: only lines
 // whose label starts with it; "" for every line) with their lib= fields dropped, and another framework's lines marked "@L <its
-// library path> "; with `own`, the raw path's own states after them, marked "@O ": the conversions of YCbCr textures
+// library path> " (the library of a function such a line links kept as from=); with `own`, the raw path's own states after them, marked "@O ": the conversions of YCbCr textures
 // (pack/ycbcr.metal) and the extended-range stand-ins (pack/xr.metal), and the moves between an RGB8_444_2P target's planes and its
 // RGBA16Float stand-in (TwoPlaneStandIn.metal)
 inline std::vector<std::string> corpusLines(NSString *text, bool own)
@@ -184,14 +238,21 @@ inline std::vector<std::string> corpusLines(NSString *text, bool own)
     std::vector<std::string> lines;
     const char *labelPrefix = getenv("PROBE_LABEL") ? getenv("PROBE_LABEL") : "com.apple.coreanimation.";
     NSRegularExpression *lib = [NSRegularExpression regularExpressionWithPattern:@" lib=\\S+" options:0 error:nil];
+    NSRegularExpression *linkedLib = [NSRegularExpression regularExpressionWithPattern:@"( \\| [vf][lp] \\S+) lib="
+                                                                               options:0
+                                                                                 error:nil];
     for (NSString *l in [text componentsSeparatedByString:@"\n"]) {
         if (![l hasPrefix:@"R "] || ![l containsString:@" ok=1 "])
             continue;
         if (const std::string path = libraryPath(l.UTF8String); !path.empty()) {
+            NSString *kept = [linkedLib stringByReplacingMatchesInString:l
+                                                                 options:0
+                                                                   range:NSMakeRange(0, l.length)
+                                                            withTemplate:@"$1 from="];
             lines.push_back("@L " + path + " " +
-                            [lib stringByReplacingMatchesInString:l
+                            [lib stringByReplacingMatchesInString:kept
                                                           options:0
-                                                            range:NSMakeRange(0, l.length)
+                                                            range:NSMakeRange(0, kept.length)
                                                      withTemplate:@""]
                                 .UTF8String);
             continue;

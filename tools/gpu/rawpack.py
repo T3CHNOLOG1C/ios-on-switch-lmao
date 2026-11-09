@@ -37,6 +37,8 @@ from pathlib import Path
 
 PROBE_LABEL = ' label=com.apple.coreanimation.'
 LIBRARY = re.compile(r' lib=\S+')
+# A function a state links (" | <vl|vp|fl|fp> <function> lib=<library> ..."), which any library may hold
+LINKED_LIBRARY = re.compile(r'( \| [vf][lp] \S+) lib=\S+')
 # What the link reads of a bucket's probe runs (mkpack.py), and of its barrier/.
 KEPT = (
     'programs.bin',
@@ -57,8 +59,8 @@ FRAMEWORKS = ('RenderBox',)
 
 
 def framework_line(line: str) -> bool:
-    """Whether the line's functions are all one pack framework's default.metallib."""
-    libs = set(LIBRARY.findall(line))
+    """Whether the line's stages are both one pack framework's default.metallib (what they link may be another's)."""
+    libs = set(LIBRARY.findall(LINKED_LIBRARY.sub(r'\1', line)))
     return len(libs) == 1 and any(
         lib == f' lib=/System/Library/PrivateFrameworks/{name}.framework/default.metallib'
         for lib in libs
