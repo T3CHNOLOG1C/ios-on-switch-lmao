@@ -50,21 +50,25 @@ jobs:
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
       # Once per IPSW kind: the image inputs differ (kernel, loader, overlay, GPU trust), the rest is the same build.
+      # xnu-12377 has DEVELOPMENT records only (kernel/xnu-12377.121.6/config/selected.bzl), so iOS 27's inputs are the
+      # debug profile's: a DEVELOPMENT kernel, built to the release's failure rules.
       - run: bazel build --config=release --config=ios17 //:boot //:gpu //release:assets
-      - run: bazel build --config=release --config=ios27 //:boot //:gpu //release:assets
+      - run: bazel build --config=debug --nokeep_going --verbose_failures --config=ios27 //:boot //:gpu //release:assets
       - name: Name the assets for the release
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           dist="$RUNNER_TEMP/dist"
           mkdir "$dist"
-          for kind in ios17:21H461 ios27:24B119; do
-            config="${kind%%:*}" build="${kind##*:}"
-            files="$(bazel cquery --config=release --config="$config" --output=files //release:assets)"
+          for kind in release:ios17:21H461 debug:ios27:24B119; do
+            profile="${kind%%:*}" build="${kind##*:}" config="${kind#*:}" config="${config%:*}"
+            files="$(bazel cquery --config="$profile" --config="$config" --output=files //release:assets)"
             for f in $files; do
               name="$(basename "$f")"
               case "$name" in
                 image-inputs.tar) name="image-inputs-$build.tar" ;;
+                # The host tools and the SD card are the release profile's, once.
+                *) [ "$profile" = release ] || continue ;;
               esac
               cp "$f" "$dist/ios-on-switch-lmao-$VERSION-$name"
             done

@@ -38,7 +38,8 @@ On a Mac, `bazelisk run //:image -- --//install:prebuilt=release ...` then needs
 shader toolset, so the shader seed still has to come from an Apple silicon Mac.
 
 The release carries image inputs for both IPSW kinds (`image-inputs-21H461.tar`, `image-inputs-24B119.tar`);
-`@switch_release` selects by `--//ipsw:kind`, so `--config=ios27` works from the release too. iOS 27's kext
+`@switch_release` selects by `--//ipsw:kind`, so `--config=ios27` works from the release too. The iOS 27 kernel is
+the debug profile's DEVELOPMENT build: xnu-12377 has no RELEASE records yet (`kernel/xnu-12377.121.6/config/selected.bzl`). iOS 27's kext
 prelink then runs on the Mac with the release's translator, blacktop/ipsw for the Mac's CPU and `xcrun nm` /
 `c++filt` from whatever Xcode or Command Line Tools `xcode-select` names; the ptrauth string discriminators it
 needs are computed in Python (`translate/arm64e/xnu/prelink26/ptrauth_disc.py`, checked against clang by
