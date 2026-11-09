@@ -43,6 +43,9 @@ xcrun clang++ "${FLAGS[@]}" -I "$TREE/drivers/TegraGM20B" "$HERE/poolcheck.cpp" 
 # killcheck: a channel kill fails exactly the submissions its record names, and the next command buffer gets a new channel
 xcrun clang++ "${FLAGS[@]}" -I "$TREE/drivers/TegraGM20B" "$HERE/killcheck.cpp" "$RAW/runtime/raw_gpu.cpp" "$RAW/fx/fx_mip.cpp" "$RAW/fx/fx_image.cpp" \
     "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_alias.cpp" "$RAW/runtime/raw_pack.cpp" "$RAW/runtime/raw_ycbcr.cpp" "$RAW/runtime/raw_zeta.cpp" "$RAW/runtime/raw_comp.cpp" "${LIBS[@]}" -o "$OUT/killcheck"
+# xrcopycheck: copies between a 550 texture and a buffer move plane 0 alone, each texel's color word (Metal's blits)
+xcrun clang++ "${FLAGS[@]}" -I "$TREE/drivers/TegraGM20B" "$HERE/xrcopycheck.cpp" "$RAW/runtime/raw_gpu.cpp" "$RAW/fx/fx_mip.cpp" "$RAW/fx/fx_image.cpp" \
+    "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_alias.cpp" "$RAW/runtime/raw_pack.cpp" "$RAW/runtime/raw_ycbcr.cpp" "$RAW/runtime/raw_zeta.cpp" "$RAW/runtime/raw_comp.cpp" "${LIBS[@]}" -o "$OUT/xrcopycheck"
 # faultcheck: what the raw device hands the GPU stays valid (build it with -fsanitize=address too)
 xcrun clang++ "${FLAGS[@]}" -I "$TREE/drivers/TegraGM20B" "$HERE/faultcheck.cpp" "$RAW/runtime/raw_gpu.cpp" "$RAW/fx/fx_mip.cpp" "$RAW/fx/fx_image.cpp" \
     "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_alias.cpp" "$RAW/runtime/raw_pack.cpp" "$RAW/runtime/raw_ycbcr.cpp" "$RAW/runtime/raw_zeta.cpp" "$RAW/runtime/raw_comp.cpp" "${LIBS[@]}" -o "$OUT/faultcheck"
@@ -83,7 +86,7 @@ xcrun clang++ "${OBJC[@]}" -Wall -Wextra -x objective-c++ "$HERE/computeframe.mm
     -x c++ "$RAW/runtime/raw_compute.cpp" "$RAW/runtime/raw_gpu.cpp" "$RAW/fx/fx_mip.cpp" "$RAW/fx/fx_image.cpp" "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_alias.cpp" \
     "$RAW/runtime/raw_pack.cpp" "$RAW/runtime/raw_ycbcr.cpp" "$RAW/runtime/raw_zeta.cpp" "$RAW/runtime/raw_comp.cpp" -x none "$BRIDGE" "${LIBS[@]}" \
     -o "$OUT/computeframe" 2>&1 | grep -v "duplicate libraries" || true
-echo "built $OUT/nvkframe $OUT/rawframe $OUT/facadeframe $OUT/poolcheck $OUT/killcheck $OUT/faultcheck $OUT/footprint $OUT/heapcheck $OUT/datacheck $OUT/recordcheck $OUT/emitcheck $OUT/vertexcheck $OUT/cachecheck $OUT/completecheck $OUT/computeframe $OUT/probeloop"
+echo "built $OUT/nvkframe $OUT/rawframe $OUT/facadeframe $OUT/poolcheck $OUT/killcheck $OUT/xrcopycheck $OUT/faultcheck $OUT/footprint $OUT/heapcheck $OUT/datacheck $OUT/recordcheck $OUT/emitcheck $OUT/vertexcheck $OUT/cachecheck $OUT/completecheck $OUT/computeframe $OUT/probeloop"
 xcrun clang++ "${OBJC[@]}" -Wall -Wextra -x objective-c++ "$HERE/blitframe.mm" "${FACADE[@]}" "$FRONT/NativeBridgeMetalFrontend.mm" \
     -x c++ "$RAW/runtime/raw_gpu.cpp" "$RAW/fx/fx_mip.cpp" "$RAW/fx/fx_image.cpp" "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_alias.cpp" "$RAW/runtime/raw_pack.cpp" "$RAW/runtime/raw_ycbcr.cpp" "$RAW/runtime/raw_zeta.cpp" "$RAW/runtime/raw_comp.cpp" "$RAW/runtime/raw_completed.cpp" "$RAW/runtime/raw_compute.cpp" "${COMPLETION[@]}" "$TREE/kits/SwitchRefusal/SwitchRefusal.c" -x none "$BRIDGE" "${LIBS[@]}" \
     -o "$OUT/blitframe" 2>&1 | grep -v "duplicate libraries" || true

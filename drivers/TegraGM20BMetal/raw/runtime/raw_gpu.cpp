@@ -3590,20 +3590,24 @@ CopySide sideOf(const Texture &t, uint32_t x, uint32_t y, uint32_t z)
     return {t.va, t.pitch, x, y, t.pitch / t.bpp, t.height, true, t.blockHeight, t.depth, z, t.blockDepth};
 }
 
-// `w` x `h` texels of `bpp` bytes as nouveau_copy_rect moves them: a remap of min(bpp, 4)-byte components, so lengths, widths
-// and origins count texels; a block-linear side by its block size (one GOB wide, Fermi's 8-row GOBs), its width the row
-// stride in texels, a 3D image's plane by its depth and layer
-void copySides(Push &p, const CopySide &s, const CopySide &d, uint32_t w, uint32_t h, uint32_t bpp,
-               Device::Stats &stats)
+// SET_REMAP_COMPONENTS of a texel copy: DST_X..W = SRC_X..W, COMPONENT_SIZE, NUM_SRC_COMPONENTS, NUM_DST_COMPONENTS
+uint32_t texelRemap(uint32_t bpp)
 {
-    if (!w || !h || !bpp)
+    const uint32_t comp = std::min(bpp, 4u), n = bpp / comp;
+    return 0 | 1 << 4 | 2 << 8 | 3 << 12 | (comp - 1) << 16 | (n - 1) << 20 | (n - 1) << 24;
+}
+
+// `w` x `h` texels as nouveau_copy_rect moves them: a remap of components (`bytes` of each texel moved), so lengths, widths and
+// origins count texels; a block-linear side by its block size (one GOB wide, Fermi's 8-row GOBs), its width the row stride in
+// texels, a 3D image's plane by its depth and layer
+void copyRemapped(Push &p, const CopySide &s, const CopySide &d, uint32_t w, uint32_t h, uint32_t remap, uint32_t bytes,
+                  Device::Stats &stats)
+{
+    if (!w || !h || !bytes)
         return;
     stats.ceOps++;
-    stats.ceBytes += uint64_t(w) * bpp * h;
-    const uint32_t comp = std::min(bpp, 4u), n = bpp / comp;
-    // DST_X..W = SRC_X..W, COMPONENT_SIZE, NUM_SRC_COMPONENTS, NUM_DST_COMPONENTS
-    p.m(CE_SET_REMAP_COMPONENTS, 0 | 1 << 4 | 2 << 8 | 3 << 12 | (comp - 1) << 16 | (n - 1) << 20 | (n - 1) << 24,
-        SUBC_COPY);
+    stats.ceBytes += uint64_t(w) * bytes * h;
+    p.m(CE_SET_REMAP_COMPONENTS, remap, SUBC_COPY);
     p.inc(CE_OFFSET_IN_UPPER,
           {uint32_t(s.va >> 32), uint32_t(s.va), uint32_t(d.va >> 32), uint32_t(d.va), s.pitch, d.pitch, w, h},
           SUBC_COPY);
@@ -3624,6 +3628,13 @@ void copySides(Push &p, const CopySide &s, const CopySide &d, uint32_t w, uint32
     else
         launch |= kDstPitch;
     p.m(CE_LAUNCH_DMA, launch, SUBC_COPY);
+}
+
+// `w` x `h` texels of `bpp` bytes, each in min(bpp, 4)-byte components
+void copySides(Push &p, const CopySide &s, const CopySide &d, uint32_t w, uint32_t h, uint32_t bpp,
+               Device::Stats &stats)
+{
+    copyRemapped(p, s, d, w, h, texelRemap(bpp), bpp, stats);
 }
 
 // `lines` rows of `width` texels of `bpp` bytes, pitch to pitch
@@ -4132,7 +4143,14 @@ void BlitEncoder::copyBufferTexels(uint64_t va, uint32_t pitch, const Texture &t
 {
     room(32);
     const CopySide rows{va, pitch}, texels = sideOf(t, x, y, z);
-    copySides(p_, toTexture ? rows : texels, toTexture ? texels : rows, w, h, t.bpp, dev_->stats);
+    const CopySide &from = toTexture ? rows : texels, &to = toTexture ? texels : rows;
+    if (xrForm(t.format) == XrForm::Planes) {
+        // four-byte components: the texel's color word to the buffer's word, or into the texel with its alpha word NO_WRITE (6)
+        constexpr uint32_t kOut = 3u << 16 | 1u << 20, kIn = 6u << 4 | 3u << 16 | 1u << 24;
+        copyRemapped(p_, from, to, w, h, toTexture ? kIn : kOut, bufferTexelBytes(t.format, t.bpp), dev_->stats);
+        return;
+    }
+    copySides(p_, from, to, w, h, t.bpp, dev_->stats);
 }
 
 // The codes Metal reads of RGB8_444_2P (pack/../m2v ycbcr_convert.rs: "Codes"): red Cr, green Y, blue Cb, each code / 255, alpha

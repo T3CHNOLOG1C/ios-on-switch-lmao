@@ -277,7 +277,9 @@ id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool pa
                 const uint64_t rows = extra(cb, x + 4) * std::max<uint64_t>(extra(cb, x + 5), 1);
                 if ([(id)b isKindOfClass:[RMBuffer class]] && [(id)t isKindOfClass:[RMTexture class]] && t->_raw.bpp &&
                     rows)
-                    range(b, extra(cb, x), extra(cb, x + 1) * (rows - 1) + extra(cb, x + 3) * t->_raw.bpp);
+                    range(b, extra(cb, x),
+                          extra(cb, x + 1) * (rows - 1) +
+                              extra(cb, x + 3) * raw::bufferTexelBytes(t->_raw.format, t->_raw.bpp));
                 else
                     use(c.obj);
             }
@@ -300,7 +302,10 @@ id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool pa
                 const uint64_t rows = extra(cb, x + 5) * std::max<uint64_t>(extra(cb, x + 6), 1);
                 if ([(id)b isKindOfClass:[RMBuffer class]] && [(id)t isKindOfClass:[RMTexture class]] && t->_raw.bpp &&
                     rows)
-                    range(b, extra(cb, x + 7), extra(cb, x + 8) * (rows - 1) + extra(cb, x + 4) * t->_raw.bpp, true);
+                    range(b, extra(cb, x + 7),
+                          extra(cb, x + 8) * (rows - 1) +
+                              extra(cb, x + 4) * raw::bufferTexelBytes(t->_raw.format, t->_raw.bpp),
+                          true);
                 else
                     use(c.obj2);
             }

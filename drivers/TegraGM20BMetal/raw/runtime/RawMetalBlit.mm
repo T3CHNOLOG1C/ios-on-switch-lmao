@@ -268,9 +268,10 @@ static bool sameSizeLevels(id<MTLTexture> s, id<MTLTexture> d, NSUInteger &sl, N
 {
     RMBuffer *a = (RMBuffer *)s;
     RMTexture *b = (RMTexture *)d;
-    const bool ok = [(id)a isKindOfClass:[RMBuffer class]] && [(id)b isKindOfClass:[RMTexture class]] &&
-                    copySideOk(b, ds, dl, dorg, size) && b->_raw.bpp &&
-                    bufferPlanes(so, row, image, size, b->_raw.bpp, a->_raw.length, true);
+    const bool ok =
+        [(id)a isKindOfClass:[RMBuffer class]] && [(id)b isKindOfClass:[RMTexture class]] &&
+        copySideOk(b, ds, dl, dorg, size) && b->_raw.bpp &&
+        bufferPlanes(so, row, image, size, raw::bufferTexelBytes(b->_raw.format, b->_raw.bpp), a->_raw.length, true);
     if (!ok) {
         [_cb takeReason:WhyTexture why:@"a buffer-to-texture copy the raw path does not do"];
         hit(_cb, PredBlitBufToTex, row, uint64_t(ds) | uint64_t(dl) << 8 | uint64_t(size.depth) << 16);
@@ -330,9 +331,10 @@ static bool sameSizeLevels(id<MTLTexture> s, id<MTLTexture> d, NSUInteger &sl, N
 {
     RMTexture *a = (RMTexture *)s;
     RMBuffer *b = (RMBuffer *)d;
-    const bool ok = [(id)a isKindOfClass:[RMTexture class]] && [(id)b isKindOfClass:[RMBuffer class]] &&
-                    copySideOk(a, ss, sl, so, size) && a->_raw.bpp &&
-                    bufferPlanes(dof, row, image, size, a->_raw.bpp, b->_raw.length, false);
+    const bool ok =
+        [(id)a isKindOfClass:[RMTexture class]] && [(id)b isKindOfClass:[RMBuffer class]] &&
+        copySideOk(a, ss, sl, so, size) && a->_raw.bpp &&
+        bufferPlanes(dof, row, image, size, raw::bufferTexelBytes(a->_raw.format, a->_raw.bpp), b->_raw.length, false);
     if (!ok) {
         [_cb takeReason:WhyTexture why:@"a texture-to-buffer copy the raw path does not do"];
         hit(_cb, PredBlitTexToBuf, row, uint64_t(ss) | uint64_t(sl) << 8 | uint64_t(size.depth) << 16);
