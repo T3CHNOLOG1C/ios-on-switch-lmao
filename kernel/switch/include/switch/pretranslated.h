@@ -17,6 +17,7 @@
 struct fileglob;
 struct nameidata;
 struct vnode;
+struct vnode_attr;
 
 __BEGIN_DECLS
 
@@ -36,11 +37,21 @@ struct vnode *switch_pretranslated_translation(struct vnode *vp, int64_t slice_o
                                                uint32_t signature_size);
 int switch_pretranslated_refuse(enum switch_pt_op op, struct vnode *v0, struct vnode *v1, struct vnode *v2,
                                 struct vnode *v3, uint32_t intent);
+void switch_pretranslated_identity(struct vnode *vp, struct vnode_attr *va);
 
 static inline void switch_pretranslated_lookup(struct nameidata *ndp)
 {
     if (__improbable(__atomic_load_n(&switch_pretranslated_on, __ATOMIC_RELAXED))) {
         switch_pretranslated_redirect(ndp);
+    }
+}
+
+/* stat and getattrlist: a Data copy reports the System file it stands in for (volume, file id), as a sealed System
+ * volume's file would. */
+static inline void switch_pretranslated_getattr(struct vnode *vp, struct vnode_attr *va)
+{
+    if (__improbable(__atomic_load_n(&switch_pretranslated_on, __ATOMIC_RELAXED))) {
+        switch_pretranslated_identity(vp, va);
     }
 }
 
@@ -77,6 +88,11 @@ static inline bool switch_pretranslated_authentic(struct vnode *vp)
 {
     (void)vp;
     return false;
+}
+
+static inline void switch_pretranslated_getattr(struct vnode *vp, struct vnode_attr *va)
+{
+    (void)vp, (void)va;
 }
 
 static inline int switch_pretranslated_check(enum switch_pt_op op, struct vnode *v0, struct vnode *v1, struct vnode *v2,

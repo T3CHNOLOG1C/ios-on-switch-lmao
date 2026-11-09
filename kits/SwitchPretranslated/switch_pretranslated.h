@@ -367,6 +367,16 @@ static inline int64_t switch_pt_system_file(const struct switch_pt_tables *table
     return -1;
 }
 
+/* The id of the System file a listed Data file stands in for, or 0 (the tree's directories, its index, anything else). */
+static inline uint64_t switch_pt_system_id(const struct switch_pt_tables *tables, uint64_t data_id)
+{
+    uint32_t file;
+    if (!switch_pt_map_get(&tables->data, data_id, &file) || file >= SWITCH_PT_PROTECTED) {
+        return 0;
+    }
+    return switch_pt_file_at(&tables->index, file).system_id;
+}
+
 enum switch_pt_op {
     SWITCH_PT_OPEN,
     SWITCH_PT_TRUNCATE,
