@@ -97,6 +97,9 @@ BUILT = ('probe', 'probecompute', 'libmock_iokit.dylib', 'own.metallib')
 FRAMEWORK = re.compile(r' lib=/System/Library/(?:Private)?Frameworks/\w+\.framework/default\.metallib ')
 QC_PATH = 'System/Library/Frameworks/QuartzCore.framework/default.metallib'
 LIBRARY = re.compile(r' lib=(\S+)')
+# A function a state links (" | <vl|vp|fl|fp> <function> lib=<library> ..."): its library is not the state's
+LINKED_LIBRARY = re.compile(r'( \| [vf][lp] \S+) lib=\S+')
+LINKED = ('vl ', 'vp ', 'fl ', 'fp ')
 
 
 def library_root(qc: Path) -> str:
@@ -313,10 +316,11 @@ def split_buckets(corpus: Path, work: Path, count: int) -> list[Path]:
 def state_key(line: str) -> str:
     """Give an R line's state key as probe.mm prints it: every descriptor field but the label, then its functions.
 
-    No lib= field is in it; a line whose first library is another framework's default.metallib than QuartzCore's ends
-    with " | l <framework>" (probe.mm libraryPath, frameworkName).
+    No lib= field is in it; the functions the state links follow its stages (probe_states.h linkedFunction); a line
+    whose first library is another framework's default.metallib than QuartzCore's ends with " | l <framework>"
+    (probe.mm libraryPath, frameworkName).
     """
-    libs = LIBRARY.findall(line)
+    libs = LIBRARY.findall(LINKED_LIBRARY.sub(r'\1', line))
     framework = ''
     if libs and libs[0].endswith('.framework/default.metallib') and '/QuartzCore.framework/' not in libs[0]:
         framework = libs[0].rsplit('.framework/', 1)[0].rsplit('/', 1)[-1]
@@ -331,6 +335,12 @@ def state_key(line: str) -> str:
         if h.startswith(('samples=', 'topo=', 'ds=')) or (len(h) > 1 and h[0] in 'ca' and h[1].isdigit())
     ]
     key = (' '.join(fields) + ' ' + line[bar1 : bar3 if bar3 >= 0 else len(line)]).strip()
+    for segment in line[bar3 + 3 :].split(' | ') if bar3 >= 0 else ():
+        if segment.startswith(LINKED):
+            tokens = segment.split()
+            named = [t for t in tokens[2:] if t.startswith('as=')]
+            values = [t for t in tokens[2:] if not t.startswith('as=')]
+            key += ' | ' + ' '.join(tokens[:2] + named) + ' ' + ' '.join(values)
     return f'{key} | l {framework}' if framework else key
 
 

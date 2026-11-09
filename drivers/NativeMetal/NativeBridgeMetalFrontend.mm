@@ -1490,7 +1490,9 @@ extern "C" id native_bridge_metal_texture_tiled_in_place(id buffer, id descripto
 @end
 @interface NBFunction : NBObject
 @property (nonatomic) NmbFunction *handle;
-@property (nonatomic, copy) NSString *name;
+@property (nonatomic, copy) NSString *name;  // Metal's: the specialized name it was made under, else libraryName
+@property (nonatomic, copy)
+    NSString *libraryName;  // the library function it was made from, its AIR's name (name unless set)
 @property (nonatomic) MTLFunctionType functionType;
 @property (nonatomic)
     std::string constantsText;           // name:type:hex of each constant value it was specialized with (the journal's)
@@ -1543,15 +1545,18 @@ static std::string libraryJournalId(const void *bytes, size_t length)
     return std::string("data:") + sha;
 }
 
-// A function as the journal's S, R and C lines name it: its name, lib=<its library>, then its constants; "spec" for one specialized
-// with no constant values (newFunctionWithName:constantValues:, which is not newFunctionWithName:).
+// A function as the journal's S, R and C lines name it: its library function, lib=<its library>, as=<the specialized name it was
+// made under>, then its constants; "spec" for one specialized with no constant values (newFunctionWithName:constantValues:, which is
+// not newFunctionWithName:).
 static std::string stageText(NBFunction *f)
 {
     if (!f)
         return "- ";
-    std::string text = f.name.UTF8String ?: "?";
+    std::string text = f.libraryName.UTF8String ?: "?";
     if (f.library && !f.library.journalId.empty())
         text += " lib=" + f.library.journalId;
+    if (![f.name isEqualToString:f.libraryName])
+        text += " as=" + std::string(f.name.UTF8String ?: "?");
     if (f.specialized && f.constantsText.empty())
         text += " spec";
     return text + " " + f.constantsText;
@@ -1607,6 +1612,11 @@ static NSArray *functionAttributes(const NmbFunction *f, bool stageInput)
 - (void)dealloc
 {
     nmb_function_release(_handle);
+}
+
+- (NSString *)libraryName
+{
+    return _libraryName ?: _name;
 }
 
 // MPS reads its kernels' constants (kMPSDeviceCaps, MPSMaxBatchSize, ...) here before specializing them.
@@ -1744,6 +1754,16 @@ static bool systemCompiler();
                         constantValues:(MTLFunctionConstantValues *)values
                                  error:(NSError **)error
 {
+    return [self newFunctionWithName:name specializedName:nil constantValues:values error:error];
+}
+
+// `specialized`: MTLFunctionDescriptor.specializedName, which Metal's function answers as its name and a pipeline links it by
+// (RenderBox makes each icon effect custom_fn so)
+- (id<MTLFunction>)newFunctionWithName:(NSString *)name
+                       specializedName:(NSString *)specialized
+                        constantValues:(MTLFunctionConstantValues *)values
+                                 error:(NSError **)error
+{
     // No values are no constants set (Core Image asks its stitched kernels so), where Core Image's kernels are compiled.
     if (!values && systemCompiler())
         values = [MTLFunctionConstantValues new];
@@ -1789,8 +1809,10 @@ static bool systemCompiler();
         }
     }
     const uint64_t functionBegan = nowUs();
-    NmbFunction *handle =
-        nmb_function_new_specialized(_handle, name.UTF8String, constants.data(), (uint32_t)constants.size());
+    if (!specialized.length)
+        specialized = nil;
+    NmbFunction *handle = nmb_function_new_specialized(_handle, name.UTF8String, specialized.UTF8String,
+                                                       constants.data(), (uint32_t)constants.size());
     gTimeFunction.add(functionBegan);
     // One S line per specialization (int-155: every QuartzCore pipeline was made on its draw, and a refused generic function would leave its
     // generic pipeline unmade without a word): the function, its constants, the time, the refusal and QuartzCore's callers.
@@ -1801,6 +1823,7 @@ static bool systemCompiler();
                  (unsigned long long)(nowUs() - functionBegan), handle ? 1 : 0);
         journal(head + (_journalId.empty() ? std::string() : "lib=" + _journalId + " ") +
                 "name=" + std::string(name.UTF8String ?: "?") + " k=" + text +
+                (specialized ? " as=" + std::string(specialized.UTF8String) : std::string()) +
                 (handle ? std::string() : " err=" + std::string(lastError().UTF8String ?: "?")) + " | " +
                 quartzCoreCallers());
     }
@@ -1812,7 +1835,8 @@ static bool systemCompiler();
     }
     NBFunction *function = [NBFunction new];
     function.handle = handle;
-    function.name = name;
+    function.name = specialized ?: name;
+    function.libraryName = name;
     function.functionType = (MTLFunctionType)nmb_function_type(handle);
     function.constantsText = text;
     function.specialized = true;
@@ -1836,8 +1860,8 @@ static bool systemCompiler();
     return MTLLibraryTypeExecutable;
 }
 
-// The descriptor's name and constants; its specialized name only labels Metal's function and its options ask for compile-time work the
-// runtime does when the function is made.
+// The descriptor's name, specialized name and constants; its options ask for compile-time work the runtime does when the function is
+// made.
 - (id<MTLFunction>)newFunctionWithDescriptor:(MTLFunctionDescriptor *)d error:(NSError **)error
 {
     if (!d.name) {
@@ -1845,8 +1869,11 @@ static bool systemCompiler();
             *error = nbError(@"a function name is required");
         return nil;
     }
-    if (d.constantValues)
-        return [self newFunctionWithName:d.name constantValues:d.constantValues error:error];
+    if (d.constantValues || d.specializedName.length)
+        return [self newFunctionWithName:d.name
+                         specializedName:d.specializedName
+                          constantValues:d.constantValues ?: [MTLFunctionConstantValues new]
+                                   error:error];
     id<MTLFunction> function = [self newFunctionWithName:d.name];
     if (!function) {
         if (error)
@@ -1972,7 +1999,7 @@ static NSData *functionBitcode(NBFunction *function)
     NBLibrary *library = function.library;
     const uint8_t *file = library.bytes;
     const size_t length = library.length;
-    const std::string wanted = function.name.UTF8String ?: "";
+    const std::string wanted = function.libraryName.UTF8String ?: "";
     if (!file || wanted.empty() || length < 88)
         return nil;
     uint64_t bitcodeAt, bitcodeSize;
@@ -2157,6 +2184,11 @@ static id<MTLRenderPipelineState> asyncRenderPipeline(id device, MTLRenderPipeli
     else
         nbasync::start(making);
     return (id<MTLRenderPipelineState>)state;
+}
+
+extern "C" NSString *native_bridge_metal_function_library_name(id function)
+{
+    return [function isKindOfClass:[NBFunction class]] ? ((NBFunction *)function).libraryName : nil;
 }
 
 extern "C" id native_bridge_metal_function_metallib(id function, const void **bytes, size_t *length)
@@ -4884,6 +4916,22 @@ struct NBCost {
     }
 };
 
+// A render descriptor's linked functions as its R line names them, after its stages: " | <vl|vp|fl|fp> <stage>" for each of the
+// vertex and fragment stages' functions and privateFunctions, in that order
+static std::string linkedText(MTLRenderPipelineDescriptor *d)
+{
+    std::string text;
+    const std::pair<const char *, NSArray *> lists[] = {{"vl", d.vertexLinkedFunctions.functions},
+                                                        {"vp", d.vertexLinkedFunctions.privateFunctions},
+                                                        {"fl", d.fragmentLinkedFunctions.functions},
+                                                        {"fp", d.fragmentLinkedFunctions.privateFunctions}};
+    for (const auto &[tag, functions] : lists)
+        for (id f in functions)
+            text += std::string(" | ") + tag + " " +
+                    stageText([f isKindOfClass:[NBFunction class]] ? (NBFunction *)f : nil);
+    return text;
+}
+
 // One journal line of a render pipeline creation begun at `began` (microseconds), `refused` its refusal or null. The label is the
 // caller's name for the pipeline (QuartzCore's: its spec's encoded name).
 static void journalRenderPipeline(MTLRenderPipelineDescriptor *d, MTLPipelineOption options, uint64_t began,
@@ -4932,6 +4980,7 @@ static void journalRenderPipeline(MTLRenderPipelineDescriptor *d, MTLPipelineOpt
     NBFunction *ff = [(id)d.fragmentFunction isKindOfClass:[NBFunction class]] ? (NBFunction *)d.fragmentFunction : nil;
     line += " | v " + stageText(vf);
     line += " | f " + stageText(ff);
+    line += linkedText(d);
     if (refused) {
         line += " | refused ";
         line += refused;

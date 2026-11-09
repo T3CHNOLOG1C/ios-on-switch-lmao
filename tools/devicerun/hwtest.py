@@ -49,6 +49,7 @@ TESTS: dict[str, bool] = {
             'gpu.ca.sweep',
             'gpu.sm53_probe',
             'gpu.xr_blend',
+            'gpu.draw.linked_function',
             'metal.device',
             'metal.compute',
             'metal.render.color',

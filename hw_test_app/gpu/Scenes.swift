@@ -11,5 +11,6 @@ public enum Scenes {
         ClearThenDrawScene(), InstancedDrawScene(), DepthBiasScene(), RenderThenSampleScene(), UnormBlendScene(),
         ExtendedBlendScene(), MipmapScene(), MSAAResolveScene(), MPSBlurScene(), CoreImageBlurScene(),
         HalfArithmeticScene(), SM53ProbeScene(), XRBlendScene(), TextureKindsScene(), LatencyScene(),
+        LinkedFunctionScene(),
     ]
 }

@@ -1384,7 +1384,8 @@ pub unsafe extern "C" fn nmb_texture_get_bytes(
 // ---- libraries and functions ----
 
 pub struct NmbLibrary(Library, Vec<String>);
-pub struct NmbFunction(Function);
+/// A function and the specialized name a pipeline links it under, where it was made with one.
+pub struct NmbFunction(Function, Option<String>);
 
 /// # Safety
 /// `bytes` holds `length` bytes.
@@ -1449,6 +1450,7 @@ pub unsafe extern "C" fn nmb_function_new(library: *mut NmbLibrary, name: *const
         let name = unsafe { CStr::from_ptr(name) }.to_str().map_err(e("function name"))?;
         Ok(boxed(NmbFunction(
             get(library)?.0.new_function_with_name(name).map_err(e("function"))?,
+            None,
         )))
     })
 }
@@ -1463,11 +1465,13 @@ pub struct NmbConstant {
 }
 
 /// # Safety
-/// `name` is a C string; `constants` holds `count` entries whose names are C strings (or null) and whose bytes hold `length` bytes.
+/// `name` is a C string, `specialized_name` one or null; `constants` holds `count` entries whose names are C strings (or null)
+/// and whose bytes hold `length` bytes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nmb_function_new_specialized(
     library: *mut NmbLibrary,
     name: *const c_char,
+    specialized_name: *const c_char,
     constants: *const NmbConstant,
     count: u32,
 ) -> *mut NmbFunction {
@@ -1504,7 +1508,16 @@ pub unsafe extern "C" fn nmb_function_new_specialized(
             .0
             .new_function_with_name_constant_values(name, &values)
             .map_err(e("specialized function"))?;
-        Ok(boxed(NmbFunction(function)))
+        let specialized = if specialized_name.is_null() {
+            None
+        } else {
+            // SAFETY: the caller's contract.
+            let s = unsafe { CStr::from_ptr(specialized_name) }
+                .to_str()
+                .map_err(e("specialized name"))?;
+            Some(s.to_string())
+        };
+        Ok(boxed(NmbFunction(function, specialized)))
     })
 }
 
@@ -1666,7 +1679,7 @@ pub struct NmbComputePipelineDescriptor {
     pub private_count: u64,
 }
 
-/// The functions of a counted handle array, each as a stage links it (`Function::linked_function`).
+/// The functions of a counted handle array, each as a stage links it (`Function::linked_function`), under its specialized name.
 fn linked_functions(
     functions: *const *mut NmbFunction,
     count: u64,
@@ -1679,7 +1692,13 @@ fn linked_functions(
     }
     // SAFETY: the header's counted array of live function handles.
     let handles = unsafe { std::slice::from_raw_parts(functions, usize::try_from(count).map_err(e("linked count"))?) };
-    handles.iter().map(|&f| Ok(get(f)?.0.linked_function())).collect()
+    handles
+        .iter()
+        .map(|&f| {
+            let NmbFunction(function, specialized) = get(f)?;
+            Ok(function.linked_function().with_link_name(specialized.clone()))
+        })
+        .collect()
 }
 
 fn compute_descriptor(descriptor: *const NmbComputePipelineDescriptor) -> Result<ComputePipelineDescriptor, String> {
