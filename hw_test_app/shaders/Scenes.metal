@@ -124,3 +124,20 @@ fragment half4 sm53_probe_unorm(float4 position [[position]])
     const ushort bits = i == 32767 ? ushort(0x7e00) : i < 16384 ? ushort(i) : ushort(0x8000 | (i - 16384));
     return half4(as_type<half>(bits));
 }
+
+/// gpu.draw.linked_function: the colour comes from custom_fn, which the pipeline links (RenderBox's icon effects call their
+/// effect so)
+[[visible]] float4 custom_fn(float4 color);
+
+fragment float4 linked_fragment()
+{
+    return custom_fn(float4(1, 0, 0, 1));
+}
+
+constant uint linked_variant [[function_constant(1)]];
+
+/// What the scene links as custom_fn, specialized with linked_variant: its colour, or that colour's blue and red swapped
+[[visible]] float4 linked_effect_v1(float4 color)
+{
+    return linked_variant == 2 ? color.zyxw : color;
+}
