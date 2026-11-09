@@ -375,29 +375,39 @@ void switch_pretranslated_redirect(struct nameidata *ndp)
     ndp->ni_vp = copy;
 }
 
-/* FrontBoard trusts a daemon as a system process (lockdownd's Trust prompt, SpringBoard's MIG services) only if its
- * executable's st_dev is /System's (BaseBoard's BSPathExistsOnSystemPartition). Only what stat and getattrlist hand out
- * changes, and not when the caller asks for the real device: the kernel's own vnode_getattr keeps the Data ids the
- * tables are keyed by. */
-void switch_pretranslated_identity(vnode_t vp, struct vnode_attr *va)
+/* The System file a regular file of the Data mount stands in for: its id (0 for none), and the file's own id. known is
+ * the caller's attributes, which may already hold the file id. */
+static uint64_t switch_pt_system_id_of(vnode_t vp, const struct vnode_attr *known, uint64_t *data_id)
 {
     if (!os_atomic_load(&switch_pretranslated_on, acquire) || vp == NULLVP || vp->v_mount != switch_pt.data ||
-        vp->v_type != VREG || (va->va_vaflags & VA_REALFSID) ||
-        !(VATTR_IS_ACTIVE(va, va_fsid) || VATTR_IS_ACTIVE(va, va_fsid64) || VATTR_IS_SUPPORTED(va, va_fileid) ||
-          VATTR_IS_SUPPORTED(va, va_linkid))) {
-        return;
+        vp->v_type != VREG) {
+        return 0;
     }
-    uint64_t data_id = va->va_fileid;
-    if (!VATTR_IS_SUPPORTED(va, va_fileid)) {
+    if (known != NULL && VATTR_IS_SUPPORTED(known, va_fileid)) {
+        *data_id = known->va_fileid;
+    } else {
         struct vnode_attr id;
         VATTR_INIT(&id);
         VATTR_WANTED(&id, va_fileid);
         if (vnode_getattr(vp, &id, vfs_context_kernel()) || !VATTR_IS_SUPPORTED(&id, va_fileid)) {
-            return;
+            return 0;
         }
-        data_id = id.va_fileid;
+        *data_id = id.va_fileid;
     }
-    const uint64_t system_id = switch_pt_system_id(&switch_pt.tables, data_id);
+    return switch_pt_system_id(&switch_pt.tables, *data_id);
+}
+
+/* stat and getattrlist: the System file's device and id, so dev and ino stay one file's (identity.c says why statfs
+ * reports the System volume). Not when the caller asks for the real device; the kernel's own vnode_getattr keeps the
+ * Data ids the tables are keyed by. */
+void switch_pretranslated_identity(vnode_t vp, struct vnode_attr *va)
+{
+    if ((va->va_vaflags & VA_REALFSID) || !(VATTR_IS_ACTIVE(va, va_fsid) || VATTR_IS_ACTIVE(va, va_fsid64) ||
+                                            VATTR_IS_SUPPORTED(va, va_fileid) || VATTR_IS_SUPPORTED(va, va_linkid))) {
+        return;
+    }
+    uint64_t data_id = 0;
+    const uint64_t system_id = switch_pt_system_id_of(vp, va, &data_id);
     if (system_id == 0) {
         return;
     }
@@ -414,6 +424,12 @@ void switch_pretranslated_identity(vnode_t vp, struct vnode_attr *va)
     if (VATTR_IS_SUPPORTED(va, va_linkid) && va->va_linkid == data_id) {
         va->va_linkid = system_id;
     }
+}
+
+mount_t switch_pretranslated_system_volume(vnode_t vp)
+{
+    uint64_t data_id = 0;
+    return switch_pt_system_id_of(vp, NULL, &data_id) ? switch_pt.system : NULL;
 }
 
 static const char *switch_pt_op_name(enum switch_pt_op op)
