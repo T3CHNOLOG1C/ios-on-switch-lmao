@@ -21,17 +21,24 @@ CRASH_REPORTS = 'mobile/Library/Logs/CrashReporter'
 DEPLOYED = 'deployed.json'
 
 
-def containers(data: Path) -> list[Path]:
-    """HW Test's data containers on the Data volume (the 27 debug image has an arm64e twin)."""
-    found = []
+def containers(data: Path) -> dict[str, Path]:
+    """HW Test's data containers on the Data volume by bundle ID (the 27 debug image has an arm64e twin)."""
+    found = {}
     for metadata in sorted((data / CONTAINERS).glob('*/' + METADATA)) if (data / CONTAINERS).is_dir() else []:
         try:
             identifier = plistlib.loads(metadata.read_bytes()).get('MCMMetadataIdentifier')
         except (OSError, plistlib.InvalidFileException, ValueError):
             continue
         if identifier in BUNDLES:
-            found.append(metadata.parent)
+            found[identifier] = metadata.parent
     return found
+
+
+def copy_gpu_files(container: Path, out: Path, identifier: str) -> None:
+    """Copy the GPU scenes' failed readbacks (got, want and diff PNGs, the CA sweep's states.txt) to out."""
+    gpu = container / 'Documents/gpu'
+    if gpu.is_dir():
+        shutil.copytree(gpu, out / 'hwtest-gpu' / identifier, copy_function=shutil.copyfile, dirs_exist_ok=True)
 
 
 def sidecar(report: Report, data: Path, switch_folder: Path, archive: Path | None = None) -> dict:
@@ -58,14 +65,16 @@ def sidecar(report: Report, data: Path, switch_folder: Path, archive: Path | Non
 def fetch(
     data: Path, switch_folder: Path, history: Path, out: Path | None = None, archive: Path | None = None
 ) -> list[Path]:
-    """Copy every report the card holds into `history` (and `out`); return the ones that were new or changed.
+    """Copy every report the card holds into `history` (and `out`, with the GPU scenes' files); return the new ones.
 
     A report the history already holds byte for byte keeps its sidecar: a later pull may no longer find that boot's
     crash reports on the card.
     """
     history.mkdir(parents=True, exist_ok=True)
     changed = []
-    for container in containers(data):
+    for identifier, container in containers(data).items():
+        if out:
+            copy_gpu_files(container, out, identifier)
         for source in sorted((container / 'Documents/hwtest').glob('*.json')):
             if not is_report(source):
                 continue

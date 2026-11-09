@@ -89,7 +89,16 @@ class Fetch(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_only_hwtest_containers_are_read(self):
-        self.assertEqual([p.name for p in fetch.containers(self.card.data)], ['AAAA'])
+        found = fetch.containers(self.card.data)
+        self.assertEqual({k: p.name for k, p in found.items()}, {'com.brunostjohn.switch.hwtest': 'AAAA'})
+
+    def test_the_gpu_scenes_files_come_along(self):
+        scene = self.card.reports.parent / 'gpu/gpu.xr_blend'
+        scene.mkdir(parents=True)
+        (scene / 'raw-0-got.png').write_bytes(b'png')
+        fetch.fetch(self.card.data, self.card.switch, self.history, self.root / 'out')
+        copied = self.root / 'out/hwtest-gpu/com.brunostjohn.switch.hwtest/gpu.xr_blend/raw-0-got.png'
+        self.assertEqual(copied.read_bytes(), b'png')
 
     def test_a_report_is_copied_once_with_its_boots_health(self):
         self.card.deployed('0123456789abcdef0123', '2026-11-08T21:50:00+00:00')
