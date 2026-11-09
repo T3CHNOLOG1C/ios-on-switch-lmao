@@ -137,6 +137,10 @@ void finish(RMCommandBuffer *cb, NSError *error)
         cb->_status = error ? MTLCommandBufferStatusError : MTLCommandBufferStatusCompleted;
         cb->_error = error;
         cb->_gpuEnd = hostSeconds();
+        // the GPU's own time, its end where this thread saw it complete: the duration exact, both late by that latency
+        uint64_t ns = 0;
+        if (!error && !cb->_m2v && gRM->raw->gpuNanoseconds(cb->_stamp, ns))
+            cb->_gpuStart = cb->_gpuEnd - double(ns) * 1e-9;
         handlers = cb->_completedHandlers;
         cb->_completedHandlers = nil;
         cb->_completedSent = true;

@@ -316,9 +316,10 @@ struct TegraGM20BAbiWaitFence {
 	uint64_t timeout_ns;
 };
 
-/* Method 10, output only. */
+/* Method 10, output only: PTIMER, the clock the GPU writes in timestamp queries. It counts 32 a tick of the 19.2 MHz
+ * oscillator, so a unit is 625/384 ns, not one: GK20A-family PTIMERs have no rate registers to make it count nanoseconds. */
 struct TegraGM20BAbiTimestamp {
-	uint64_t ns; /* PTIMER, nanoseconds; same clock the GPU writes in timestamp queries */
+	uint64_t ns;
 };
 
 /* Method 11. Input TegraGM20BAbiChannel; error 0 means healthy, anything else means the kext killed the channel (its fence

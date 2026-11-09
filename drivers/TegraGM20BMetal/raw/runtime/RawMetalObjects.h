@@ -304,6 +304,7 @@ struct RMSegment {
     std::mutex _lock;
     std::condition_variable _changed;
     uint32_t _seqno;
+    uint32_t _stamp;  // its raw submission's GPU time stamps (raw::CommandBuffer::stamp), 0 for any other
     double _gpuStart, _gpuEnd;
     __weak id _active;        // the encoder being recorded (weak: it holds the command buffer, its caller holds it)
     uint64_t _preds;          // every refusal predicate it hit (1 << RMPred)

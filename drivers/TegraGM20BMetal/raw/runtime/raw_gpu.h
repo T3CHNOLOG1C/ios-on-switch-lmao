@@ -576,6 +576,7 @@ public:
     }
 
     uint32_t draws = 0, passes = 0, blits = 0;
+    uint32_t stamp = 0;  // its GPU time's slot (raw_stamps.h), for Device::gpuNanoseconds once it completed
 
 private:
     friend class Device;
@@ -803,6 +804,9 @@ public:
         return done(seqno) ? !lost(seqno) : waitFence(seqno);
     }
 
+    // A completed command buffer's GPU time from its stamps; false when its slot holds a later one's
+    bool gpuNanoseconds(uint32_t stamp, uint64_t &ns) const;
+
     bool lost(uint32_t seqno) const
     {
         if (k_.killRecords())
@@ -973,7 +977,7 @@ private:
     Pack pack_;
     // heap_: the shader heap's GPU VA reservation (bytes: the program window), bound from its start (heapBound_) in parts of
     // host memory as programs are placed
-    Bo heap_, tic_, tsc_, root_, zero_, tickets_, colorTable_;
+    Bo heap_, tic_, tsc_, root_, zero_, tickets_, colorTable_, stamps_;
 
     struct HeapPart {
         uint64_t offset = 0, bytes = 0;  // in the heap
