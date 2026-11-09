@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// Brightness and power of the Switch OLED's Samsung AMS699VC01 panel (hekate panel ID 0x2050) through MIPI DCS commands
-// on DSI A, sent while the display controller scans out.
+// Brightness and power of the Switch's panel through MIPI DCS commands on DSI A, sent while the display controller
+// scans out. Written for the OLED's Samsung AMS699VC01 (hekate panel ID 0x2050); on the LCD Switches the same calls
+// send the panel's sleep and display commands and set the backlight's PWM duty instead (TegraBacklightPwm.h).
 //
-// The panel has no PWM backlight: brightness is DCS SET_DISPLAY_BRIGHTNESS (0x51) with a 2-byte big-endian value,
+// The OLED has no PWM backlight: brightness is DCS SET_DISPLAY_BRIGHTNESS (0x51) with a 2-byte big-endian value,
 // 0 (off) .. 2047 (hekate di.h PANEL_SM_BL_CANDELA_MAX; di.c _display_dsi_backlight_brightness converts its 0..255 duty as
 // duty * 2047 / 255). The panel is in video mode once hekate's display_init() has run, so a command packet rides the video
 // stream: hekate display_dsi_vblank_write() (enable command packets in video on line 4, wait for a frame end, queue the

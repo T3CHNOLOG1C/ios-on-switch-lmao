@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// DCS commands to the Switch OLED panel while the display controller scans out; see TegraPanel.h.
+// DCS commands to the Switch's panel while the display controller scans out; see TegraPanel.h. The OLED's brightness
+// is a DCS command too; the LCD Switches' (hekate's other panel IDs) is PWM0's duty (TegraBacklightPwm.h), and their
+// panels take only sleep in/out and display off/on, hekate's _display_panel_and_hw_end and display_init sequences
+// without the per-panel level-2 register tweaks, which the panel keeps across sleep.
 // DC and DSI offsets are 32-bit word indices as in hekate bdk/display/di.h (DISPLAY_A(off) is 0x54200000 + off * 4,
 // DSI(off) is 0x54300000 + off * 4); the packet sequence is hekate di.c display_dsi_vblank_write(), the panel commands
 // are hekate's PANEL_SAM_AMS699VC01 paths and switchroot L4T's panel-s-720p-7-0.dtsi (init and suspend command lists).
@@ -39,6 +42,8 @@ extern "C" {
 #include "SwitchBrightness.h"
 #include "TegraPanel.h"
 #include "TegraPanelSteps.h"
+#include "TegraBacklightPwm.h"
+#include "../NativeMobileDisplay/TegraDisplayPower.h"
 #include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
 #include "../../kits/SwitchMMIO/SwitchMMIOWords.h"
 
@@ -127,6 +132,24 @@ volatile uint8_t *gCar;
 SwitchMMIOWords gDc, gDsi;
 bool gControlSent, gHaveLevel;
 unsigned gLevel;
+int gOled = -1;  // the panel: 1 the OLED's AMS699VC01 (DCS brightness), 0 an LCD (PWM backlight), -1 not yet read
+
+// hekate's decoded panel ID, kept in PMC SECURE_SCRATCH113 by its L4T launcher: the OLED's is the only panel with
+// no PWM backlight.
+bool oled()
+{
+    if (gOled < 0)
+        gOled = tegra_display_panel_id() == TEGRA_DISPLAY_PANEL_AMS699VC01 ? 1 : 0;
+    return gOled == 1;
+}
+
+// hekate display_init / _display_panel_and_hw_end: 180 ms after sleep out on the 6.2" panels, 120 ms on the 5.5"
+// (Lite) ones; 50 ms after sleep in on every LCD.
+unsigned lcdSleepOutMs()
+{
+    const uint32_t panel = tegra_display_panel_id();
+    return (panel & 0xff00u) == 0x1000u ? 120 : 180;  // PANEL_INL_2J055IA_27A, AUO_A055TAN01, SHP_LQ055T1SW10
+}
 
 IOLock *makeLock(IOLock *volatile *slot)
 {
@@ -296,6 +319,8 @@ int sendBrightness(unsigned level)
 // Under the lock.
 int setBrightness(unsigned level)
 {
+    if (!oled())
+        return tegra_backlight_pwm_set(tegra_backlight_pwm_duty_from_level(level, TEGRA_PANEL_BRIGHTNESS_MAX));
     int result = 0;
     if (!gControlSent) {
         result = sendCommand(kControlDisplay, kBrightnessControl | kDimmingControl, "brightness control");
@@ -310,6 +335,12 @@ int bootLevel()
 {
     if (!displayRunning())
         return -1;
+    if (!oled()) {
+        const int duty = tegra_backlight_pwm_duty();
+        return duty < 0 ? -1
+                        : static_cast<int>(tegra_backlight_pwm_level_from_duty(static_cast<unsigned>(duty),
+                                                                                TEGRA_PANEL_BRIGHTNESS_MAX));
+    }
     const uint32_t duty = gDc[DC_COM_SCRATCH_REGISTER_B];
     if (!duty || duty > 255)
         return -1;
@@ -353,18 +384,19 @@ extern "C" int tegra_panel_power_off(void)
                 gHaveLevel = true;
             }
         }
-        int result = sendBrightness(0);
+        int result = oled() ? sendBrightness(0) : setBrightness(0);
         if (result)
             return result;
-        IOSleep(100);  // hekate _display_dsi_backlight_brightness: the panel's dimming ramp
+        if (oled())
+            IOSleep(100);  // hekate _display_dsi_backlight_brightness: the panel's dimming ramp
         result = sendCommand(kDisplayOff, "display off");
         if (result)
             return result;
-        IOSleep(40);
+        IOSleep(oled() ? 40 : 17);
         result = sendCommand(kEnterSleep, "sleep in");
         if (result)
             return result;
-        IOSleep(120);
+        IOSleep(oled() ? 120 : 50);
         gControlSent = false;  // sent again on wake, as L4T's init list does
         return 0;
     });
@@ -379,11 +411,13 @@ extern "C" int tegra_panel_power_on(int level)
         int result = sendCommand(kExitSleep, "sleep out");
         if (result)
             return result;
-        IOSleep(180);
-        result = sendCommand(kControlDisplay, kBrightnessControl | kDimmingControl, "brightness control");
-        if (result)
-            return result;
-        gControlSent = true;
+        IOSleep(oled() ? 180 : lcdSleepOutMs());
+        if (oled()) {
+            result = sendCommand(kControlDisplay, kBrightnessControl | kDimmingControl, "brightness control");
+            if (result)
+                return result;
+            gControlSent = true;
+        }
         result = sendCommand(kDisplayOn, "display on");
         if (result)
             return result;
@@ -396,7 +430,7 @@ extern "C" int tegra_panel_power_on(int level)
         }
         if (target > TEGRA_PANEL_BRIGHTNESS_MAX)
             target = TEGRA_PANEL_BRIGHTNESS_MAX;
-        result = sendBrightness(target);
+        result = setBrightness(target);
         if (result)
             return result;
         gLevel = target;

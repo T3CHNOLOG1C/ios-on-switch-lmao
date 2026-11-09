@@ -18,7 +18,7 @@ Still OLED/T210B01-specific, in the order they will stop an Erista boot:
 |---|---|
 | `//bazel/pinned:firmware/oled-sku3.dtb`, U-Boot opcode fingerprints and the fixed framebuffer in the boot script | switchroot's Icosa DTB and U-Boot build; LCD framebuffer handoff (`boot/handoff/probe.c`) |
 | `drivers/TegraBPMP`, `SwitchPower/SwitchPMIC.cpp` | EMC rate changes go through the B01 BPMP firmware; on a T210 the rate stays at hekate's (the loader and the kernel both skip the raise), the EMC DVFS governor has nothing to drive |
-| `drivers/SwitchBrightness` (`TegraPanel*`), `NativeMobileDisplay/TegraDisplayPower` | OLED brightness is DCS 0x51 over DSI; Erista LCDs (JDI/InnoLux/AUO) have a PWM backlight and other on/off sequences |
+| `NativeMobileDisplay/TegraDisplayPower`, `NativeLegacyDisplay` SC7 hooks | the cold display init after system sleep is the AMS699VC01's; `sc7Display` panics on any other panel, so boot Erista with `switch-no-sleep` until the LCD init (hekate display_init's JDI/InnoLux/AUO/5.5" tables) is written. Display power off/on (lock, wake) already works: TegraPanel sends the LCDs' sleep/display commands and sets PWM0's duty (`TegraBacklightPwm`) |
 | `drivers/SwitchUSB/firmware` | embeds `tegra210b01_xusb_firmware`; Erista needs `tegra21x_xusb_firmware`; `VREG_FIX18` pad setup is B01's |
 | `drivers/TegraDFLL`, `SwitchPower/SwitchPMIC.cpp`, `tools/emu/patches/0031` | VDD_CPU is a MAX77812 (I2C5 0x31/0x33); Erista has MAX77621s (CPU 0x1B, GPU 0x1C), T210 CVB/speedo tables. Without it `SwitchThermal` falls back to the fixed PLLX ladder |
 | `drivers/SwitchPower/SwitchSensors.cpp`, `kits/SwitchIdle` | B01 SOC_THERM sensor set and C7 latencies |

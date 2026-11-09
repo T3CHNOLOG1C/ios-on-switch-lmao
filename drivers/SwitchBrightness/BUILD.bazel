@@ -33,6 +33,7 @@ kernel_driver(
     name = "SwitchBrightness",
     srcs = [
         "TegraPanel.cpp",
+        "TegraBacklightPwm.cpp",
         "SwitchBacklight.cpp",
         "SwitchALS.cpp",
         "original-bindings.S",

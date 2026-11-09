@@ -5,6 +5,7 @@
 #   als_source_test  TegraI2C.cpp's I2C2 row and pads, SwitchALS.cpp's BH1730FVC commands, the properties CoreBrightness
 #                    reads from SwitchHIDDevice.cpp and SwitchBacklight.cpp, SwitchBacklight::start's publishing order
 #   panel_steps_test TegraPanelSteps.h: a DCS command's frame-end and step-timer order, its deferrals and its settle times
+#   backlight_pwm_test TegraBacklightPwm.h: hekate's PWM_CSR_0 encoding and the 0..2047 <-> 0..255 duty mapping
 #
 #   bazel test //drivers/SwitchBrightness/test:all
 load("//bazel/lint:defs.bzl", "lint_files")
@@ -29,6 +30,14 @@ host_test(
         "//drivers/SwitchBrightness:SwitchBacklight.cpp",
         "//drivers/SwitchTouch:SwitchHIDDevice.cpp",
         "//drivers/TegraI2C:TegraI2C.cpp",
+    ],
+)
+
+host_test(
+    name = "backlight_pwm_test",
+    srcs = [
+        "backlight_pwm_test.cpp",
+        "//drivers/SwitchBrightness:TegraBacklightPwm.h",
     ],
 )
 
