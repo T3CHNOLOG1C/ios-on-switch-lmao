@@ -166,8 +166,9 @@ struct NmbConstant {
     uint64_t length;
 };
 
-NmbFunction *nmb_function_new_specialized(NmbLibrary *, const char *name, const struct NmbConstant *constants,
-                                          uint32_t count);
+/* specialized_name: MTLFunctionDescriptor.specializedName, the name a pipeline links the function under (null: its own). */
+NmbFunction *nmb_function_new_specialized(NmbLibrary *, const char *name, const char *specialized_name,
+                                          const struct NmbConstant *constants, uint32_t count);
 void nmb_function_release(NmbFunction *);
 /* functionConstantsDictionary: the count, and the constant at `at` in name order (name into out; info: MTLDataType, index, required). */
 uint32_t nmb_function_constant_count(const NmbFunction *);

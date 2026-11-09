@@ -51,7 +51,7 @@ bool Completion::keyOf(Ask &a, CacheKey &k)
         id library = native_bridge_metal_function_metallib(function, &bytes, &length);
         if (!library || !metallibAirHashes(static_cast<const uint8_t *>(bytes), length, hashes))
             return false;
-        const auto f = hashes.find(function.name.UTF8String ?: "");
+        const auto f = hashes.find(native_bridge_metal_function_library_name(function).UTF8String ?: "");
         if (f == hashes.end())
             return false;
         memcpy(out, f->second.data(), sizeof out);
@@ -60,7 +60,7 @@ bool Completion::keyOf(Ask &a, CacheKey &k)
     if (!air(a.descriptor.vertexFunction, k.vertexAir) || !air(a.descriptor.fragmentFunction, k.fragmentAir))
         return false;
     // Linked functions: IconRendering's effects each link their own function under one name (custom_fn), so the key takes
-    // each one's AIR
+    // each one's AIR besides the names and constants the pack key gives them
     std::string linked;
     const std::pair<char, MTLLinkedFunctions *> stages[] = {{'v', a.descriptor.vertexLinkedFunctions},
                                                             {'f', a.descriptor.fragmentLinkedFunctions}};

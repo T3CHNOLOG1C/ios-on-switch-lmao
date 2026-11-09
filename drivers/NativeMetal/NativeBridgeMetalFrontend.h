@@ -54,6 +54,9 @@ id native_bridge_metal_render_pipeline_lazy(id device, id descriptor, NSUInteger
 // The metallib a function of this device was made from: its library, which keeps `bytes` while it lives; nil when the
 // function has none (the raw path names a function's AIR by its entry there).
 id native_bridge_metal_function_metallib(id function, const void **bytes, size_t *length);
+// The library function a function of this device was made from (its entry in that metallib), which a specialized function's name is
+// not; nil for another device's.
+NSString *native_bridge_metal_function_library_name(id function);
 // The raw GM20B path's direct compile of a render state (bridge/NativeMetalDirect.h) of this device's functions: false with
 // `why` (valid until the next call on the thread) when the translator refuses it or `each` returns false.
 struct NmbDirectState;

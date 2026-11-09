@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalInternal.h"
+#include "NativeBridgeMetalFrontend.h"
 
 // MTLDataType sizes, as the frontend journals constants (NativeBridgeMetalFrontend.mm constantBytes)
 static size_t constantBytes(uint64_t type)
@@ -188,10 +189,11 @@ static std::string constantsText(MTLFunctionConstantValues *values)
                              }];
 }
 
+// Named as Metal names it: the specialized name it was made under, else the library function's
 - (id<MTLFunction>)newFunctionWithDescriptor:(MTLFunctionDescriptor *)d error:(NSError **)error
 {
     return (id<MTLFunction>)[self wrap:[(id<MTLLibrary>)_twin newFunctionWithDescriptor:d error:error]
-                                  name:d.name
+                                  name:d.specializedName.length ? d.specializedName : d.name
                              constants:d.constantValues];
 }
 
@@ -243,6 +245,49 @@ RMLibrary *wrapLibrary(id device, id<MTLLibrary> twin, NSString *path)
     return l;
 }
 
+// The library function a function of this facade was made from, which the journal names (its name is a specialized one's)
+static std::string libraryName(RMFunction *f)
+{
+    NSString *name = native_bridge_metal_function_library_name(f->_twin) ?: f.name;
+    return name.UTF8String ?: "?";
+}
+
+// The descriptor's linked functions as the journal's R line names them without their libraries (NativeBridgeMetalFrontend.mm
+// linkedText): " | <vl|vp|fl|fp> <library function>[ as=<specialized name>] <constants>", "-" for one not this facade's
+static std::string linkedKey(MTLRenderPipelineDescriptor *d)
+{
+    std::string key;
+    const std::pair<const char *, NSArray *> lists[] = {{"vl", d.vertexLinkedFunctions.functions},
+                                                        {"vp", d.vertexLinkedFunctions.privateFunctions},
+                                                        {"fl", d.fragmentLinkedFunctions.functions},
+                                                        {"fp", d.fragmentLinkedFunctions.privateFunctions}};
+    for (const auto &[tag, functions] : lists)
+        for (id f in functions) {
+            key += std::string(" | ") + tag + " ";
+            if (![f isKindOfClass:[RMFunction class]]) {
+                key += "- ";
+                continue;
+            }
+            RMFunction *rf = f;
+            const std::string own = libraryName(rf);
+            key += own;
+            if (own != (rf.name.UTF8String ?: ""))
+                key += std::string(" as=") + rf.name.UTF8String;
+            key += " " + rf->_constants;
+        }
+    return key;
+}
+
+bool raw_metal_linked_packable(MTLRenderPipelineDescriptor *d)
+{
+    for (MTLLinkedFunctions *l : {d.vertexLinkedFunctions, d.fragmentLinkedFunctions})
+        for (NSArray *functions : {l.functions, l.privateFunctions})
+            for (id f in functions)
+                if (![f isKindOfClass:[RMFunction class]] || ((RMFunction *)f)->_framework.empty())
+                    return false;
+    return true;
+}
+
 NSString *raw_metal_pipeline_key(MTLRenderPipelineDescriptor *d)
 {
     // the journal's R-line fields in its order (NativeBridgeMetalFrontend.mm journalRenderPipeline), but the label, each with a
@@ -276,8 +321,9 @@ NSString *raw_metal_pipeline_key(MTLRenderPipelineDescriptor *d)
         }
     RMFunction *vf = [(id)d.vertexFunction isKindOfClass:[RMFunction class]] ? (RMFunction *)d.vertexFunction : nil;
     RMFunction *ff = [(id)d.fragmentFunction isKindOfClass:[RMFunction class]] ? (RMFunction *)d.fragmentFunction : nil;
-    key += " | v " + std::string(vf ? vf.name.UTF8String : "-") + " " + (vf ? vf->_constants : "");
-    key += " | f " + std::string(ff ? ff.name.UTF8String : "-") + " " + (ff ? ff->_constants : "");
+    key += " | v " + (vf ? libraryName(vf) : std::string("-")) + " " + (vf ? vf->_constants : "");
+    key += " | f " + (ff ? libraryName(ff) : std::string("-")) + " " + (ff ? ff->_constants : "");
+    key += linkedKey(d);
     if (vf && vf->_framework != "QuartzCore" && !vf->_framework.empty())
         key += " | l " + vf->_framework;
     while (!key.empty() && key.back() == ' ')

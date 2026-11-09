@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MIT
-// Guards on a render pipeline whose functions call linked functions by name (iOS 27's IconRendering: custom effects call
-// custom_fn), which no host model runs:
+// Guards on a render pipeline whose functions call linked functions by name (iOS 27's RenderBox: each icon effect is made with
+// MTLFunctionDescriptor.specializedName custom_fn or custom_blend and linked through fragmentLinkedFunctions.privateFunctions),
+// which no host model runs (m2v's link_tests run its linking):
 //  - the frontend hands each stage's vertexLinkedFunctions/fragmentLinkedFunctions to the bridge as it hands a compute
-//    descriptor's linkedFunctions, and the bridge gives them to m2v's function descriptors (no m2v change: its render
-//    pipeline takes a stage's LinkedFunctions already);
+//    descriptor's linkedFunctions, and the bridge gives them to m2v's function descriptors;
+//  - a function keeps the specialized name it was made under: Metal's name answers it, the bridge links the function by it,
+//    and the journal, the pack key and the AIR lookups name the library function it was made from;
 //  - the C and Rust forms of the descriptor list the same fields in the same order;
-//  - the raw path's twin links the twins of those functions, and its record is keyed by their AIR, never a pack state's.
+//  - the raw path's twin links the twins of those functions, and its key names each, so the pack holds such a state.
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
@@ -44,6 +46,24 @@ TEST(RawLinkedSource, TheFrontendHandsEachStagesLinkedFunctionsToTheBridge)
     EXPECT_THAT(convert, HasSubstr("function_descriptor().with_linked(fragment_linked)"));
 }
 
+TEST(RawLinkedSource, AFunctionKeepsTheSpecializedNameItWasMadeUnder)
+{
+    const std::string frontend = SourceText("../../NativeMetal/NativeBridgeMetalFrontend.mm");
+    const std::string described = Body(
+        frontend, "- (id<MTLFunction>)newFunctionWithDescriptor:(MTLFunctionDescriptor *)d error:(NSError **)error");
+    EXPECT_THAT(described, HasSubstr("specializedName:d.specializedName"));
+    const std::string made = Body(frontend, "                       specializedName:(NSString *)specialized");
+    EXPECT_THAT(made, HasSubstr("nmb_function_new_specialized(_handle, name.UTF8String, specialized.UTF8String,"));
+    EXPECT_THAT(made, HasSubstr("function.name = specialized ?: name;"));
+    EXPECT_THAT(made, HasSubstr("function.libraryName = name;"));
+    // the journal names the library function, and the specialized name beside it
+    EXPECT_THAT(Body(frontend, "static std::string stageText(NBFunction *f)"), HasSubstr("\" as=\""));
+    EXPECT_THAT(Body(frontend, "static void journalRenderPipeline("), HasSubstr("line += linkedText(d);"));
+
+    const std::string bridge = SourceText("../../NativeMetal/bridge/NativeMetalObjects.rs");
+    EXPECT_THAT(Body(bridge, "fn linked_functions("), HasSubstr(".with_link_name(specialized.clone())"));
+}
+
 std::vector<std::string> fields(const std::string &body, const std::regex &field)
 {
     std::vector<std::string> out;
@@ -69,13 +89,17 @@ TEST(RawLinkedSource, TheRawRecordIsTheLinkedFunctionsToo)
     const std::string twin = Body(states, "static MTLRenderPipelineDescriptor *twinDescriptor(");
     EXPECT_THAT(twin, HasSubstr("t.vertexLinkedFunctions = twinLinked(d.vertexLinkedFunctions);"));
     EXPECT_THAT(twin, HasSubstr("t.fragmentLinkedFunctions = twinLinked(d.fragmentLinkedFunctions);"));
-    EXPECT_THAT(Body(states, "- (RMPipeline *)pipelineFor:"), HasSubstr("!linksFunctions(d)"));
+    EXPECT_THAT(Body(states, "- (RMPipeline *)pipelineFor:"), HasSubstr("raw_metal_linked_packable(d)"));
+    EXPECT_THAT(Body(SourceText("../raw/runtime/RawMetalLibrary.mm"), "NSString *raw_metal_pipeline_key("),
+                HasSubstr("key += linkedKey(d);"));
 
     const std::string key =
         Body(SourceText("../raw/runtime/RawComplete.mm"), "bool Completion::keyOf(Ask &a, CacheKey &k)");
     EXPECT_THAT(key, HasSubstr("a.descriptor.vertexLinkedFunctions"));
     EXPECT_THAT(key, HasSubstr("a.descriptor.fragmentLinkedFunctions"));
     EXPECT_THAT(key, HasSubstr("a.key += \" | linked\" + linked;"));
+    // a specialized function's AIR is its library function's entry
+    EXPECT_THAT(key, HasSubstr("native_bridge_metal_function_library_name(function)"));
 }
 
 // A state the pack holds is this device's archive hit: every way the facade asks m2v for its twin (at once, with

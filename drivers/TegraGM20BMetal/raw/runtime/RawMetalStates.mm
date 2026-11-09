@@ -216,12 +216,6 @@ static MTLRenderPipelineDescriptor *twinDescriptor(MTLRenderPipelineDescriptor *
     return t;
 }
 
-static bool linksFunctions(MTLRenderPipelineDescriptor *d)
-{
-    return d.vertexLinkedFunctions.functions.count || d.vertexLinkedFunctions.privateFunctions.count ||
-           d.fragmentLinkedFunctions.functions.count || d.fragmentLinkedFunctions.privateFunctions.count;
-}
-
 // A state the pack lacks, of any library's functions: its record from this process or an earlier boot, else made at its
 // creation, as Metal makes a state (RawComplete.h), and the raw path draws it from its first draw. A compile that could not
 // run is asked again off this thread; m2v draws the state until then.
@@ -256,8 +250,9 @@ static void makeRecord(RMPipeline *p, MTLRenderPipelineDescriptor *d)
     p.label = d.label;
     RMFunction *vf = [(id)d.vertexFunction isKindOfClass:[RMFunction class]] ? (RMFunction *)d.vertexFunction : nil;
     RMFunction *ff = [(id)d.fragmentFunction isKindOfClass:[RMFunction class]] ? (RMFunction *)d.fragmentFunction : nil;
-    // a state linking functions is its linked functions' too: no pack names it, its record is kept under their AIR
-    p->_packable = vf && ff && !vf->_framework.empty() && vf->_framework == ff->_framework && !linksFunctions(d);
+    // a state linking functions is packed under them too (its key names each), where they are framework libraries' as well
+    p->_packable =
+        vf && ff && !vf->_framework.empty() && vf->_framework == ff->_framework && raw_metal_linked_packable(d);
     p->_completable = vf && ff;
     if (p->_completable)
         p->_key = raw_metal_pipeline_key(d).UTF8String;

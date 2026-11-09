@@ -68,7 +68,7 @@ static bool airOf(id<MTLFunction> function, raw::AirHash &out)
     if (!native_bridge_metal_function_metallib(twinOf(function), &bytes, &length) ||
         !raw::metallibAirHashes(static_cast<const uint8_t *>(bytes), length, hashes))
         return false;
-    const auto f = hashes.find(function.name.UTF8String ?: "");
+    const auto f = hashes.find(native_bridge_metal_function_library_name(twinOf(function)).UTF8String ?: "");
     if (f == hashes.end())
         return false;
     out = f->second;
