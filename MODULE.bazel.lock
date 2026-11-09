@@ -258,6 +258,19 @@
   },
   "selectedYankedVersions": {},
   "moduleExtensions": {
+    "//install:local_seed.bzl%shader_seed": {
+      "general": {
+        "bzlTransitiveDigest": "DvhGkvFx5iQaW5miKLFFWqjL7OwAGoY0p3iGM63jcdA=",
+        "usagesDigest": "JilSbh8CGIaTf4TQdpHZa09IScBL0FQs7KozKqy9Epk=",
+        "recordedInputs": [],
+        "generatedRepoSpecs": {
+          "switch_shader_seed": {
+            "repoRuleId": "@@//install:local_seed.bzl%switch_shader_seed",
+            "attributes": {}
+          }
+        }
+      }
+    },
     "//install:release.bzl%release": {
       "general": {
         "bzlTransitiveDigest": "Fsg/zRwVeDpsczoS70oDG17W7qaMGKG6jpMNER6Eqzw=",

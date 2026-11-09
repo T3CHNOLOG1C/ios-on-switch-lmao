@@ -254,6 +254,10 @@ use_repo(ipsw, "ipsw")
 release = use_extension("//install:release.bzl", "release")
 use_repo(release, "switch_release")
 
+# A shader seed built elsewhere, from SWITCH_SHADER_SEED_DIR (install/local_seed.bzl).
+shader_seed = use_extension("//install:local_seed.bzl", "shader_seed")
+use_repo(shader_seed, "switch_shader_seed")
+
 # --- hw_test_app: the debug images' hardware test app (rules_apple + rules_swift); libvpx only for its media generator
 bazel_dep(name = "rules_swift", version = "4.2.2")
 bazel_dep(name = "rules_apple", version = "5.4.0")

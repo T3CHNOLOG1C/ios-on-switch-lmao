@@ -56,8 +56,13 @@ is a cross-compile on the arm64 CI Mac, but everything in the chain is pinned to
 The last row is the risk: the toolset's floor is macOS 27 today and nothing has run it on anything older, and the
 only Monterey Intel machine to test on is the Air itself.
 
-The cheaper route is to not build the seed on the Mac at all. `//gpu/seed:tree` is derived from the pinned IPSW,
-so `release/` refuses it as a release asset (`ipsw_free.bzl`), but a workflow of this private fork can build it on
-the CI Mac and upload it as an Actions artifact; the image build then takes it through `--//install:shader_seed`
-(a `label_flag`, so a small repository rule or filegroup has to wrap the downloaded tree). That needs the 5.2 GB
-IPSW on the runner once per cache, and no cross-compiling.
+So the seed is not built on the Intel Mac at all: `//gpu/seed:tree` and its `tree.size.json` come from a Mac
+that can build them (they are derived from the IPSW, which is why `release/` refuses them as release assets,
+`ipsw_free.bzl`, and why CI never builds them). `install/local_seed.bzl` wraps a directory holding the two:
+
+```sh
+bazelisk run //:image -- --//install:prebuilt=release \
+  --repo_env=SWITCH_SHADER_SEED_DIR=/path/to/unpacked \
+  --//install:shader_seed=@switch_shader_seed//:tree \
+  --//install:shader_seed_size=@switch_shader_seed//:size
+```
