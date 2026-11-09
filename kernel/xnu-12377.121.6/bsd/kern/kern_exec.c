@@ -9384,6 +9384,13 @@ native_switch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
 		{"com.apple.migration", SWITCH_PLIST("<key>LastSystemVersion</key><string>" SWITCH_IPSW_BUILD "</string>"
 		    "<key>DMUserDataDisposition</key><dict><key>SyntheticDidUpgrade</key><false/>"
 		    "<key>buildVersion</key><string>" SWITCH_IPSW_BUILD "</string></dict>"), kSetupOnce},
+		/* True Tone starts off, as Settings' switch leaves it: CoreBrightness's -[CBColorModuleShared
+		 * CAEnabledPropertyHandler:] saves CBColorAdaptationEnabled as an integer in com.apple.CoreBrightness for the
+		 * current user and current host, and iOS's ByHost identifier is empty (the double dot). The ambient light sensor
+		 * has no colour, so CoreBrightness's repair path would otherwise adapt to its fixed 4000 K white. Seeded once:
+		 * the switch then writes the user's choice into the same file. */
+		{"ByHost/com.apple.CoreBrightness.", SWITCH_PLIST("<key>CBColorAdaptationEnabled</key><integer>0</integer>"),
+		    kSetupOnce},
 	};
 #undef SWITCH_SPRINGBOARD
 #undef SWITCH_PLIST
@@ -9403,6 +9410,7 @@ native_switch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
 		{"/private/var/db/dslocal/nodes/Default/groups", 0, 0755},
 		{"/private/var/db/dslocal/nodes/Default/config", 0, 0755},
 		{"/private/var/mobile/Documents", 501, 0755},
+		{"/private/var/mobile/Library/Preferences/ByHost", 501, 0755},
 	};
 	int error = 0;
 	for (unsigned i = 0; i < sizeof(directories) / sizeof(directories[0]) && !error; ++i)
