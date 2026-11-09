@@ -1,21 +1,10 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // AVD.videodecoder: H.264, VP9 (profile 0) and HEVC (Main, Main 10 as 8-bit, Main Still Picture) on the Tegra X1's
-// NVDEC as VideoToolbox's hardware 'avc1', 'vp09' and 'hvc1' decoders. 'hvc1' is registered with rating 1, so it ranks
-// before HEVCH8.videodecoder's stand-in, which stays behind it for the tile sessions and streams this decoder hands to
-// Apple's software decoder (registerHEVC). Tile sessions (grid HEIC: wallpapers, full-size photos) are AVDTiles.c.
+// NVDEC as VideoToolbox's hardware 'avc1', 'vp09' and 'hvc1' decoders, registered by AVDRegister.c. Tile sessions
+// (grid HEIC: wallpapers, full-size photos) are AVDTiles.c.
 //
-// How VideoToolbox finds it (21H461 VTLoadVideoDecoders, disassembled): it dlopens a fixed list of paths and calls each
-// one's register function: H264SW.videocodec first (Apple's NEON H.264, registered with IsHardwareAccelerated false),
-// ..., HEVCH8, H8, VCPHEVC, then /System/Library/VideoDecoders/AVD.videodecoder (AVDRegister), the slot of Apple's AVD
-// decoders on later SoCs. iPad7,1 ships no such file; the userland overlay puts this one there.
-//
-// Registration is per process. AVDRegister registers the codecs TegraNVDECInfo.codecs lists when the kernel published
-// TegraNVDEC (it proved itself at boot, N3) and this process may open it (a probe connection, closed at once).
-// VTIsHardwareDecodeSupported only asks the registry (VTSelectAndCreateVideoDecoderInstance with no out-pointer
-// returns before any factory runs), so registering in a process the sandbox refuses would be a false YES there.
-//
-// Selection: VTRegisterVideoDecoder leaves IsHardwareAccelerated true and rating 0; _vtSortRegistryItemsByRating ranks
-// hardware first, so this decoder is tried before H264SW, and a factory that fails moves VideoToolbox to the next one.
+// Selection: _vtSortRegistryItemsByRating ranks a higher rating first, then hardware, so this decoder is tried before
+// H264SW, and a factory that fails moves VideoToolbox to the next one.
 // StartSession is not retried with another decoder, so a stream NVDEC cannot take (interlaced, 4:2:2 or 4:4:4, high
 // bit depth, slice groups, beyond 4096x4096) or one NVDEC has no memory for runs on Apple's software decoder inside
 // this instance: VTSelectAndCreateVideoDecoderInstance with hardware disabled picks it, every class call is forwarded,
@@ -771,7 +760,7 @@ static const VTPluginDecoderClass kDecoderClass = {
 
 static const VTPluginDecoderVTable kVTable = {NULL, &kBaseClass, &kDecoderClass};
 
-static OSStatus createInstance(FourCharCode codec, CFAllocatorRef allocator, VTVideoDecoderRef *out)
+OSStatus avd_create_instance(FourCharCode codec, CFAllocatorRef allocator, VTVideoDecoderRef *out)
 {
     if (tSoftwareLookup)
         return kVTCouldNotFindVideoDecoderErr;  // VideoToolbox moves on to the next decoder
@@ -803,54 +792,4 @@ static OSStatus createInstance(FourCharCode codec, CFAllocatorRef allocator, VTV
     }
     *out = object;
     return noErr;
-}
-
-// NVDEC's 'hvc1', rated above the default 0: VideoToolbox's registry sorts by rating before the hardware flag, so it
-// is chosen before HEVCH8's stand-in (Apple's software decoder under the hardware flag), which stays registered behind
-// it for what this decoder does not take: the streams startHEVC hands to software and the tile sessions
-// avd_start_tile_session refuses (VTTileDecompressionSessionCreate then moves on to the next decoder).
-static void registerHEVC(void)
-{
-    const int32_t rating = 1;
-    CFNumberRef number = CFNumberCreate(NULL, kCFNumberSInt32Type, &rating);
-    const void *keys[] = {kVTVideoDecoderInfo_Rating}, *values[] = {number};
-    CFDictionaryRef info =
-        CFDictionaryCreate(NULL, keys, values, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-    const OSStatus status = VTRegisterVideoDecoderWithInfo(kCMVideoCodecType_HEVC, info, createInstance);
-    CFRelease(info);
-    CFRelease(number);
-    if (status)
-        os_log_error(gAVDLog, "AVD: VTRegisterVideoDecoderWithInfo('hvc1') failed: %d", (int)status);
-}
-
-static void registerVP9(void)
-{
-    const OSStatus status = VTRegisterVideoDecoder(kCMVideoCodecType_VP9, createInstance);
-    if (status)
-        os_log_error(gAVDLog, "AVD: VTRegisterVideoDecoder('vp09') failed: %d", (int)status);
-}
-
-__attribute__((visibility("default"))) void AVDRegister(void);
-
-void AVDRegister(void)
-{
-    gAVDLog = os_log_create("com.brunostjohn.switch.avd", "decoder");
-    if (!nvdec_service_present())
-        return;  // switch-no-nvdec, or NVDEC did not come up at boot: nothing changes
-    int error = 0;
-    NVDECClient *probe = nvdec_open(&error);
-    if (!probe) {
-        switch_refusal("AVD", "TegraNVDEC refused the process", "error %#x: H.264 stays on Apple's software decoder",
-                       error);
-        return;
-    }
-    const OSStatus status = VTRegisterVideoDecoder(kCMVideoCodecType_H264, createInstance);
-    if (status)
-        os_log_error(gAVDLog, "AVD: VTRegisterVideoDecoder('avc1') failed: %d", (int)status);
-    const uint32_t codecs = nvdec_codecs(probe);
-    if (codecs & (1u << TEGRA_NVDEC_CODEC_VP9))
-        registerVP9();
-    if (codecs & (1u << TEGRA_NVDEC_CODEC_HEVC))
-        registerHEVC();
-    nvdec_close(probe);
 }

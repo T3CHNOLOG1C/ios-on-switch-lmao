@@ -46,12 +46,19 @@ class KindTest(unittest.TestCase):
         return [e for e in self.manifest['files'] if not e.get('debug')]
 
     def test_each_kind_unions_only_its_own_bundles(self):
+        shared = {e['path'].rpartition('/')[0] for e in self.released() if 'kind' not in e}
         for kind in KINDS:
             mine = {e['path'].rpartition('/')[0] for e in self.released() if e.get('kind') == kind}
-            others = {e['path'].rpartition('/')[0] for e in self.released() if e.get('kind', kind) != kind}
+            others = {e['path'].rpartition('/')[0] for e in self.released() if e.get('kind', kind) != kind} - shared
             dirs = {d for d, _ in self.plan(kind)['dirs']}
             self.assertLessEqual(mine, dirs, kind)
             self.assertFalse(others & dirs, kind)
+
+    def test_avd_sits_in_each_kinds_empty_slot(self):
+        slots = {'21H461': 'AVD.videodecoder', '24B119': 'AVD.videodecoder_ps'}
+        for kind, slot in slots.items():
+            avd = [f['path'] for f in self.plan(kind)['files'] if f['source'] == 'build/switch-video/AVD.videodecoder']
+            self.assertEqual(avd, [f'/System/Library/VideoDecoders/{slot}'], kind)
 
     def test_entries_without_a_kind_are_planned_for_both(self):
         unkinded = {

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// TegraNVENC user client ABI, v2 (kernel: TegraNVENCUserClient.cpp; client: SwitchVideoEncoders/AVE).
+// TegraNVENC user client ABI, v3 (kernel: TegraNVENCUserClient.cpp; client: SwitchVideoEncoders/AVE).
 //
 // The service is "TegraNVENC" (IOServiceMatching), published by default once NVENC answers (E3). Its user
 // client's class is named AppleAVE2UserClient, the client class of iPad7,1's own encoder (AppleAVE2Driver, not loaded
@@ -11,9 +11,10 @@
 //
 // Model (the TegraNVDEC model, for an encoder):
 //   * NVENC sits behind the MC SMMU in an address space of its own. A buffer is any RAM pages, mapped into that space
-//     when allocated; user space maps it too (IOConnectMapMemory64 with type = handle, cacheable) and never sees an
-//     address. Every address method is a relocation (handle + offset) the kernel resolves and bounds-checks against
-//     what the firmware may touch there.
+//     when allocated and into the allocating task by BufferAlloc itself (cacheable; the reply gives the address), as
+//     IOSurface maps its surfaces: 24B119's videocodecd sandbox denies io_connect_map_memory_into_task (KERN_DENIED,
+//     its kobject MIG filter). User space never sees an NVENC address: every address method is a relocation (handle +
+//     offset) the kernel resolves and bounds-checks against what the firmware may touch there.
 //   * The kernel builds the host1x stream itself: only whitelisted NVENC methods, written through the engine's THI
 //     METHOD0/METHOD1 pair, then SET_IN_DRV_PIC_SETUP (a kernel-only copy of the checked setup) and EXECUTE, then an
 //     OP_DONE syncpoint increment. The address methods of features the checker keeps off (CEA hints, colocated
@@ -30,7 +31,7 @@
 #define TEGRA_NVENC_ABI_H
 #include <stdint.h>
 
-#define TEGRA_NVENC_ABI_VERSION  2
+#define TEGRA_NVENC_ABI_VERSION  3
 #define TEGRA_NVENC_OPEN_TYPE    0x4e45       // 'NE'
 #define TEGRA_NVENC_TUNNEL_MAGIC 0x4e45544eu  // 'NETN'
 #define TEGRA_NVENC_TUNNEL_PROBE 0xffffffffu
@@ -84,8 +85,9 @@ typedef struct {
 
 typedef struct {
     uint32_t handle, reserved;
-    uint64_t size;
-} TegraNVENCBufferReply;  // size rounded to 64 KiB
+    uint64_t size;     // rounded to 64 KiB
+    uint64_t address;  // the buffer in the calling task, until BufferFree or the connection closes
+} TegraNVENCBufferReply;
 
 typedef struct {
     uint32_t handle, reserved;

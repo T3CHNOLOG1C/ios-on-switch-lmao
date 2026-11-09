@@ -301,9 +301,9 @@ int main(void)
     const void *keys[] = {CFSTR("CMClassImplementationID")}, *values[] = {CFSTR("com.brunostjohn.switch.avd-host")};
     CFDictionaryRef info =
         CFDictionaryCreate(NULL, keys, values, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-    const OSStatus registered = VTRegisterVideoDecoderWithInfo(kCMVideoCodecType_H264, info, createInstance) ||
-                                VTRegisterVideoDecoderWithInfo(kCMVideoCodecType_VP9, info, createInstance) ||
-                                VTRegisterVideoDecoderWithInfo(kCMVideoCodecType_HEVC, info, createInstance);
+    const OSStatus registered = VTRegisterVideoDecoderWithInfo(kCMVideoCodecType_H264, info, avd_create_instance) ||
+                                VTRegisterVideoDecoderWithInfo(kCMVideoCodecType_VP9, info, avd_create_instance) ||
+                                VTRegisterVideoDecoderWithInfo(kCMVideoCodecType_HEVC, info, avd_create_instance);
     CFRelease(info);
     if (registered) {
         printf("FAIL avd: VTRegisterVideoDecoderWithInfo %d\n", (int)registered);
