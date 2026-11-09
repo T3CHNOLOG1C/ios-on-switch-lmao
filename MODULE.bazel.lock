@@ -273,7 +273,7 @@
     },
     "//install:release.bzl%release": {
       "general": {
-        "bzlTransitiveDigest": "Fsg/zRwVeDpsczoS70oDG17W7qaMGKG6jpMNER6Eqzw=",
+        "bzlTransitiveDigest": "Q0neAElnCpE8nde9WJTV/CnjuxWw/3mLKpAjzO7Qcg0=",
         "usagesDigest": "eioxB1BtdJzgdn8XhKfItJ+zF9eHcRP4l2KYHH1Iem8=",
         "recordedInputs": [],
         "generatedRepoSpecs": {

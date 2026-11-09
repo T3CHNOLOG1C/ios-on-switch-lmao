@@ -15,13 +15,15 @@ def _kernel_prelink_fileset_impl(ctx):
     out = ctx.actions.declare_file(ctx.attr.out)
     report = ctx.actions.declare_file(stem + ".json")
     names = ctx.actions.declare_file(stem + ".names.json")
-    kernel = ctx.attr.kernel[KernelObjectsInfo].objects[0]
+    if (ctx.attr.kernel == None) == (ctx.file.kernel_file == None):
+        fail("exactly one of kernel and kernel_file")
+    kernel = ctx.file.kernel_file or ctx.attr.kernel[KernelObjectsInfo].objects[0]
     args = ctx.actions.args()
     args.add("--kernel", kernel)
     args.add("--kernelcache", ctx.file.kernelcache)
     args.add("--kernelcache-17", ctx.file.kernelcache_17)
-    args.add("--arm64e", ctx.executable._arm64e)
-    args.add("--ipsw", ctx.executable._ipsw)
+    args.add("--arm64e", ctx.executable.arm64e)
+    args.add("--ipsw", ctx.executable.ipsw)
     args.add("--symbolsets", ctx.file.symbolsets)
     xnu_signatures = [f for f in ctx.files.signatures if f.basename == "xnu.json"]
     if len(xnu_signatures) != 1:
@@ -35,9 +37,10 @@ def _kernel_prelink_fileset_impl(ctx):
         executable = ctx.executable._prelink,
         arguments = [args],
         inputs = [kernel, ctx.file.kernelcache, ctx.file.kernelcache_17, ctx.file.symbolsets] + ctx.files.signatures,
-        tools = [ctx.executable._arm64e, ctx.executable._ipsw],
+        tools = [ctx.executable.arm64e, ctx.executable.ipsw],
         outputs = [out, report, names],
-        env = {"DEVELOPER_DIR": DEVELOPER_DIR},
+        # The release's image build has no pinned Xcode: xcrun then finds nm and c++filt where xcode-select points.
+        env = {"DEVELOPER_DIR": DEVELOPER_DIR} if ctx.attr.xcode else {},
         mnemonic = "KernelPrelinkFileset",
         progress_message = "Prelinking the fileset kernelcache's kexts into %{label}",
         execution_requirements = XCODE_EXECUTION,
@@ -48,15 +51,17 @@ kernel_prelink_fileset = rule(
     implementation = _kernel_prelink_fileset_impl,
     doc = "Our kernel with a fileset kernelcache's kexts prelinked (out); its report (.json) and kernel names (.names.json) in the report output group.",
     attrs = {
-        "kernel": attr.label(mandatory = True, providers = [KernelObjectsInfo], doc = "the unprelinked kernel"),
+        "kernel": attr.label(providers = [KernelObjectsInfo], doc = "the unprelinked kernel, built here"),
+        "kernel_file": attr.label(allow_single_file = True, doc = "or the unprelinked kernel as a file (the release's)"),
+        "xcode": attr.bool(default = True, doc = "run xcrun under the pinned Xcode; False for a Mac without it"),
+        "arm64e": attr.label(default = "//translate/arm64e", executable = True, cfg = "exec"),
+        "ipsw": attr.label(default = "//translate/arm64e:ipsw_cli", executable = True, allow_single_file = True, cfg = "exec"),
         "kernelcache": attr.label(default = "//ipsw:kernelcache", allow_single_file = True),
         "kernelcache_17": attr.label(default = "//ipsw:kernelcache_21H461", allow_single_file = True),
         "symbolsets": attr.label(mandatory = True, allow_single_file = [".plist"], doc = "the kernel's symbolsets.plist"),
         "signatures": attr.label(mandatory = True, allow_files = True, doc = "ipsw's signatures of the kernelcache's Darwin version (<version>/xnu.json and kexts/)"),
         "out": attr.string(mandatory = True, doc = "the prelinked kernel's path in the package, ending in .macho"),
         "slide": attr.string(mandatory = True, doc = "the kexts' slide the bindings assume (kits/SwitchABI's tables)"),
-        "_arm64e": attr.label(default = "//translate/arm64e", executable = True, cfg = "exec"),
-        "_ipsw": attr.label(default = "@ipsw_cli//:ipsw", executable = True, allow_single_file = True, cfg = "exec"),
         "_prelink": attr.label(default = "//translate/arm64e:prelink", executable = True, cfg = "exec"),
     },
 )

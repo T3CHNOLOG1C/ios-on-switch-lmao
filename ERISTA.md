@@ -34,8 +34,16 @@ Not Erista-specific: the image builder needs macOS APFS tools.
 Upstream's workflows run on GitHub's hosted `xcode-27` image, so a push to `erista` runs CI and a tag equal to
 `MODULE.bazel`'s version (`0.1.0-erista.1`) publishes a release of this fork; `install/release.bzl` points at it.
 On a Mac, `bazelisk run //:image -- --//install:prebuilt=release ...` then needs no Xcode. An Intel Mac gets
-`host-tools-darwin-x86_64.tar` (universal `apfs_tool` and `lz4`, macOS 12 up) but no shader toolset, so the shader
-seed still has to come from an Apple silicon Mac.
+`host-tools-darwin-x86_64.tar` (universal `apfs_tool`, `lz4` and the `arm64e` translator, macOS 12 up) but no
+shader toolset, so the shader seed still has to come from an Apple silicon Mac.
+
+The release carries image inputs for both IPSW kinds (`image-inputs-21H461.tar`, `image-inputs-24B119.tar`);
+`@switch_release` selects by `--//ipsw:kind`, so `--config=ios27` works from the release too. iOS 27's kext
+prelink then runs on the Mac with the release's translator, blacktop/ipsw for the Mac's CPU and `xcrun nm` /
+`c++filt` from whatever Xcode or Command Line Tools `xcode-select` names; the ptrauth string discriminators it
+needs are computed in Python (`translate/arm64e/xnu/prelink26/ptrauth_disc.py`, checked against clang by
+`ptrauth_disc_test` on CI) instead of by compiling and running arm64e code. The pretranslation of the OS and the
+cryptexes runs the same prebuilt translator; on a 2014 Intel Mac expect hours.
 
 ### The shader toolset on an Intel Mac
 

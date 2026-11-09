@@ -234,6 +234,14 @@ http_archive(
     urls = ["https://github.com/blacktop/ipsw/releases/download/v3.1.741/ipsw_3.1.741_macOS_arm64.tar.gz"],
 )
 
+# The same for an Intel Mac composing the iOS 27 image from the release (//translate/arm64e:ipsw_cli picks by CPU).
+http_archive(
+    name = "ipsw_cli_x86_64",
+    build_file_content = 'exports_files(["ipsw"])\n',
+    sha256 = "6f46730c3924ccce1dd5300d45ca5e24cb69651ee17c53290302510f23f29975",
+    urls = ["https://github.com/blacktop/ipsw/releases/download/v3.1.741/ipsw_3.1.741_macOS_x86_64.tar.gz"],
+)
+
 # blacktop/symbolicator (MIT): the kernel function signatures (strings, callers) of each Darwin version, which ipsw
 # names the stripped kernelcache's functions with for the fileset prelink (translate/arm64e/xnu/prelink26).
 http_archive(

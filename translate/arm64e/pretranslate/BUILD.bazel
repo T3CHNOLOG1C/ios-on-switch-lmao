@@ -46,7 +46,7 @@ py_test(
     }),
     driver = ":translate_tree",
     role = role,
-    tool = "//translate/arm64e",
+    tool = "//translate/arm64e:arm64e_tool",
 ) for role, trustcaches in {
     "os": ["@ipsw//:static_trust_cache"],
     "system_cryptex": [

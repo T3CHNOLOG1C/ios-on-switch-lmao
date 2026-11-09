@@ -17,6 +17,7 @@ load("@rules_python//python:py_binary.bzl", "py_binary")
 load("@rules_python//python:py_library.bzl", "py_library")
 load("@rules_python//python:py_test.bzl", "py_test")
 load("//bazel/lint:defs.bzl", "lint_files")
+load("//kernel/rules:inputs.bzl", "tool_output")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -108,6 +109,61 @@ cc_binary(
     ]),
     copts = COPTS,
     deps = [":macho"],
+)
+
+# What the image build's prelink and pretranslation run: this build's, or the release's prebuilt one on a Mac
+# without Xcode (--//install:prebuilt=release).
+alias(
+    name = "arm64e_tool",
+    actual = select({
+        "//install:from_release": "@switch_release//:arm64e",
+        "//conditions:default": ":arm64e",
+    }),
+)
+
+# The same tool as a universal binary for the Intel Macs' host-tools asset (release/BUILD.bazel), down to macOS 12.
+tool_output(
+    name = "arm64e_universal",
+    srcs = glob([
+        "a64x/*.c",
+        "a64x/*.h",
+        "macho/*.c",
+        "macho/*.h",
+        "tools/*.c",
+        "tools/*.h",
+    ]),
+    outs = ["universal/arm64e"],
+    args = [
+        "--xcode-env={xcode_env}",
+        "--out={out}",
+        "--flag=-arch",
+        "--flag=x86_64",
+        "--flag=-mmacosx-version-min=12.0",
+    ] + ["--flag=" + flag for flag in COPTS] + [
+        "$(execpath {})".format(f)
+        for f in ["a64x/a64x_classify.c", "a64x/a64x_image.c", "a64x/a64x_refs.c", "a64x/a64x_rewrite.c"] +
+                 MACHO_SRCS + glob(["tools/*.c"])
+    ],
+    message = "Building the arm64e translator (universal)",
+    tool = "host_c_binary.py",
+)
+
+# blacktop/ipsw for the Mac running the iOS 27 prelink: the release's arm64 or x86_64 build, by this Mac's CPU.
+alias(
+    name = "ipsw_cli",
+    actual = select({
+        "@platforms//cpu:x86_64": "@ipsw_cli_x86_64//:ipsw",
+        "//conditions:default": "@ipsw_cli//:ipsw",
+    }),
+)
+
+# The pure-Python string discriminators against clang's builtin, compiled for arm64e and run here.
+py_test(
+    name = "ptrauth_disc_test",
+    size = "small",
+    srcs = ["xnu/prelink26/ptrauth_disc_test.py"],
+    deps = [":prelink26"],
+    tags = ["requires-darwin"],
 )
 
 # The classifier and translated words against LLVM's disassembler (needs llvm-mc: LLVM_MC=...).

@@ -49,16 +49,25 @@ jobs:
             exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
-      - run: bazel build --config=release //:boot //:gpu //release:assets
+      # Once per IPSW kind: the image inputs differ (kernel, loader, overlay, GPU trust), the rest is the same build.
+      - run: bazel build --config=release --config=ios17 //:boot //:gpu //release:assets
+      - run: bazel build --config=release --config=ios27 //:boot //:gpu //release:assets
       - name: Name the assets for the release
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           dist="$RUNNER_TEMP/dist"
           mkdir "$dist"
-          files="$(bazel cquery --config=release --output=files //release:assets)"
-          for f in $files; do
-            cp "$f" "$dist/ios-on-switch-lmao-$VERSION-$(basename "$f")"
+          for kind in ios17:21H461 ios27:24B119; do
+            config="${kind%%:*}" build="${kind##*:}"
+            files="$(bazel cquery --config=release --config="$config" --output=files //release:assets)"
+            for f in $files; do
+              name="$(basename "$f")"
+              case "$name" in
+                image-inputs.tar) name="image-inputs-$build.tar" ;;
+              esac
+              cp "$f" "$dist/ios-on-switch-lmao-$VERSION-$name"
+            done
           done
           cd "$dist"
           shasum -a 256 -- * > SHA256SUMS
@@ -114,15 +123,20 @@ jobs:
         env:
           ASSETS: ${{ runner.temp }}/assets
         run: |
-          flags=(--repo_env=SWITCH_RELEASE_DIR="$ASSETS" --//install:prebuilt=release --output=text --include_commandline=false)
-          graph='deps(//:image_dry_run)'
-          xcode="$(bazel aquery "${flags[@]}" "inputs('.*external/(\+xcode_host\+xcode|apple_support\+|[^/]*local_config_[^/]*cc[^/]*)/.*', $graph)")"
-          compiles="$(bazel aquery "${flags[@]}" "mnemonic('(Cpp|Objc|Swift|Rustc).*', $graph)")"
-          found="$(printf '%s\n%s\n' "$xcode" "$compiles")"
-          if grep -q '^action ' <<<"$found"; then
-            grep -E "^action |^  (Mnemonic|Target):" <<<"$found"
-            echo "::error:://:image_dry_run's graph has actions that need Xcode or a compiler."
-            exit 1
-          fi
+          for config in ios17 ios27; do
+            flags=(--repo_env=SWITCH_RELEASE_DIR="$ASSETS" --//install:prebuilt=release --config="$config" --output=text --include_commandline=false)
+            graph='deps(//:image_dry_run)'
+            xcode="$(bazel aquery "${flags[@]}" "inputs('.*external/(\+xcode_host\+xcode|apple_support\+|[^/]*local_config_[^/]*cc[^/]*)/.*', $graph)")"
+            compiles="$(bazel aquery "${flags[@]}" "mnemonic('(Cpp|Objc|Swift|Rustc).*', $graph)")"
+            found="$(printf '%s\n%s\n' "$xcode" "$compiles")"
+            if grep -q '^action ' <<<"$found"; then
+              grep -E "^action |^  (Mnemonic|Target):" <<<"$found"
+              echo "::error:://:image_dry_run's graph ($config) has actions that need Xcode or a compiler."
+              exit 1
+            fi
+          done
       - name: Dry-run the image builder on this build's assets
-        run: bazel run --repo_env=SWITCH_RELEASE_DIR="$RUNNER_TEMP/assets" --//install:prebuilt=release //:image_dry_run
+        run: |
+          for config in ios17 ios27; do
+            bazel run --repo_env=SWITCH_RELEASE_DIR="$RUNNER_TEMP/assets" --//install:prebuilt=release --config="$config" //:image_dry_run
+          done

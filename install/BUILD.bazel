@@ -15,6 +15,7 @@ load("//bazel/lint:defs.bzl", "lint_files")
 load("//boot:overlay.bzl", "OVERLAY_BINARIES")
 load(":defs.bzl", "fake_boot_package", "image_inputs", "install_artifacts", "install_spec", "ipsw_pins", "prelink_options", "release_prelink", "release_tree", "test_member")
 load(":translated.bzl", "pretranslated_delta", "translated_cryptex")
+load("//kernel/rules:prelink_fileset.bzl", "kernel_prelink_fileset")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -144,11 +145,28 @@ release_prelink(
     tags = ["manual"],
 )
 
+# iOS 27's: //kernel:kernel_12377's prelink on the release's unprelinked kernel, with the release's translator and
+# blacktop/ipsw for this Mac's CPU, under whatever Xcode or Command Line Tools xcode-select names (nm, c++filt).
+kernel_prelink_fileset(
+    name = "release_kernel_12377",
+    out = "release_kernel_12377/kernel.macho",
+    arm64e = "@switch_release//:arm64e",
+    kernel_file = "@switch_release//:kernel",
+    signatures = "@symbolicator//:kernel_27_2",
+    slide = "-0x4088000",
+    symbolsets = "//kernel/xnu-12377.121.6/config:symbolsets_plist",
+    tags = ["manual"],
+    xcode = False,
+)
+
 alias(
     name = "release_kernel",
     actual = select(
-        {"//kernel:xnu_10063_141_1": ":release_kernel_10063"},
-        no_match_error = "the release carries iOS 17's kernel only: build this iOS's with --//install:prebuilt=local",
+        {
+            "//kernel:xnu_10063_141_1": ":release_kernel_10063",
+            "//kernel:xnu_12377_121_6": ":release_kernel_12377",
+        },
+        no_match_error = "the release carries no kernel for this iOS: build it with --//install:prebuilt=local",
     ),
     tags = ["manual"],
 )
@@ -346,7 +364,10 @@ py_binary(
 # bytes; release/ipsw_free.bzl DECLASSIFIED).
 prelink_options(
     name = "kernel_inputs",
-    kernel = "//kernel:kernel_unprelinked",
+    kernel = select({
+        "//kernel:xnu_12377_121_6": "//kernel:kernel_unprelinked_12377",
+        "//conditions:default": "//kernel:kernel_unprelinked",
+    }),
     tags = ["manual"],
 )
 
@@ -369,17 +390,19 @@ release_tree(
         ":shader_tools": "shader",
         "//boot/installer:apfs_tool": "apfs_tool",
         "//tools:lz4": "lz4",
+        "//translate/arm64e": "arm64e",
     },
     tags = ["manual"],
 )
 
-# For Intel Macs (ios-on-switch-lmao-<version>-host-tools-darwin-x86_64.tar): universal apfs_tool and lz4, no shader
-# toolset (arm64 only so far).
+# For Intel Macs (ios-on-switch-lmao-<version>-host-tools-darwin-x86_64.tar): universal apfs_tool, lz4 and the arm64e
+# translator, no shader toolset (arm64 only so far).
 release_tree(
     name = "host_tools_x86_64",
     files = {
         "//boot/installer:apfs_tool_universal": "apfs_tool",
         "//tools:lz4_universal": "lz4",
+        "//translate/arm64e:arm64e_universal": "arm64e",
     },
     tags = ["manual"],
 )
