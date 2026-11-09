@@ -14,15 +14,19 @@ final class CAGoldensWriter: XCTestCase {
         let build = try XCTUnwrap(environment["CA_BUILD"])
         let states = try String(contentsOfFile: runfiles + XCTUnwrap(environment["CA_STATES"]), encoding: .utf8)
         let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
-        let quartzCore = try device.makeLibrary(URL: URL(fileURLWithPath: runfiles + XCTUnwrap(environment["CA_LIBRARY"])))
+        let quartzCore = try device.makeLibrary(
+            URL: URL(fileURLWithPath: runfiles + XCTUnwrap(environment["CA_LIBRARY"])))
         let gpu = GPU(
             device: device, queue: try XCTUnwrap(device.makeCommandQueue()),
             library: try device.makeLibrary(source: "kernel void unused() {}", options: nil))
         var lines = [
             "# QuartzCore \(build) on \(device.name), \(CAStateSweep.width)x\(CAStateSweep.height), 8x8 block means"
         ]
+        var written = Set<String>()
         for line in CAStateSweep.states(states, everyState: true) {
-            guard let drawn = try? await CAStateSweep.draw(line, library: quartzCore, gpu: gpu) else { continue }
+            guard written.insert(CAStateSweep.key(line)).inserted,
+                let drawn = try? await CAStateSweep.draw(line, library: quartzCore, gpu: gpu)
+            else { continue }
             let colors = line.colors.sorted { $0.index < $1.index }
             let signatures = zip(colors, drawn.attachments).map { color, bytes in
                 (
