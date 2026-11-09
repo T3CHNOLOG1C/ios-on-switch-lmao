@@ -25,8 +25,19 @@ DRAM_SIZE = 4 << 30
 TIMEBASE_HZ = 19_200_000
 GICD_BASE, GICD_SIZE = 0x50041000, 0x1000
 GICC_BASE, GICC_SIZE = 0x50042000, 0x100
-MODEL = 'Nintendo Switch (OLED model)'
-COMPATIBLE = ('nvidia,fric', 'nintendo,aula', 'nintendo,nx', 'nvidia,tegra210b01')
+class Board(NamedTuple):
+    model: str
+    compatible: tuple[str, ...]  # the board first: switch_idle_board (osfmk/arm64/cpu.c) matches nintendo,<board>
+    soc: str  # /arm-io device_type
+
+
+# switchroot's L4T device trees name the boards: fric/aula is the OLED (T210B01), icosa the 2017 Switch (T210).
+BOARDS = {
+    'aula': Board('Nintendo Switch (OLED model)', ('nvidia,fric', 'nintendo,aula', 'nintendo,nx', 'nvidia,tegra210b01'), 'nvidia,tegra210b01'),
+    'icosa': Board('Nintendo Switch', ('nintendo,icosa', 'nintendo,nx', 'nvidia,tegra210'), 'nvidia,tegra210'),
+}
+MODEL = BOARDS['aula'].model
+COMPATIBLE = BOARDS['aula'].compatible
 ROOT_VOLUME_UUID = '04769D26-2CA0-4825-B443-E2E5F88300F2'
 
 
@@ -89,10 +100,13 @@ class Profile(NamedTuple):
     root_boot: bool = False
     full_ram: bool = False
     native_smp: bool = False
+    board: str = 'aula'
 
 
 def _check_profile(profile: Profile) -> None:
-    userspace_fixture, storage_probe, root_boot, full_ram, native_smp = profile
+    userspace_fixture, storage_probe, root_boot, full_ram, native_smp, board = profile
+    if board not in BOARDS:
+        raise ValueError(f'board must be one of {sorted(BOARDS)}')
     if type(userspace_fixture) is not bool:
         raise ValueError('userspace_fixture must be a boolean')
     if type(root_boot) is not bool or (root_boot and userspace_fixture):
@@ -110,7 +124,7 @@ def _check_profile(profile: Profile) -> None:
 
 
 def _bootstrap(profile: Profile) -> list[tuple[str, bytes]]:
-    userspace_fixture, storage_probe, root_boot, full_ram, _ = profile
+    userspace_fixture, storage_probe, root_boot, full_ram, _, _ = profile
     bootstrap = (
         [
             ('osenvironment', b'main\0' if root_boot else b'ramdisk\0'),
@@ -176,12 +190,13 @@ def generate_adt(seed: bytes | None, profile: Profile) -> bytes:
     if not isinstance(seed, bytes) or len(seed) != SEED_BYTES:
         raise ValueError(f'random seed must be exactly {SEED_BYTES} bytes')
     _check_profile(profile)
-    userspace_fixture, _, root_boot, full_ram, native_smp = profile
+    userspace_fixture, _, root_boot, full_ram, native_smp, board_name = profile
+    board = BOARDS[board_name]
     return node(
         'device-tree',
         [
-            ('model', MODEL.encode('ascii') + b'\0'),
-            ('compatible', b'\0'.join(s.encode('ascii') for s in COMPATIBLE) + b'\0'),
+            ('model', board.model.encode('ascii') + b'\0'),
+            ('compatible', b'\0'.join(s.encode('ascii') for s in board.compatible) + b'\0'),
         ],
         [
             node(
@@ -219,7 +234,7 @@ def generate_adt(seed: bytes | None, profile: Profile) -> bytes:
                 [
                     node(
                         'product',
-                        [('product-name', MODEL.encode('ascii') + b'\0'), ('model', MODEL.encode('ascii') + b'\0')],
+                        [('product-name', board.model.encode('ascii') + b'\0'), ('model', board.model.encode('ascii') + b'\0')],
                     )
                 ]
                 if userspace_fixture or root_boot
@@ -228,7 +243,7 @@ def generate_adt(seed: bytes | None, profile: Profile) -> bytes:
             node(
                 'arm-io',
                 [
-                    ('device_type', b'nvidia,tegra210b01\0'),
+                    ('device_type', board.soc.encode('ascii') + b'\0'),
                     # Exactly the contiguous GICD/GICC span. The driver adds bus base
                     # to these relative reg offsets; no wider Tegra bus is invented.
                     ('ranges', struct.pack('<3Q', 0, GICD_BASE, GICC_BASE + GICC_SIZE - GICD_BASE)),

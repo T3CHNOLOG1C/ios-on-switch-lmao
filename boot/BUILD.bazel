@@ -89,9 +89,12 @@ tool_output(
     args = [
         "41d4ed8aee6621528a6a355e703603425eef27f7a8df3c8f3cf4460c943df40e4c8b6d7631620a39969418a79e0cb0817cd0d525a13134285ee356ac8871a940bf7c5ca763a3b3b59a6396a4a5a1a65eb6be4e7192b809aa9472e695a17d5e6492afe92ba9f0d4c9d9831c3c7e4de329dc1d45cc8860982c20d89f67a6bc9863f4d1e123b269c92f815d8dc4c3cd4465fd94347865f56697cabaace0f626ee9eff9073be0c618df269f828ab451859f0812764250cb8cfcf352750e55b3b673a72be976026a8d60fb7182acd76062b23e21bd37f0bbe69e432da1b811cb23fc49a56466fb359c24c2d1cc5bcd9c0fc9c93d1f8f00bac4d25095a25181dde4696",
         "{out}",
-    ],
+    ] + select({
+        "//bazel:board_icosa": ["icosa"],
+        "//conditions:default": ["aula"],
+    }),
     binary = "//tools/package:adt",
-    message = "Generating the native OLED ADT",
+    message = "Generating the native board ADT",
     xcode = False,
 )
 

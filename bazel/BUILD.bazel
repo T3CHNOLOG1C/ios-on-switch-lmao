@@ -37,3 +37,25 @@ profile_tests(
     objcxx_source = "//drivers/TegraGM20BMetal:TegraGM20BMetalPlugin.mm",
     source = "//drivers/SwitchBluetooth:BlueTool/BlueTool.c",
 )
+
+# The console the image is for. aula (default) is the OLED, T210B01; icosa the original 2017 Switch, T210 (Erista).
+# It picks the board ADT's identity, U-Boot's board check and the emulator's fuses (--config=erista in .bazelrc).
+string_flag(
+    name = "board",
+    build_setting_default = "aula",
+    scope = "target",
+    values = [
+        "aula",
+        "icosa",
+    ],
+)
+
+config_setting(
+    name = "board_aula",
+    flag_values = {":board": "aula"},
+)
+
+config_setting(
+    name = "board_icosa",
+    flag_values = {":board": "icosa"},
+)

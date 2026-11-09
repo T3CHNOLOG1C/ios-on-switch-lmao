@@ -133,7 +133,8 @@ switch_idle_board(void)
 	const void *property = NULL;
 	unsigned int size = 0;
 	static const char model[] = "NintendoSwitchOLED";
-	static const char compatible[] = "nintendo,aula";
+	/* the boards' own compatible (tools/package/native_oled_adt.py BOARDS): the OLED and the 2017 Switch */
+	static const char *const compatibles[] = { "nintendo,aula", "nintendo,icosa" };
 	if (SecureDTLookupEntry(NULL, "/", &entry) != kSuccess) {
 		return false;
 	}
@@ -155,9 +156,11 @@ switch_idle_board(void)
 		if (end == size) {
 			return false;
 		}
-		if (end - at == sizeof(compatible) - 1 &&
-		    !bcmp(bytes + at, compatible, sizeof(compatible) - 1)) {
-			matched = true;
+		for (unsigned int i = 0; i < sizeof(compatibles) / sizeof(compatibles[0]); i++) {
+			size_t len = strlen(compatibles[i]);
+			if (end - at == len && !bcmp(bytes + at, compatibles[i], len)) {
+				matched = true;
+			}
 		}
 		at = end + 1;
 	}

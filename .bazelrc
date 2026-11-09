@@ -110,6 +110,8 @@ build:dev --config=debug
 # xnu-10063, iPad7,1), ios27 is iPadOS 27.2 on xnu-12377 for iPad12,1.
 common:ios17 --//ipsw:kind=21H461
 common:ios27 --//ipsw:kind=24B119
+# the original (Erista, T210) Switch instead of the OLED
+common:erista --//bazel:board=icosa
 # agent: what an agent worktree adds on the shared machine (16 cores, many agents at once): fewer parallel actions.
 build:agent --jobs=4
 build:agent --local_resources=cpu=4

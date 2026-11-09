@@ -16,7 +16,8 @@ else
 fi
 base 0
 setenv handoff_status READY
-if test "${t210b01}" != "1" -o "${sku}" != "3"; then
+# The test is the build's board (bazel --//bazel:board, tools/package/boot_script.py BOARD_TESTS): hekate's sku 3 on a T210B01 for the OLED, sku 0 on a T210 for Erista.
+if @BOARD_TEST@; then
     setenv handoff_status WRONG_BOARD
 fi
 

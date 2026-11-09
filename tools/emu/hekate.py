@@ -256,10 +256,14 @@ def bl33_env(ini: Path, entry_index: int = 1) -> bytes:
 BL33_ENV_BLOB = BL33_ENV - 0x1000
 
 
-def fuse_page() -> bytes:
-    """Return the fuse cache as an OLED (Aula, T210B01) reads: ODM4 hardware type 4, ODM28's retail PMIC bit, an ID."""
+def fuse_page(board: str = 'aula') -> bytes:
+    """Return the fuse cache as the board reads it: ODM4's hardware type (4 aula, 0 icosa), ODM28's retail PMIC bit
+    (B01 only), an ID."""
     page = bytearray(0x1000)
-    struct.pack_into('<I', page, 0x9D8, 4 << 16)
-    struct.pack_into('<I', page, 0xA40, 1)
+    if board == 'aula':
+        struct.pack_into('<I', page, 0x9D8, 4 << 16)
+        struct.pack_into('<I', page, 0xA40, 1)
+    elif board != 'icosa':
+        raise ValueError(f'unknown board {board}')
     struct.pack_into('<7I', page, 0xA00, 0x11111111, 0x22222222, 0x33333333, 0x44444444, 0x55555555, 0x66, 0x77)
     return bytes(page)

@@ -17,7 +17,14 @@ from loader_abi import BOOT_ARGS_BYTES, BOOT_ARGS_PAGE, DTB_SLOT, EXPORTER_SLOT,
 from uimage import Header, legacy_image
 
 
-def boot_script(text: str, constants: dict, dtb_bytes: int) -> str:
+# U-Boot's board test per board (hekate's sku: 0 icosa, 1 iowa, 2 hoag, 3 aula; t210b01 is set only on a T210B01)
+BOARD_TESTS = {
+    'aula': 'test "${t210b01}" != "1" -o "${sku}" != "3"',
+    'icosa': 'test "${t210b01}" = "1" -o "${sku}" != "0"',
+}
+
+
+def boot_script(text: str, constants: dict, dtb_bytes: int, board: str = 'aula') -> str:
     """Fill every @NAME@ of the template.
 
     The values: the staged window's header and trailer words (boot/loader/stage.h), the slots and the bootargs.txt
@@ -42,6 +49,9 @@ def boot_script(text: str, constants: dict, dtb_bytes: int) -> str:
         if f'@{name}@' not in text:
             raise SystemExit(f'boot script template has no @{name}@')
         text = text.replace(f'@{name}@', hex(value))
+    if '@BOARD_TEST@' not in text:
+        raise SystemExit('boot script template has no @BOARD_TEST@')
+    text = text.replace('@BOARD_TEST@', BOARD_TESTS[board])
     if re.search(r'@[A-Z_0-9]+@', text):
         raise SystemExit('boot script template has a value this tool does not fill')
     return text
@@ -57,8 +67,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     for name in ('template', 'constants', 'dtb', 'text', 'image'):
         parser.add_argument('--' + name, required=True, type=Path)
+    parser.add_argument('--board', choices=sorted(BOARD_TESTS), default='aula')
     args = parser.parse_args()
-    script = boot_script(args.template.read_text(), json.loads(args.constants.read_text()), args.dtb.stat().st_size)
+    script = boot_script(args.template.read_text(), json.loads(args.constants.read_text()), args.dtb.stat().st_size, args.board)
     args.text.write_text(script)
     args.image.write_bytes(script_image(script))
 

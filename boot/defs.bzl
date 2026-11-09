@@ -318,6 +318,7 @@ def _boot_package_impl(ctx):
     args.add("--template", ctx.file.script_template)
     args.add("--constants", constants)
     args.add("--dtb", ctx.file.dtb)
+    args.add("--board", ctx.attr._board[BuildSettingInfo].value)
     args.add("--text", script_text)
     args.add("--image", script)
     _run(ctx, ctx.executable._boot_script, [args], [ctx.file.script_template, constants, ctx.file.dtb], [script_text, script], "BootScript", "Writing U-Boot's boot script")
@@ -398,6 +399,7 @@ boot_package = rule(
         "kernel": attr.label(mandatory = True, allow_single_file = True),
         "adt": attr.label(mandatory = True, allow_single_file = True, doc = "the board ADT (//boot:adt)"),
         "_apple_adt": attr.label(default = "//ipsw:device_tree", allow_single_file = True),
+        "_board": attr.label(default = "//bazel:board", providers = [BuildSettingInfo]),
         "static_trust": attr.label(mandatory = True, allow_single_file = True, doc = "the StaticTrustCache module"),
         "app_trust": attr.label(mandatory = True, allow_single_file = True, doc = "the App cryptex's module"),
         "system_trust": attr.label(mandatory = True, allow_single_file = True, doc = "the System cryptex's module"),
