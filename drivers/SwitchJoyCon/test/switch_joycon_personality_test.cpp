@@ -6,66 +6,20 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include <sstream>
 #include <string>
-#include <vector>
 
 #include "bazel/testing/source_text.h"
 
 namespace {
 
+using switch_ios::test::Configured;
 using switch_ios::test::SourceText;
 using testing::HasSubstr;
 using testing::Not;
 
-// The lines the compiler sees with XNU_12377_121_6 set or not; other conditionals are kept whole.
-std::string Preprocessed(const std::string &source, bool xnu12377)
-{
-    enum Branch {
-        kOther,
-        kTaken,
-        kSkipped
-    };
-
-    std::vector<Branch> open;
-    std::istringstream lines(source);
-    std::string out;
-    const auto skipping = [&] {
-        for (const Branch branch : open)
-            if (branch == kSkipped)
-                return true;
-        return false;
-    };
-    for (std::string line; std::getline(lines, line);) {
-        if (line.rfind("#if !XNU_12377_121_6", 0) == 0) {
-            open.push_back(xnu12377 ? kSkipped : kTaken);
-            continue;
-        }
-        if (line.rfind("#if XNU_12377_121_6", 0) == 0) {
-            open.push_back(xnu12377 ? kTaken : kSkipped);
-            continue;
-        }
-        if (line.rfind("#if", 0) == 0) {
-            open.push_back(kOther);
-        } else if (line.rfind("#else", 0) == 0 && !open.empty() && open.back() != kOther) {
-            open.back() = open.back() == kTaken ? kSkipped : kTaken;
-            continue;
-        } else if (line.rfind("#endif", 0) == 0 && !open.empty()) {
-            const bool ours = open.back() != kOther;
-            open.pop_back();
-            if (ours)
-                continue;
-        }
-        if (!skipping())
-            out += line + "\n";
-    }
-    EXPECT_TRUE(open.empty()) << "unbalanced conditionals";
-    return out;
-}
-
 TEST(SwitchJoyConPersonalities, Ios17CarriesTheNintendoEntries)
 {
-    const std::string build = Preprocessed(SourceText("../SwitchJoyConHID.cpp"), false);
+    const std::string build = Configured(SourceText("../SwitchJoyConHID.cpp"), "XNU_12377_121_6", false);
     EXPECT_THAT(build, HasSubstr("        addNintendoPersonalities();"));
     EXPECT_THAT(build, HasSubstr("OSString::withCString(\"IOHIDEventDummyService\")"));
     EXPECT_THAT(build, HasSubstr("setProperty(\"HIDServiceSupport\", true);"));
@@ -74,7 +28,7 @@ TEST(SwitchJoyConPersonalities, Ios17CarriesTheNintendoEntries)
 
 TEST(SwitchJoyConPersonalities, Ios27LeavesTheInterfaceToApplesDriver)
 {
-    const std::string build = Preprocessed(SourceText("../SwitchJoyConHID.cpp"), true);
+    const std::string build = Configured(SourceText("../SwitchJoyConHID.cpp"), "XNU_12377_121_6", true);
     EXPECT_THAT(build, Not(HasSubstr("addNintendoPersonalities")));
     EXPECT_THAT(build, Not(HasSubstr("OSString::withCString(\"IOHIDEventDummyService\")")));
     EXPECT_THAT(build, Not(HasSubstr("IOHIDProviderPropertyMerger\")")));
