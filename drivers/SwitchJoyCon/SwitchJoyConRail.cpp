@@ -1417,8 +1417,14 @@ void SwitchJoyConRail::pairingReply(Side &s, const uint8_t *report, size_t lengt
             return;
         }
         // The slot in use names another host (Horizon's address on a console that kept its own), or there is none.
+#if XNU_12377_121_6
+        // Nothing on iOS 27 hands a rail-written key to bluetoothd (BlueTool is sandboxed there), so writing one would
+        // leave the Joy-Con paging with a key the OS never learns. It keeps Horizon's pairing; Settings pairs it.
+        finishPairing(s, false, "no pairing slot names this console (pair it in Settings, Bluetooth)");
+#else
         s.step = kSendHost;
         sendPairStep(s);
+#endif
         return;
     }
     // Steps 1 and 2 echo their request type in the first data byte (deku); for step 3 the ACK is enough.
