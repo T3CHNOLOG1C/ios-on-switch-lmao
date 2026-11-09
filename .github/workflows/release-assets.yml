@@ -95,16 +95,17 @@ jobs:
         with:
           name: release-assets
           path: ${{ runner.temp }}/assets
-      - name: Remove Xcode and the Command Line Tools
+      # The Command Line Tools stay: iOS 27's kext prelink runs their nm and c++filt (ERISTA.md), and a Mac with only
+      # Bazelisk and the CLT is what the image builder is checked against.
+      - name: Remove Xcode
         run: |
           mkdir "$RUNNER_TEMP/xcode"
           for app in /Applications/Xcode*.app; do
             sudo mv "$app" "$RUNNER_TEMP/xcode/"
           done
-          sudo rm -rf /Library/Developer/CommandLineTools
           sudo xcode-select --reset
-          if xcode-select -p; then
-            echo "::error::A developer directory is still selected."
+          if [ "$(xcode-select -p)" != /Library/Developer/CommandLineTools ]; then
+            echo "::error::The developer directory is $(xcode-select -p), not the Command Line Tools."
             exit 1
           fi
       - uses: bazel-contrib/setup-bazel@0.19.1
