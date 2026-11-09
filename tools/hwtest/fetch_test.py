@@ -57,8 +57,20 @@ class Card:
         self.ips(crash / 'chronod-1.ips', '309', 'chronod', BOOT, **frames)
         (self.switch / 'panic-2026-11-08-221030.log').write_text('panic')
         (self.switch / 'panic-2026-11-07-101010.log').write_text('older panic')
+        self.app('A1', 'Real', executable=True)
+        self.app('A2', 'Placeholder', executable=False)
+        states = self.data / 'installd/Library/MobileInstallation/BackedUpState'
+        states.mkdir(parents=True)
+        (states / 'SystemAppInstallState.plist').write_bytes(plistlib.dumps({'com.apple.a': 1, 'com.apple.b': 0}))
         (self.data / 'root/Library/Lockdown/pair_records').mkdir(parents=True)
         (self.data / 'root/Library/Lockdown/pair_records/host.plist').write_bytes(b'')
+
+    def app(self, uuid: str, name: str, executable: bool) -> None:
+        bundle = self.data / 'containers/Bundle/Application' / uuid / f'{name}.app'
+        bundle.mkdir(parents=True)
+        (bundle / 'Info.plist').write_bytes(plistlib.dumps({'CFBundleExecutable': name}))
+        if executable:
+            (bundle / name).write_bytes(b'')
 
     def container(self, uuid: str, identifier: str) -> Path:
         path = self.data / fetch.CONTAINERS / uuid
@@ -89,7 +101,16 @@ class Fetch(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_only_hwtest_containers_are_read(self):
-        self.assertEqual([p.name for p in fetch.containers(self.card.data)], ['AAAA'])
+        found = fetch.containers(self.card.data)
+        self.assertEqual({k: p.name for k, p in found.items()}, {'com.brunostjohn.switch.hwtest': 'AAAA'})
+
+    def test_the_gpu_scenes_files_come_along(self):
+        scene = self.card.reports.parent / 'gpu/gpu.xr_blend'
+        scene.mkdir(parents=True)
+        (scene / 'raw-0-got.png').write_bytes(b'png')
+        fetch.fetch(self.card.data, self.card.switch, self.history, self.root / 'out')
+        copied = self.root / 'out/hwtest-gpu/com.brunostjohn.switch.hwtest/gpu.xr_blend/raw-0-got.png'
+        self.assertEqual(copied.read_bytes(), b'png')
 
     def test_a_report_is_copied_once_with_its_boots_health(self):
         self.card.deployed('0123456789abcdef0123', '2026-11-08T21:50:00+00:00')
@@ -107,6 +128,7 @@ class Fetch(unittest.TestCase):
         self.assertEqual(mac['health']['hwtest_crashes'], ['SwitchHWTest-1.ips: EXC_BAD_ACCESS '])
         self.assertEqual(mac['health']['panics'], ['panic-2026-11-08-221030.log'])
         self.assertEqual(mac['health']['pair_records'], 1)
+        self.assertEqual(mac['health']['apps'], {'installed': 1, 'placeholders': 1, 'system_apps_wanted': 1})
         self.assertTrue((self.root / 'out/r1.json').is_file())
         self.assertEqual(Report.load(self.history / 'r1.json').commit, '0123456789ab')
 

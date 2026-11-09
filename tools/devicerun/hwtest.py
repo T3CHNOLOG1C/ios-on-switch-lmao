@@ -118,6 +118,15 @@ TESTS: dict[str, bool] = {
     'crypto.local_authentication': False,
     'system.identity': False,
     'system.power': False,
+    'system.memory': False,
+    'cpu.clock': False,
+    'cpu.sustained': False,
+    'net.wifi_link': False,
+    'gpu.latency': False,
+    'gpu.raw_share': False,
+    'input.controllers': False,
+    'gpu.texture.kinds': False,
+    'system.union_readdir': False,
 }
 
 # The tests only one iOS version's app runs (hw_test_app/app<version>), by that version.

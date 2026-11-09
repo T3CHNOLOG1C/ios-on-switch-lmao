@@ -8,7 +8,11 @@ goes to `hwtest-summary.txt` in that pull's folder.
 ```sh
 bazel run //tools/hwtest                      # the newest run of each app and iOS build in the history
 bazel run //tools/hwtest -- /abs/path/run.json
+bazel run //tools/hwtest -- --import-log "$PWD/hwtest-boot14.txt" --boot-log "$PWD/boot14.txt" --build 24B119 \
+    --nak-debug sm53_probe                    # a run from before the app wrote reports, from its HWTEST lines
 ```
+
+The pull also copies the app's `Documents/gpu` (the GPU scenes' got, want and diff PNGs) into `hwtest-gpu/`.
 
 The sidecar holds what the device can't see from inside its sandbox. That's the commit `deploy` wrote to
 `<Data>/Switch/deployed.json`, plus the crash reports for that boot (matched by `bootSessionUUID`, with the Core

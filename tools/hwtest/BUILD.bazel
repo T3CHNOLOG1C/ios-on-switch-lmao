@@ -14,6 +14,7 @@ py_library(
         "bootlog.py",
         "compare.py",
         "fetch.py",
+        "fromlog.py",
         "health.py",
         "hwtest.py",
         "metrics.py",
@@ -39,5 +40,6 @@ py_binary(
     "bootlog_test",
     "compare_test",
     "fetch_test",
+    "fromlog_test",
     "metrics_test",
 ]]

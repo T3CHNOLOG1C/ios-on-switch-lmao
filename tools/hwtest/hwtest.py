@@ -2,12 +2,15 @@
 """HW Test's runs against the runs before them (README.md).
 
     bazel run //tools/hwtest -- [--history DIR] [REPORT.json ...]
+    bazel run //tools/hwtest -- --import-log hwtest-bootN.txt --boot-log bootN.txt --build 24B119 [--nak-debug V]
 
 With no report named, the newest run of each app and iOS build in the history. pull_logs fetches the card's reports
-into the history and prints this for the runs it found new.
+into the history and prints this for the runs it found new. --import-log adds a run from before the app wrote
+reports, from its HWTEST lines (fromlog.py).
 """
 
 import argparse
+import json
 import os
 import sys
 from collections.abc import Callable
@@ -16,7 +19,7 @@ from pathlib import Path
 if __package__ in (None, ''):
     sys.path.insert(0, str(Path(os.path.abspath(__file__)).parents[2]))
 from tools.common import paths
-from tools.hwtest import compare, fetch
+from tools.hwtest import compare, fetch, fromlog
 from tools.hwtest.reports import Report, history
 
 SUMMARY = 'hwtest-summary.txt'
@@ -55,11 +58,33 @@ def after_pull(data: Path, switch_folder: Path, out: Path, log: Callable[..., No
     log(f'hwtest: {len(changed)} new or updated run reports -> {history_dir()}\n{text}')
 
 
+def import_log(args: argparse.Namespace, folder: Path) -> Path:
+    """Write the run in `args.import_log`'s HWTEST lines into the history as <boot>-imported.json."""
+    boot, started = fromlog.boot_of(args.boot_log)
+    identity = {'bundle_id': args.bundle, 'build': args.build, 'ios': args.build_ios, 'nak_debug': args.nak_debug}
+    report = fromlog.report(Path(args.import_log).read_text().splitlines(), identity, boot, started)
+    folder.mkdir(parents=True, exist_ok=True)
+    target = folder / (report['run']['id'] + '.json')
+    target.write_text(json.dumps(report, indent=1, sort_keys=True) + '\n')
+    return target
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('reports', nargs='*', type=Path)
     parser.add_argument('--history', type=Path, default=None)
+    parser.add_argument('--import-log', type=Path)
+    parser.add_argument('--boot-log', type=Path)
+    parser.add_argument('--build', default='')
+    parser.add_argument('--build-ios', default='')
+    parser.add_argument('--bundle', default=fetch.BUNDLES[0])
+    parser.add_argument('--nak-debug', default='')
     args = parser.parse_args(argv)
+    if args.import_log:
+        if not (args.boot_log and args.build):
+            parser.error('--import-log needs --boot-log and --build')
+        print('imported ->', import_log(args, args.history or history_dir()))
+        return 0
     reports = history(args.history or history_dir())
     held = {r.path.resolve() for r in reports}
     reports = sorted(

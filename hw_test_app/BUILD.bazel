@@ -156,9 +156,50 @@ genrule(
     cmd = "grep '^R ok=1 label=com.apple.coreanimation[.]' $< > $@",
 )
 
+# gpu.ca.sweep's reference for the build's IPSW: the corpus states drawn on a Mac's GPU with that IPSW's QuartzCore
+# (core/CAGoldens.swift), written into goldens/ by `bazel run //hw_test_app:ca_goldens` (and with --config=ios27).
+genrule(
+    name = "ca_goldens_txt",
+    srcs = select({
+        "//ipsw:21H461": ["goldens/ca_21H461.txt"],
+        "//ipsw:24B119": ["goldens/ca_24B119.txt"],
+    }),
+    outs = ["ca_goldens.txt"],
+    cmd = "cp $< $@",
+)
+
 apple_resource_group(
     name = "ca_states_resources",
-    resources = [":ca_states"],
+    resources = [
+        ":ca_goldens_txt",
+        ":ca_states",
+    ],
+)
+
+# Rewrites goldens/ca_<build>.txt: every corpus state drawn on this Mac's GPU with the selected IPSW's QuartzCore
+# (ca_goldens/CAGoldensWriter.swift). Run it after a harvest adds Core Animation states. Manual: it needs a Mac GPU.
+swift_test(
+    name = "ca_goldens",
+    size = "medium",
+    srcs = ["ca_goldens/CAGoldensWriter.swift"],
+    copts = SWIFT_COPTS,
+    data = [
+        ":ca_states",
+        "@ipsw//:crawl_qc",
+    ],
+    env = select({
+        "//ipsw:" + kind: {
+            "CA_BUILD": kind,
+            "CA_LIBRARY": "$(rlocationpath @ipsw//:crawl_qc)",
+            "CA_STATES": "$(rlocationpath :ca_states)",
+        }
+        for kind in ("21H461", "24B119")
+    }),
+    tags = ["manual"],
+    deps = [
+        ":core",
+        ":gpu",
+    ],
 )
 
 apple_resource_group(
@@ -180,6 +221,21 @@ filegroup(
         "kit/*.swift",
         "tests/*.swift",
     ]),
+)
+
+swift_interop_hint(
+    name = "cpu_clock_module",
+    module_name = "SwitchCPUClock",
+)
+
+# cpu.clock's and cpu.sustained's chain of dependent ADDs (one cycle each on the A57).
+cc_library(
+    name = "cpu_clock",
+    srcs = ["cpu/switch_cpu_clock.c"],
+    hdrs = ["cpu/switch_cpu_clock.h"],
+    aspect_hints = [":cpu_clock_module"],
+    copts = ["-O2"],
+    target_compatible_with = ["@platforms//os:ios"],
 )
 
 swift_interop_hint(
@@ -216,6 +272,7 @@ swift_library(
     deps = [
         ":a64x_probe",
         ":core",
+        ":cpu_clock",
         ":gpu",
         ":video",
     ],
