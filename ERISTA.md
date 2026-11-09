@@ -36,3 +36,28 @@ Upstream's workflows run on GitHub's hosted `xcode-27` image, so a push to `eris
 On a Mac, `bazelisk run //:image -- --//install:prebuilt=release ...` then needs no Xcode. An Intel Mac gets
 `host-tools-darwin-x86_64.tar` (universal `apfs_tool` and `lz4`, macOS 12 up) but no shader toolset, so the shader
 seed still has to come from an Apple silicon Mac.
+
+### The shader toolset on an Intel Mac
+
+The seed's tools (`gpu/seed/tools.bzl`) run no GPU: `precompile` takes its Metal device from the project's own
+bridge (`native_bridge_metal_open`), which feeds NVK's host twin. They are CPU code throughout, so an x86_64 build
+is a cross-compile on the arm64 CI Mac, but everything in the chain is pinned to arm64 and to macOS 27:
+
+| Piece | Today | For a 2014 Air on Monterey |
+|---|---|---|
+| `bazel/platforms`, `bazel/toolchains/apple` | `macos_user_arm64`, triple `arm64-apple-macosx27.2`, `target_cpu` arm64 | a `macos_user_x86_64` platform and toolchain, triple `x86_64-apple-macosx12.0` |
+| NVK twin (`third_party/mesa/bazel`) | `MESA_PLATFORMS` macos → arm64, stub triple `arm64-apple-macos27.0`, meson flags captured from an arm64 native build | an x86_64 Mesa platform; the captured flags carry nothing arm-specific, SSE paths stay off |
+| NVK's Rust (`@nvk_rust`, 1.96.1) | rustc, cargo and `rust-std` for aarch64-apple-darwin and -ios only; toolchains `exec`/`target` aarch64 | add `rust-std-1.96.1-x86_64-apple-darwin` and a toolchain for that triple |
+| Metal bridge (`bazel/rust`, 1.98.0) | `extra_target_triples` aarch64 only, `MACOSX_DEPLOYMENT_TARGET=14.0`, kind `tool` = this Mac | an x86_64 triple and a kind that transitions to it with deployment target 12.0 |
+| `tools/gpu/seed.py` mock/tool | `xcrun clang` with no `-target`: the runner's arm64, macOS 27 SDK default | `-arch x86_64 -mmacosx-version-min=12.0` |
+| `drivers/NativeMetal/NativeBridgeMetalFrontend.mm` | built with a macOS 27 floor; `API_AVAILABLE(macos(15.0))` guards only the residency-set paths | every Metal API newer than 12 it reaches must be guarded or avoided; the count is unknown until a 12.0-floor compile runs `-Wunguarded-availability` |
+| `tools/gpu/nvk_twin.py`, `tools/gpu/seed.py layout` | arch-agnostic (`ARCHES` already names x86_64) | nothing |
+
+The last row is the risk: the toolset's floor is macOS 27 today and nothing has run it on anything older, and the
+only Monterey Intel machine to test on is the Air itself.
+
+The cheaper route is to not build the seed on the Mac at all. `//gpu/seed:tree` is derived from the pinned IPSW,
+so `release/` refuses it as a release asset (`ipsw_free.bzl`), but a workflow of this private fork can build it on
+the CI Mac and upload it as an Actions artifact; the image build then takes it through `--//install:shader_seed`
+(a `label_flag`, so a small repository rule or filegroup has to wrap the downloaded tree). That needs the 5.2 GB
+IPSW on the runner once per cache, and no cross-compiling.
