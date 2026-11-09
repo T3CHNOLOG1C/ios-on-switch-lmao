@@ -35,6 +35,12 @@ to os_log under `com.brunostjohn.switch.hwtest` (`//tools/devicerun` checks them
 summary line at the end of a run names the app's iOS version (`ios=`); devicerun reports
 a test that only the other version's app has as N/A. Tapping a test in the list reruns it.
 
+`cpu.clock` and `cpu.sustained` read each core's clock from a chain of dependent ADDs (`cpu/switch_cpu_clock.c`, one
+cycle each on the A57) divided by the thread's own CPU time, so preemption doesn't lower the reading. `cpu.sustained`
+keeps every core busy for 20 s and compares the last two seconds with the first. `gpu.latency` times 120 small
+command buffers on each device: the CPU's encode, and commit to completed handler. `gpu.raw_share` runs last and
+reads the facade's process-wide counters: how many command buffers went to raw, to m2v or split, and why.
+
 ## GPU, compositor and pacing scenes
 
 The `gpu.*` tests are offscreen scenes (`gpu/scenes`): each draws, reads every result back and compares it with a
@@ -49,11 +55,14 @@ scenes, which build Core Animation's own pipeline states from QuartzCore's libra
 comparison names the first wrong pixel, both values, the bounding box, an 8x8 hex map of the wrong area and any streak
 columns, and saves got, want and diff PNGs under `Documents/gpu/<id>/`.
 
-`gpu.ca.sweep` checks the raw path against m2v directly. It draws one Core Animation state of each class in the raw
-pack's corpus (`ca_states.log`, cut from `precompile/corpus.log` at build time) on both devices and compares the bytes.
-Every state's verdict goes to `Documents/gpu/gpu.ca.sweep/states.txt`, with PNGs or raw bytes of the ones that differ.
-States of the other iOS version's QuartzCore count as skipped. Set `HWTEST_SWEEP_ALL=1` in the app's environment to draw
-every corpus state instead of one per class.
+`gpu.ca.sweep` checks the raw path against a Mac's GPU, since m2v is no reference. It draws one Core Animation state of
+each class in the raw pack's corpus (`ca_states.log`, cut from `precompile/corpus.log` at build time). It compares each
+attachment with that state as the same IPSW's QuartzCore draws it on a Mac (`goldens/ca_<build>.txt`). The comparison
+is the 8x8 block means of every channel, which another GPU's filtering and rounding move by a step or two and a wrong
+blend, format or texture moves by far more. `bazel run //hw_test_app:ca_goldens` (again with `--config=ios27`) redraws
+the reference after a harvest adds states; until then a new state counts as `no_golden`. Every state's verdict goes
+to `Documents/gpu/gpu.ca.sweep/states.txt`, with PNGs or raw bytes of the wrong ones. Set `HWTEST_SWEEP_ALL=1` in the
+app's environment to draw every corpus state instead of one per class.
 
 `bazel test //hw_test_app:gpu_test` runs every scene on the Mac's GPU against the same references. Run it after
 changing a scene or a reference, so a failure on the Switch can't come from a wrong reference. It's tagged manual

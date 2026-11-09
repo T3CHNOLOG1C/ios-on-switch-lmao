@@ -43,6 +43,19 @@ public enum CAStateSweep {
         }
     }
 
+    /// A state's identity in the reference (core/CAGoldens.swift): every field of its corpus line, hashed.
+    public static func key(_ line: PipelineLine) -> String {
+        let function = { (f: PipelineLine.Function) in
+            f.name + f.constants.map { c in "\(c.name):\(c.type):" + c.bytes.map { String(format: "%02x", $0) }.joined() }
+                .joined(separator: ",")
+        }
+        let fields =
+            [line.label, "\(line.samples)", "\(line.topology)", "\(line.depthFormat)/\(line.stencilFormat)"]
+            + line.colors.map { "c\($0.index)=\($0.fields)" } + line.attributes.map { "a\($0.index)=\($0.fields)" }
+            + [function(line.vertex), function(line.fragment)]
+        return String(Signature.fnv1a(Array(fields.joined(separator: " ").utf8)), radix: 16)
+    }
+
     static func classKey(_ line: PipelineLine) -> String {
         let colors = line.colors.map { $0.fields.map(String.init).joined(separator: ":") }.joined(separator: ",")
         return "\(colors) \(line.depthFormat)/\(line.stencilFormat) \(line.vertex.name) \(line.fragment.name)"
