@@ -25,6 +25,8 @@ every checkout) it copies:
                                         decoded as the panic ones into wake-<UTC>.stackshot.ips and
                                         wake-<UTC>.threads.txt (SpringBoard's and backboardd's threads)
   com.apple.LaunchServices-*.csstore + lsdb-webkit.txt   (--no-csstore skips them)
+  <boot>-<stamp>.json, hwtest-summary.txt  HW Test's run reports (also kept in <state>/device-logs/hwtest) and the
+                                        newest new run of each app against the runs before it (tools/hwtest)
   m2v/ (+ m2v-cache -> backboardd's)    with --harvest (or --//deploy:harvest): every process's m2v shader cache,
                                         whose journals are merged into the precompile corpus
                                         (drivers/TegraGM20BMetal/precompile/corpus.log, a source file in your checkout)
@@ -46,6 +48,7 @@ if __package__ in (None, ''):
     sys.path.insert(0, str(Path(os.path.abspath(__file__)).parents[2]))
 from tools.common import files, paths
 from tools.deploy import mkarchive
+from tools.hwtest import hwtest
 from tools.install import (
     card as cards,
     host,
@@ -328,6 +331,7 @@ def pull(data: str | Path, out: str | Path, log: host.Log, what: Pull = EVERYTHI
             log('logarchive: {} ({} boots)'.format(out / 'boot.logarchive', len(boots)))
         except SystemExit as error:
             log('logarchive NOT built:', error)
+    hwtest.after_pull(data, renamed.data_folder(data), out, log)
     log('logs ->', out)
     return out
 

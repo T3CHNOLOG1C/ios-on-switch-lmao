@@ -12,15 +12,16 @@ Steps:
                    copied, stale files in switchroot/ios/ removed (never the user's bootargs.txt or the install
                    images' NAME.SII.NNN parts), AppleDouble files by name; nothing else on the FAT. Refused
                    when the card's iOS is another kind than the build's (its System volume is not the IPSW's)
-  3 overlay        <Data>/Switch/overlay := the package's overlay/; when its /Applications changed, writes
-                   <Data>/datamigrator/migrate so the next boot registers the apps (system_apps.py; --rerun-migration
-                   writes it regardless, e.g. after a migration the power cut short; from iOS 27 it also removes
-                   LaunchServices' store, whose rebuild is what registers the apps there); copies back from the System
-                   volume the staged system apps MobileInstallation still wants that the last migration consumed
-                   without installing, and asks for the migration that installs them; also removes the
-                   r3 Wi-Fi bring-up's configd Debug logging profile (STALE_LOGGING_PROFILES) if a card still has
-                   it; and stages hekate's "Dump Joy-Con BT" (the FAT's switchroot/joycon_mac.ini, only read) as
-                   <Data>/Switch/bluetooth/{host-address, joycon-pairing.plist}, removed when the FAT has none
+  3 overlay        <Data>/Switch/overlay := the package's overlay/; <Data>/Switch/deployed.json := the checkout's
+                   commit, which tools/hwtest joins HW Test's reports with (deployed.py); when the overlay's
+                   /Applications changed, writes <Data>/datamigrator/migrate so the next boot registers the apps
+                   (system_apps.py; --rerun-migration writes it regardless, e.g. after a migration the power cut short;
+                   from iOS 27 it also removes LaunchServices' store, whose rebuild is what registers the apps there);
+                   copies back from the System volume the staged system apps MobileInstallation still wants that the
+                   last migration consumed without installing, and asks for the migration that installs them; also
+                   removes the r3 Wi-Fi bring-up's configd Debug logging profile (STALE_LOGGING_PROFILES) if a card
+                   still has it; and stages hekate's "Dump Joy-Con BT" (the FAT's switchroot/joycon_mac.ini, only read)
+                   as <Data>/Switch/bluetooth/{host-address, joycon-pairing.plist}, removed when the FAT has none
                    (joycon_pairing.py; --no-joycon-pairing skips it)
   4 GPU bundle     <Data>/ngpu/addons/TegraGM20BMetal.{bundle,m2v-seed,raw} from --//deploy:gpu_bundle, via the
                    plugin's stager, which copies only the files whose sha256 the card does not already hold and
@@ -48,6 +49,7 @@ if __package__ in (None, ''):
     sys.path.insert(0, str(Path(os.path.abspath(__file__)).parents[2]))
 from tools.common import paths
 from tools.deploy import (
+    deployed,
     joycon_pairing,
     poster_snapshots,
     pull_logs,
@@ -103,6 +105,10 @@ def launchd_check(data: Path, labels: list[str], log: host.Log) -> bool:
 
 def _ios_version(ipsw: str | None) -> str | None:
     return json.loads(Path(ipsw).read_text()).get('version') if ipsw else None
+
+
+def _ios_build(ipsw: str | None) -> str:
+    return json.loads(Path(ipsw).read_text()).get('build', '') if ipsw else ''
 
 
 def check_kind(card: cards.Card, ipsw: str | None) -> None:
@@ -228,6 +234,7 @@ def _write(args: argparse.Namespace, data_root: Path, volumes: Volumes, pairing:
         cards.sync_boot_entry(fat_root, args.boot_package, log)
     apps = system_apps.digest(data_root)
     cards.sync_overlay(data_root, args.boot_package, log)
+    deployed.record(data_root, paths.workspace(), _ios_build(args.ipsw), log)
     restaged = _restage_system_apps(volumes.system, data_root, log)
     rebuild = system_apps.rebuilds_launchservices(_ios_version(args.ipsw))
     system_apps.request_migration(data_root, apps, log, force=args.rerun_migration or restaged, rebuild=rebuild)
