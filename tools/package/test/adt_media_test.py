@@ -89,6 +89,12 @@ class Identity(unittest.TestCase):
         self.assertEqual(product['model'], properties(self.apple)['model'])
         self.assertEqual(product['artwork-display-gamut'], b'sRGB\0')
 
+    def test_backlight_white_point_type_is_apples(self):
+        chosen, apple = properties(find(self.tree, 'chosen')), properties(find(self.apple, 'backlight'))
+        self.assertEqual(apple['default-whitepoint-type'], struct.pack('<I', 1), 'J120 and J181 both say D65')
+        self.assertEqual(chosen[self.adt_edit.WHITEPOINT_TYPE], apple['default-whitepoint-type'])
+        self.assertFalse(any(p[0] == 'name' and p[2] == b'backlight\0' for c in self.tree[1] for p in c[0]))
+
     def test_audio_is_apples_acoustic_design(self):
         audio, apple = properties(find(self.tree, 'product', 'audio')), properties(find(self.apple, 'product', 'audio'))
         for key in self.adt_edit.AUDIO_IDENTITY:

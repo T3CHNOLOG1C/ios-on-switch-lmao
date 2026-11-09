@@ -220,6 +220,19 @@ def _chosen(tree: list, portrait: bool) -> list:
     return chosen
 
 
+# CoreBrightness reads default-whitepoint-type from the backlight service and its parents, which on the iPad is the
+# /backlight node: 1 is D65, absent its legacy 7059 K white. A /backlight node here would be published as a nub that the
+# platform's own backlight could match, so the iPad's value rides in /chosen and SwitchBacklight publishes it.
+# Property names are at most 31 bytes, hence the short name.
+WHITEPOINT_TYPE = 'switch-whitepoint-type'
+
+
+def _backlight(tree: list, apple: list) -> None:
+    identity = apple_properties(apple, '/backlight')
+    if 'default-whitepoint-type' in identity:
+        put(child(tree, 'chosen'), WHITEPOINT_TYPE, identity['default-whitepoint-type'])
+
+
 def _product(tree: list, apple: list) -> None:
     product = child(tree, 'product')
     identity = apple_properties(apple, '/product')
@@ -398,6 +411,7 @@ def with_ipad_identity(data: bytes, apple: bytes) -> bytes:
         raise SystemExit("trailing bytes after Apple's device tree")
     _identity(tree, ipad)
     _product(tree, ipad)
+    _backlight(tree, ipad)
     # IOPlatformExpertDevice carries the root's properties; MobileGestalt's HardwarePlatform is its platform-name, which
     # iBoot sets to the SoC. Without it CoreVideo, AMS and the store's user agent read NULL.
     soc = platform_name(ipad)
