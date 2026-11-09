@@ -21,17 +21,10 @@ public struct ContentView: View {
                 }
                 List {
                     RunHeader(suite: suite)
-                    ForEach(Subsystem.allCases, id: \.self) { subsystem in
-                        let rows = suite.rows.filter { $0.test.subsystem == subsystem }
-                        if !rows.isEmpty {
-                            Section(subsystem.rawValue) {
-                                ForEach(rows) { row in
-                                    TestRow(row: row).contentShape(Rectangle()).onTapGesture {
-                                        if !suite.running { suite.rerun(row.id) }
-                                    }
-                                }
-                            }
-                        }
+                    if suite.running {
+                        RunSections(suite: suite)
+                    } else {
+                        bySubsystem
                     }
                 }
                 .listStyle(.insetGrouped)
@@ -57,6 +50,22 @@ public struct ContentView: View {
             }
         }
         .onAppear { suite.launch() }
+    }
+
+    /// Every test by subsystem, between runs; tapping one reruns it.
+    @ViewBuilder var bySubsystem: some View {
+        ForEach(Subsystem.allCases, id: \.self) { subsystem in
+            let rows = suite.rows.filter { $0.test.subsystem == subsystem }
+            if !rows.isEmpty {
+                Section(subsystem.rawValue) {
+                    ForEach(rows) { row in
+                        TestRow(row: row).contentShape(Rectangle()).onTapGesture {
+                            if !suite.running { suite.rerun(row.id) }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

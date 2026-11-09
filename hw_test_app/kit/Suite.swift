@@ -12,6 +12,7 @@ public final class Suite: ObservableObject {
         let test: any HWTest
         var record: TestRecord?
         var running = false
+        var started: Date?
 
         var id: String { test.id }
     }
@@ -124,7 +125,10 @@ public final class Suite: ObservableObject {
     /// Marks `id` running in the list and in the report on the card; returns the test that wedged the GPU, if one
     /// did.
     private func begin(_ id: String) -> String? {
-        if let index = rows.firstIndex(where: { $0.id == id }) { rows[index].running = true }
+        if let index = rows.firstIndex(where: { $0.id == id }) {
+            rows[index].running = true
+            rows[index].started = Date()
+        }
         report?.begin(id)
         save()
         return wedgedBy
