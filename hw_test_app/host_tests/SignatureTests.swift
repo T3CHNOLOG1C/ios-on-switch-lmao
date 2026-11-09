@@ -56,6 +56,9 @@ final class SignatureTests: XCTestCase {
         let stale = Signature(bytes: rows(0xEE), metalFormat: Signature.twoPlaneXR, width: 2, height: 2)
         XCTAssertEqual(clean, stale, "the pad after plane 0 is not part of the picture")
         XCTAssertEqual(clean.means.count, 3)
+        XCTAssertTrue(Signature.padUntouched(rows(0xEE), metalFormat: 550, width: 2, height: 2, sentinel: 0xEE))
+        XCTAssertFalse(Signature.padUntouched(rows(0), metalFormat: 550, width: 2, height: 2, sentinel: 0xEE))
+        XCTAssertTrue(Signature.padUntouched([1, 2, 3, 4], metalFormat: 80, width: 1, height: 1, sentinel: 0xEE))
     }
 
     func testAnUnknownFormatComparesByHashAlone() {

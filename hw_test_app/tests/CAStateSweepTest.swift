@@ -42,8 +42,8 @@ public struct CAStateSweepTest: HWTest {
         var listing = ""
         for line in states {
             let verdict = await judge(line, library: library, gpu: raw, goldens: goldens, directory: directory)
-            counts[verdict.split(separator: " ").first.map(String.init) ?? verdict, default: 0] += 1
-            if verdict == Verdict.wrong.rawValue { wrongStates.append(line.shortLabel) }
+            counts[String(verdict.prefix { $0 != " " && $0 != ":" }), default: 0] += 1
+            if verdict.hasPrefix(Verdict.wrong.rawValue) { wrongStates.append(line.shortLabel) }
             listing += "\(verdict) \(line.shortLabel) \(line.vertex.name) \(line.fragment.name)\n"
         }
         try? listing.write(to: directory.appendingPathComponent("states.txt"), atomically: true, encoding: .utf8)
@@ -65,13 +65,21 @@ public struct CAStateSweepTest: HWTest {
         return .pass(metrics, proof: proof)
     }
 
-    /// One state's verdict line: exact, close, wrong, "on_m2v <path>", no_golden, "skipped <why>" or "failed <why>".
+    /// One state's verdict line: exact, close, wrong[: why], "on_m2v <path>", no_golden, "skipped <why>" or
+    /// "failed <why>".
     func judge(
         _ line: PipelineLine, library: MTLLibrary, gpu: GPU, goldens: CAGoldens, directory: URL
     ) async -> String {
         do {
             let drawn = try await CAStateSweep.draw(line, library: library, gpu: gpu)
             if drawn.path != "raw" { return "on_m2v \(drawn.path)" }
+            let (width, height) = (CAStateSweep.width, CAStateSweep.height)
+            for (color, bytes) in zip(line.colors.sorted(by: { $0.index < $1.index }), drawn.attachments)
+            where !Signature.padUntouched(
+                bytes, metalFormat: color.format, width: width, height: height, sentinel: CAStateSweep.sentinel)
+            {
+                return "wrong: the blit wrote past plane 0 of c\(color.index)"
+            }
             guard let golden = goldens.states[CAStateSweep.key(line)] else { return "no_golden" }
             var verdict = Verdict.exact
             for (color, bytes) in zip(line.colors.sorted(by: { $0.index < $1.index }), drawn.attachments) {

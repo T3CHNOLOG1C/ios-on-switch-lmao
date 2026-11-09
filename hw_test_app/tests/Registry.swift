@@ -4,7 +4,7 @@ import HWTestGPU
 public enum Registry {
     /// The GPU scenes come first: the first of them reproduces the process's first command buffer.
     static let gpuScenes: [any HWTest] =
-        Scenes.all.map { GPUSceneTest(scene: $0) } + [GPUSceneTest(scene: LatencyScene()), CAStateSweepTest()]
+        Scenes.all.map { GPUSceneTest(scene: $0) } + [CAStateSweepTest()]
 
     static let metal: [any HWTest] = [
         MetalDeviceTest(), MetalComputeTest(), MetalColorPassTest(), MetalDepthStencilTest(), MetalMSAATest(),

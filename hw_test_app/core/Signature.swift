@@ -32,6 +32,16 @@ public struct Signature: Equatable, Sendable {
         return (0..<height).flatMap { row in bytes[(row * width * 8)..<(row * width * 8 + width * 4)] }
     }
 
+    /// Whether the bytes of each row past 550's plane 0 still hold `sentinel`, the buffer's fill before the blit.
+    public static func padUntouched(
+        _ bytes: [UInt8], metalFormat: UInt, width: Int, height: Int, sentinel: UInt8
+    ) -> Bool {
+        guard metalFormat == twoPlaneXR, bytes.count == width * height * 8 else { return true }
+        return (0..<height).allSatisfy { row in
+            bytes[(row * width * 8 + width * 4)..<((row + 1) * width * 8)].allSatisfy { $0 == sentinel }
+        }
+    }
+
     public init(hash: UInt64, means: [Float]) {
         self.hash = hash
         self.means = means

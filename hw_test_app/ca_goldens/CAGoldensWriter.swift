@@ -18,7 +18,7 @@ final class CAGoldensWriter: XCTestCase {
             URL: URL(fileURLWithPath: runfiles + XCTUnwrap(environment["CA_LIBRARY"])))
         let gpu = GPU(
             device: device, queue: try XCTUnwrap(device.makeCommandQueue()),
-            library: try device.makeLibrary(source: "kernel void unused() {}", options: nil))
+            library: try await device.makeLibrary(source: "kernel void unused() {}", options: nil))
         var lines = [
             "# QuartzCore \(build) on \(device.name), \(CAStateSweep.width)x\(CAStateSweep.height), 8x8 block means"
         ]

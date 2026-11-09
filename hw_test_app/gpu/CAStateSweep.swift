@@ -46,7 +46,8 @@ public enum CAStateSweep {
     /// A state's identity in the reference (core/CAGoldens.swift): every field of its corpus line, hashed.
     public static func key(_ line: PipelineLine) -> String {
         let function = { (f: PipelineLine.Function) in
-            f.name + f.constants.map { c in "\(c.name):\(c.type):" + c.bytes.map { String(format: "%02x", $0) }.joined() }
+            f.name
+                + f.constants.map { c in "\(c.name):\(c.type):" + c.bytes.map { String(format: "%02x", $0) }.joined() }
                 .joined(separator: ",")
         }
         let fields =
@@ -105,9 +106,26 @@ public enum CAStateSweep {
         if timing.path.hasPrefix("error:") { throw TestFailure("draw: \(timing.path)") }
         var attachments: [[UInt8]] = []
         for (target, color) in zip(targets, line.colors.sorted(by: { $0.index < $1.index })) {
-            attachments.append(try await gpu.read(target, bytesPerPixel: bytesPerTexel(color.format)!))
+            attachments.append(try await readBack(target, bytesPerPixel: bytesPerTexel(color.format)!, gpu: gpu))
         }
         return Drawn(path: timing.path, attachments: attachments)
+    }
+
+    /// What the readback buffer holds before the blit: bytes a blit must leave alone (550's pad) still read as it.
+    public static let sentinel: UInt8 = 0xA5
+
+    static func readBack(_ texture: MTLTexture, bytesPerPixel: Int, gpu: GPU) async throws -> [UInt8] {
+        let rowBytes = texture.width * bytesPerPixel
+        let out = try gpu.buffer([UInt8](repeating: sentinel, count: rowBytes * texture.height))
+        try await gpu.run { commands in
+            let blit = commands.makeBlitCommandEncoder()!
+            blit.copy(
+                from: texture, sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(),
+                sourceSize: MTLSize(width: texture.width, height: texture.height, depth: 1), to: out,
+                destinationOffset: 0, destinationBytesPerRow: rowBytes, destinationBytesPerImage: 0)
+            blit.endEncoding()
+        }
+        return [UInt8](UnsafeRawBufferPointer(start: out.contents(), count: rowBytes * texture.height))
     }
 
     static let clear = MTLClearColor(red: 0.25, green: 0.5, blue: 0.75, alpha: 0.625)

@@ -21,14 +21,17 @@ struct WiFiLinkTest: HWTest {
         defer { freeifaddrs(list) }
         var found: Interface?
         for entry in sequence(first: first, next: { $0.pointee.ifa_next }) {
-            guard String(cString: entry.pointee.ifa_name) == name, let address = entry.pointee.ifa_addr else { continue }
+            guard String(cString: entry.pointee.ifa_name) == name, let address = entry.pointee.ifa_addr else {
+                continue
+            }
             var interface = found ?? Interface()
             interface.flags = entry.pointee.ifa_flags
             if address.pointee.sa_family == UInt8(AF_LINK), let data = entry.pointee.ifa_data {
                 interface.data = data.load(as: if_data.self)
             } else if address.pointee.sa_family == UInt8(AF_INET) {
                 var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-                getnameinfo(address, socklen_t(address.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST)
+                getnameinfo(
+                    address, socklen_t(address.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST)
                 interface.ipv4 = String(cString: host)
             }
             found = interface
