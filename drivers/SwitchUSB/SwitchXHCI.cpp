@@ -190,7 +190,7 @@ bool switchxhci_start(char *why, size_t whySize)
     }
     if (!gHost.powerOn(why, whySize))
         return false;
-    if (!gHost.loadFirmware(switch_xusb_firmware, xhost::firmwareBytes(), why, whySize))
+    if (!gHost.loadFirmware(xhost::firmwareImage(), xhost::firmwareBytes(), why, whySize))
         return false;
     // The host stack's IOResources personalities, kept out of the boot-time catalogue (emit_prelink.py
     // DEFERRED_PERSONALITIES): AppleUSBHostResources (AppleUSBHostController::start waits for it) and

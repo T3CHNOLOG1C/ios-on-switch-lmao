@@ -255,7 +255,7 @@ void switchxhci_sleep(bool entering)
     }
     char why[160] = "";
     if (!gHost.powerOn(why, sizeof(why)) ||
-        !gHost.loadFirmware(switch_xusb_firmware, xhost::firmwareBytes(), why, sizeof(why))) {
+        !gHost.loadFirmware(xhost::firmwareImage(), xhost::firmwareBytes(), why, sizeof(why))) {
         panic("SwitchUSB: XUSB host did not come back from SC7: %s", why);
     }
     controller->tegraLoopForCheck()->runAction(gated, controller, nullptr);

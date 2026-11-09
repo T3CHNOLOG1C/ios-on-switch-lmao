@@ -6,23 +6,42 @@
 #include "UsbDmaMapper.h"
 #include "XusbHost.h"
 #include "XusbPorts.h"
+#include "../../kits/SwitchChip/SwitchChip.h"
 #include <IOKit/IOFilterInterruptEventSource.h>
 #include <IOKit/IOTimerEventSource.h>
 #include <IOKit/IOWorkLoop.h>
 
 extern "C" {
-// tegra210b01_xusb_firmware (firmware.S, drivers/SwitchUSB/firmware/README.md).
+// tegra210b01_xusb_firmware and tegra21x_xusb_firmware (firmware.S, drivers/SwitchUSB/firmware/README.md).
 extern const uint8_t switch_xusb_firmware[] __asm__("_switch_xusb_firmware");
 extern const uint8_t switch_xusb_firmware_end[] __asm__("_switch_xusb_firmware_end");
+extern const uint8_t switch_xusb_firmware_t210[] __asm__("_switch_xusb_firmware_t210");
+extern const uint8_t switch_xusb_firmware_t210_end[] __asm__("_switch_xusb_firmware_t210_end");
 }
 
 namespace xhost {
 extern Controller gHost;  // SwitchXHCI.cpp
 constexpr uint32_t kRequiredInterrupters = 3;
 
+// The falcon firmware for this chip: the falcon's ROM accepts only its own revision's image. The chip is read once
+// (switch_chip_is_t210b01 maps a register page each time it is asked).
+inline bool chipIsT210B01()
+{
+    static int cached = -1;
+    if (cached < 0)
+        cached = switch_chip_is_t210b01() ? 1 : 0;
+    return cached == 1;
+}
+
+inline const uint8_t *firmwareImage()
+{
+    return chipIsT210B01() ? switch_xusb_firmware : switch_xusb_firmware_t210;
+}
+
 inline size_t firmwareBytes()
 {
-    return reinterpret_cast<uintptr_t>(switch_xusb_firmware_end) - reinterpret_cast<uintptr_t>(switch_xusb_firmware);
+    const uint8_t *end = chipIsT210B01() ? switch_xusb_firmware_end : switch_xusb_firmware_t210_end;
+    return reinterpret_cast<uintptr_t>(end) - reinterpret_cast<uintptr_t>(firmwareImage());
 }
 }  // namespace xhost
 

@@ -101,6 +101,7 @@ kernel_driver(
         "drivers/TegraI2C",
         "drivers/TegraSMMU",
         "kits/SwitchCAR",
+        "kits/SwitchChip",
         "kits/SwitchDMA",
         "kits/SwitchDT",
         "kits/SwitchMMIO",
