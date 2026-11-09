@@ -31,12 +31,12 @@ public final class Waiter<T>: @unchecked Sendable {
         }
     }
 
+    /// The timeout fires from a dispatch queue, not a task: a hung test can hold the cooperative pool's few threads
+    /// (a waitUntilCompleted on a wedged GPU), and the timeout is what ends the wait for it.
     public func wait(timeout: TimeInterval) async -> T? {
-        let timer = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(timeout * 1e9))
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + timeout) { [weak self] in
             self?.resume(nil)
         }
-        defer { timer.cancel() }
         return await withCheckedContinuation { continuation in
             lock.lock()
             if case .done(let value) = state {

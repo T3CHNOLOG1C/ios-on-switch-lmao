@@ -20,6 +20,7 @@ public struct ContentView: View {
                     StageView(stage: stage).frame(height: 240)
                 }
                 List {
+                    RunHeader(suite: suite)
                     ForEach(Subsystem.allCases, id: \.self) { subsystem in
                         let rows = suite.rows.filter { $0.test.subsystem == subsystem }
                         if !rows.isEmpty {
@@ -38,10 +39,10 @@ public struct ContentView: View {
             .navigationTitle("Hardware tests")
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Text(suite.running ? "Running…" : counts).font(.footnote).foregroundStyle(.secondary)
+                    Button("Interactive") { suite.runInteractive() }.disabled(suite.running)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Run All") { suite.runAll() }.disabled(suite.running)
+                    Button("Run All") { suite.runAll() }.disabled(suite.running).bold()
                 }
             }
         }
@@ -55,13 +56,7 @@ public struct ContentView: View {
                 PromptCard(message: message) { prompter.skipTapped() }.padding()
             }
         }
-        .onAppear { suite.autoRunOnce() }
-    }
-
-    var counts: String {
-        let records = suite.rows.compactMap(\.record)
-        let count = { (verdict: Verdict) in records.filter { $0.outcome.verdict == verdict }.count }
-        return "\(count(.pass)) pass · \(count(.fail)) fail · \(count(.skip)) skip"
+        .onAppear { suite.launch() }
     }
 }
 
