@@ -11211,6 +11211,14 @@ unionread:
 	}
 
 #if CONFIG_UNION_MOUNTS
+	/*
+	 * libc ends a listing at GETDIRENTRIES64_EOF, but a union only moves
+	 * on to the lower directory on a call the upper one leaves empty.
+	 */
+	if (*eofflag && (user_ssize_t)bufsize != uio_resid(auio) &&
+	    (vp->v_mount->mnt_flag & MNT_UNION)) {
+		*eofflag = 0;
+	}
 	if ((user_ssize_t)bufsize == uio_resid(auio) &&
 	    (vp->v_mount->mnt_flag & MNT_UNION)) {
 		vnode_t uvp;
