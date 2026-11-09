@@ -7,12 +7,16 @@ SHA256SUMS from a local directory instead (CI, before the release is published).
 
 load("//boot:overlay.bzl", "OVERLAY_BINARIES")
 
-REPO = "brunostjohn/ios-on-switch-lmao"
+REPO = "T3CHNOLOG1C/ios-on-switch-lmao"
 ASSETS = {
     "host_tools": "host-tools-darwin-arm64.tar",
     "inputs": "image-inputs.tar",
     "sd": "sd.zip",
 }
+
+# An Intel Mac takes the universal apfs_tool and lz4 instead; that asset has no shader/ (the shader toolset is arm64
+# only), so the shader seed cannot be built there yet.
+ASSETS_X86_64 = dict(ASSETS, host_tools = "host-tools-darwin-x86_64.tar")
 
 # The targets //install and //boot take, by name: a directory's files, or one file.
 _GROUPS = {
@@ -74,7 +78,8 @@ def _release_impl(rctx):
         rctx.file("BUILD.bazel", _MISSING)
         return
     sums = _sums(rctx.read("SHA256SUMS"))
-    for directory, suffix in ASSETS.items():
+    assets = ASSETS_X86_64 if rctx.os.arch in ("amd64", "x86_64") else ASSETS
+    for directory, suffix in assets.items():
         name = "ios-on-switch-lmao-{}-{}".format(version, suffix)
         if name not in sums:
             fail("release {}: SHA256SUMS lists no {}".format(version, name))

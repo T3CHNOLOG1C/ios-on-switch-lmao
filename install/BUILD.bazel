@@ -372,3 +372,14 @@ release_tree(
     },
     tags = ["manual"],
 )
+
+# For Intel Macs (ios-on-switch-lmao-<version>-host-tools-darwin-x86_64.tar): universal apfs_tool and lz4, no shader
+# toolset (arm64 only so far).
+release_tree(
+    name = "host_tools_x86_64",
+    files = {
+        "//boot/installer:apfs_tool_universal": "apfs_tool",
+        "//tools:lz4_universal": "lz4",
+    },
+    tags = ["manual"],
+)

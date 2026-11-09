@@ -1,3 +1,4 @@
+load("//kernel/rules:inputs.bzl", "tool_output")
 load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 load("//bazel/lint:defs.bzl", "lint_files")
 load(":defs.bzl", "hekate_payload")
@@ -86,4 +87,26 @@ cc_binary(
         "apfs.h",
         "apfs_tool.c",
     ],
+)
+
+# The same tool as a universal binary for the Intel Macs' host-tools asset (release/BUILD.bazel), down to macOS 12.
+tool_output(
+    name = "apfs_tool_universal",
+    srcs = [
+        "apfs.c",
+        "apfs.h",
+        "apfs_tool.c",
+    ],
+    outs = ["universal/apfs_tool"],
+    args = [
+        "--xcode-env={xcode_env}",
+        "--out={out}",
+        "--flag=-arch",
+        "--flag=x86_64",
+        "--flag=-mmacosx-version-min=12.0",
+        "$(execpath apfs.c)",
+        "$(execpath apfs_tool.c)",
+    ],
+    message = "Building apfs_tool (universal)",
+    tool = "host_c_binary.py",
 )

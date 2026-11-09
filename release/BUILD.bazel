@@ -97,10 +97,30 @@ ipsw_free(
     src = ":host_tools_tar",
 )
 
+pkg_files(
+    name = "host_tools_x86_64_files",
+    srcs = ["//install:host_tools_x86_64"],
+    attributes = pkg_attributes(mode = "0755"),
+    renames = {"//install:host_tools_x86_64": REMOVE_BASE_DIRECTORY},
+)
+
+pkg_tar(
+    name = "host_tools_x86_64_tar",
+    srcs = [":host_tools_x86_64_files"],
+    out = "host-tools-darwin-x86_64.tar",
+    tags = ["manual"],
+)
+
+ipsw_free(
+    name = "host_tools_x86_64",
+    src = ":host_tools_x86_64_tar",
+)
+
 filegroup(
     name = "assets",
     srcs = [
         ":host_tools",
+        ":host_tools_x86_64",
         ":image_inputs",
         ":sd",
     ],

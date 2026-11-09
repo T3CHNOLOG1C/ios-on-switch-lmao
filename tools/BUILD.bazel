@@ -34,3 +34,20 @@ tool_output(
     message = "Building lz4 1.10.0",
     tool = "host_c_binary.py",
 )
+
+# The same lz4 as a universal binary for the Intel Macs' host-tools asset (release/BUILD.bazel), down to macOS 12.
+tool_output(
+    name = "lz4_universal",
+    srcs = ["@lz4//:all"],
+    outs = ["universal/lz4"],
+    args = [
+        "--xcode-env={xcode_env}",
+        "--out={out}",
+        "--flag=-Iexternal/+http_archive+lz4/lib",
+        "--flag=-arch",
+        "--flag=x86_64",
+        "--flag=-mmacosx-version-min=12.0",
+    ] + ["external/+http_archive+lz4/" + f for f in LZ4_SOURCES],
+    message = "Building lz4 1.10.0 (universal)",
+    tool = "host_c_binary.py",
+)

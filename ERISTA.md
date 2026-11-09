@@ -28,3 +28,11 @@ Same parts on both consoles, expected to carry over: RT5639 audio, BCM4356 Wi-Fi
 IMU, MAX77620 PMIC/RTC, MAX17050, BQ24193.
 
 Not Erista-specific: the image builder needs macOS APFS tools.
+
+## Building without a Mac
+
+Upstream's workflows run on GitHub's hosted `xcode-27` image, so a push to `erista` runs CI and a tag equal to
+`MODULE.bazel`'s version (`0.1.0-erista.1`) publishes a release of this fork; `install/release.bzl` points at it.
+On a Mac, `bazelisk run //:image -- --//install:prebuilt=release ...` then needs no Xcode. An Intel Mac gets
+`host-tools-darwin-x86_64.tar` (universal `apfs_tool` and `lz4`, macOS 12 up) but no shader toolset, so the shader
+seed still has to come from an Apple silicon Mac.
