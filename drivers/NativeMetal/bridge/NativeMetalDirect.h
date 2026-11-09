@@ -31,6 +31,7 @@ typedef enum NmbDirectSource : uint32_t {
     NmbDirectAttachment,         // a color attachment as an input attachment (the barrier form's fetch)
     NmbDirectStorageAttachment,  // a color attachment as a storage image (the interlocked storage form's)
     NmbDirectNeutral,
+    NmbDirectColorTable,  // m2v's sRGB colour table (bind::color_write_table), the same bytes for every state
     NmbDirectOther
 } NmbDirectSource;
 

@@ -50,6 +50,7 @@ pub enum NmbDirectSource {
     Attachment,
     StorageAttachment,
     Neutral,
+    ColorTable,
     Other,
 }
 
@@ -303,6 +304,10 @@ fn write_of(w: &metal2vulkan::bind::DescriptorWrite, commands: &DrawCommands) ->
         WriteSource::Neutral(neutral) => {
             out.source = NmbDirectSource::Neutral;
             out.view_type = neutral_view(neutral);
+        }
+        WriteSource::ColorWriteTable => {
+            out.source = NmbDirectSource::ColorTable;
+            out.stage = 2;
         }
         _ => {}
     }

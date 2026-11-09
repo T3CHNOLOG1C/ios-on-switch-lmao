@@ -201,6 +201,11 @@ bool layout(const DirectNvk &nvk, void *device, const NmbDirectDraw &d, std::vec
             why = "set 0 binding " + std::to_string(w.binding) + " not in its layout";
             return false;
         }
+        if (w.type == StorageBuffer && w.source == NmbDirectColorTable) {
+            e.colorTable = true;
+            out.push_back(e);
+            continue;
+        }
         if (bufferType(w.type)) {
             if ((w.source != NmbDirectBuffer && w.source != NmbDirectBytes) || (w.stage != 1 && w.stage != 2)) {
                 why = "a set-0 buffer m2v binds itself at " + std::to_string(e.offset) + " (source " +
