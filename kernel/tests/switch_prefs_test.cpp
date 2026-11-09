@@ -347,4 +347,38 @@ TEST(SwitchPrefsGuard, TimedCacheKeptOnlyFromThisClock)
         EXPECT_EQ(body, first) << path << ": the two kernels' drops differ";
     }
 }
+
+// True Tone starts off on iOS 27 only, as the value Settings' switch saves (an integer CBColorAdaptationEnabled in
+// com.apple.CoreBrightness's current-user, current-host file, whose host identifier is empty on iOS), seeded once so
+// that the switch's later writes stay the user's.
+TEST(SwitchPrefsGuard, TrueToneSeededOffOnceOnTwentySevenOnly)
+{
+    using switch_ios::test::Count;
+    using switch_ios::test::SourceText;
+    const char entry[] =
+        "{\"ByHost/com.apple.CoreBrightness.\", "
+        "SWITCH_PLIST(\"<key>CBColorAdaptationEnabled</key><integer>0</integer>\"),\n\t\t    kSetupOnce},";
+    const std::string seventeen = SourceText(kKernels[0]), twentySeven = SourceText(kKernels[1]);
+    EXPECT_EQ(Count(seventeen, "CBColorAdaptationEnabled"), 0u);
+    EXPECT_EQ(Count(twentySeven, entry), 1u);
+    EXPECT_EQ(Count(twentySeven, "<key>CBColorAdaptationEnabled</key>"), 1u);
+    EXPECT_EQ(Count(twentySeven, "{\"/private/var/mobile/Library/Preferences/ByHost\", 501, 0755},"), 1u);
+
+    const char xml[] =
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" "
+        "\"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict>"
+        "<key>CBColorAdaptationEnabled</key><integer>0</integer></dict></plist>\n";
+    CFDataRef data = CFDataCreate(nullptr, reinterpret_cast<const UInt8 *>(xml), sizeof(xml) - 1);
+    CFPropertyListRef plist = CFPropertyListCreateWithData(nullptr, data, kCFPropertyListImmutable, nullptr, nullptr);
+    ASSERT_NE(plist, nullptr);
+    ASSERT_EQ(CFGetTypeID(plist), CFDictionaryGetTypeID());
+    const void *value = CFDictionaryGetValue(static_cast<CFDictionaryRef>(plist), CFSTR("CBColorAdaptationEnabled"));
+    ASSERT_NE(value, nullptr);
+    ASSERT_EQ(CFGetTypeID(value), CFNumberGetTypeID());
+    int enabled = -1;
+    EXPECT_TRUE(CFNumberGetValue(static_cast<CFNumberRef>(value), kCFNumberIntType, &enabled));
+    EXPECT_EQ(enabled, 0);
+    CFRelease(plist);
+    CFRelease(data);
+}
 }  // namespace
