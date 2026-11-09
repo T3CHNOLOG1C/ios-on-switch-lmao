@@ -4,7 +4,8 @@
 
 #include <cstring>
 #include "NativeBridgeMetalFrontend.h"
-#include "RawProbe.h"
+#include "RawDirect.h"
+#include "RawMetalInternal.h"
 #include "raw_gpu.h"
 
 namespace raw {
@@ -14,8 +15,8 @@ constexpr uint64_t kCacheCap = 8u << 20;
 
 }  // namespace
 
-Completion::Completion(Device &device, id<MTLDevice> m2v, const char *cacheDir, uint64_t stack)
-    : device_(device), m2v_(m2v), stack_(stack),
+Completion::Completion(Device &device, const char *cacheDir, uint64_t stack)
+    : device_(device), stack_(stack),
       queue_(dispatch_queue_create(
           "com.brunostjohn.switch.raw.complete",
           dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INITIATED, 0)))
@@ -110,7 +111,7 @@ void Completion::ask(Ask asked, std::function<void(Pipeline *)> ready)
                 ready(device_.addRecord(*record, caTransform, why));
                 return;
             }
-            // a probe that could not run (NVK or the frontend not up to it yet) is asked again, a bounded number of times
+            // a compile that could not run (NVK or the frontend not up to it yet) is asked again, a bounded number of times
             uint64_t us = 0;
             if (compiler_->retryAfter(k, us))
                 dispatch_after(dispatch_time(DISPATCH_TIME_NOW, int64_t(us) * 1000), queue_, ^{
@@ -126,16 +127,6 @@ void Completion::ask(Ask asked, std::function<void(Pipeline *)> ready)
         else if (state == Compiler::State::Refused || state == Compiler::State::Failed)
             done(nullptr, std::string());
     });
-}
-
-Pipeline *Completion::made(Ask a)
-{
-    CacheKey k;
-    RuntimeRecord record;
-    std::string why;
-    if (!keyOf(a, k) || compiler_->lookup(k, record, why) != RecordCache::Found::Record)
-        return nullptr;
-    return device_.addRecord(record, a.caTransform, why);
 }
 
 Pipeline *Completion::makeNow(Ask a, bool *retry)
@@ -162,14 +153,20 @@ Compiler::Outcome Completion::make(const CacheKey &k, RuntimeRecord &record, std
         std::lock_guard<std::mutex> l(lock_);
         const auto it = asked_.find(k.name());
         if (it == asked_.end()) {
-            why = "asked for no twin";
+            why = "asked for no state";
             return Compiler::Outcome::Failed;
         }
         a = it->second;
     }
-    if (!probe_)
-        probe_ = std::make_unique<Probe>(m2v_, device_.pack());
-    return probe_->make(a.twin, a.descriptor, a.key, record, why);
+    std::call_once(directMade_, [this] {
+        direct_ = std::make_unique<Direct>(device_.pack());
+    });
+    const Compiler::Outcome outcome = direct_->make(a.descriptor, a.key, record, why);
+    if (outcome != Compiler::Outcome::Made)
+        once([NSString stringWithFormat:@"a state the pack lacks %s: %s | %.600s",
+                                        outcome == Compiler::Outcome::Refused ? "is refused" : "was not made",
+                                        why.c_str(), a.key.c_str()]);
+    return outcome;
 }
 
 Compiler::Stats Completion::stats() const

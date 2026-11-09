@@ -210,7 +210,7 @@ bool emitVertexInput(const std::string &keyFields, const std::vector<uint32_t> &
 }
 
 bool emitState(const std::string &keyFields, const EmitProgram &vertex, const EmitProgram &fragment,
-               std::vector<EmitRegister> &out, std::string &why)
+               std::vector<EmitRegister> &out, std::string &why, const uint32_t *blended)
 {
     std::map<unsigned, Color> colors;
     unsigned depthFormat = 0;
@@ -230,7 +230,9 @@ bool emitState(const std::string &keyFields, const EmitProgram &vertex, const Em
                 components |= (extendedRange(c.format) ? written >> i & 1 : c.writeMask >> (3 - i) & 1) << i;
         writes[j] = ctWrite(components);
         out.push_back({kCtWrite + 4 * j, writes[j], true});
-        const bool blends = c.blending && c.writeMask && !identityBlend(c) && !extendedRange(c.format);
+        // m2v leaves a blend of ONE and ZERO on where the program does not round the target's writes itself
+        const bool vulkanBlend = blended ? (*blended >> j & 1) : c.blending && !identityBlend(c);
+        const bool blends = vulkanBlend && c.writeMask && !extendedRange(c.format);
         out.push_back({kBlend + 4 * j, blends, writes[j] && !(c.blending && identityBlend(c))});
         if (j)
             out.push_back({kBlendPerTarget + 0x20 * j, 1, true});

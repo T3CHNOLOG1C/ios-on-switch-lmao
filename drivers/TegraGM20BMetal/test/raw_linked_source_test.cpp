@@ -39,7 +39,7 @@ TEST(RawLinkedSource, TheFrontendHandsEachStagesLinkedFunctionsToTheBridge)
                 HasSubstr("d.vertexLinkedFunctions, d.fragmentLinkedFunctions"));
 
     const std::string bridge = SourceText("../../NativeMetal/bridge/NativeMetalObjects.rs");
-    const std::string convert = Body(bridge, "fn render_descriptor(descriptor: *const NmbRenderPipelineDescriptor)");
+    const std::string convert = Body(bridge, "fn render_descriptor(");
     EXPECT_THAT(convert, HasSubstr("function_descriptor().with_linked(vertex_linked)"));
     EXPECT_THAT(convert, HasSubstr("function_descriptor().with_linked(fragment_linked)"));
 }
@@ -79,8 +79,9 @@ TEST(RawLinkedSource, TheRawRecordIsTheLinkedFunctionsToo)
 }
 
 // A state the pack holds is this device's archive hit: every way the facade asks m2v for its twin (at once, with
-// reflection, through a completion handler) drops the creation's archives and FailOnBinaryArchiveMiss, so a command buffer
-// that falls back never meets a twin m2v refused (device boot 10: "foreign render pipeline", 833 failed frames).
+// reflection; a completion handler's creation is the synchronous one, on a worker) drops the creation's archives and
+// FailOnBinaryArchiveMiss, so a command buffer that falls back never meets a twin m2v refused (device boot 10: "foreign
+// render pipeline", 833 failed frames).
 TEST(RawLinkedSource, APackedStatesTwinNeverFailsOnTheArchive)
 {
     const std::string states = SourceText("../raw/runtime/RawMetalStates.mm");
@@ -92,10 +93,12 @@ TEST(RawLinkedSource, APackedStatesTwinNeverFailsOnTheArchive)
                 HasSubstr("packedTwinOptions(o, true)"));
     const std::string reflected = Between(states, "    if (reflection) {", "\n    }\n");
     EXPECT_THAT(reflected, HasSubstr("packedTwinOptions(o, packed)"));
-    const std::string handler =
-        Between(states, "completionHandler:(MTLNewRenderPipelineStateWithReflectionCompletionHandler)handler", "\n}\n");
-    EXPECT_THAT(handler, HasSubstr("packedTwinOptions(o, packed)"));
-    EXPECT_THAT(handler, HasSubstr("packedTwinDescriptor(d, packed)"));
+    for (const char *handlerType : {"(MTLNewRenderPipelineStateCompletionHandler)handler",
+                                    "(MTLNewRenderPipelineStateWithReflectionCompletionHandler)handler"}) {
+        const std::string handler = Between(states, std::string("completionHandler:") + handlerType, "\n}\n");
+        EXPECT_THAT(handler, HasSubstr("dispatch_async(creationQueue(), ^{"));
+        EXPECT_THAT(handler, HasSubstr("newRenderPipelineStateWithDescriptor:copy"));
+    }
 }
 
 }  // namespace
