@@ -1,6 +1,7 @@
 """What a boot did besides HW Test's run, from the card's Data volume: crash reports, saved panics, pairing records."""
 
 import json
+import plistlib
 import re
 from collections import Counter
 from datetime import UTC, datetime
@@ -12,6 +13,9 @@ CADISPLAY = '+[CADisplay '
 PANIC = re.compile(r'^panic-(\d{4}-\d{2}-\d{2}-\d{6})(?:-damaged)?\.log$')
 # lockdownd's pair records, one per trusted host (Data is /private/var).
 PAIR_RECORDS = ('root/Library/Lockdown/pair_records', 'db/lockdown/pair_records')
+# tools/deploy/system_apps.py's INSTALLED and APP_STATES: installd's bundles, and the system apps it still wants (1).
+INSTALLED = 'containers/Bundle/Application'
+APP_STATES = 'installd/Library/MobileInstallation/BackedUpState/SystemAppInstallState.plist'
 
 
 def report_body(text: str) -> tuple[dict, dict]:
@@ -70,6 +74,26 @@ def panics(folder: Path, since: datetime) -> list[str]:
 def pairing(data: Path) -> int:
     """How many hosts lockdownd trusts."""
     return sum(len(list((data / folder).glob('*.plist'))) for folder in PAIR_RECORDS if (data / folder).is_dir())
+
+
+def plist(path: Path) -> dict:
+    try:
+        return plistlib.loads(path.read_bytes())
+    except (OSError, plistlib.InvalidFileException, ValueError):
+        return {}
+
+
+def apps(data: Path) -> dict:
+    """Count installd's app bundles, the placeholders among them (no executable) and the system apps it still wants."""
+    installed = placeholders = 0
+    for app in sorted((data / INSTALLED).glob('*/*.app')) if (data / INSTALLED).is_dir() else []:
+        executable = plist(app / 'Info.plist').get('CFBundleExecutable')
+        if executable and (app / executable).is_file():
+            installed += 1
+        else:
+            placeholders += 1
+    wanted = sum(1 for state in plist(data / APP_STATES).values() if state == 1)
+    return {'installed': installed, 'placeholders': placeholders, 'system_apps_wanted': wanted}
 
 
 def parse_time(text: str) -> datetime | None:

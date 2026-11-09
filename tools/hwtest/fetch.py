@@ -57,6 +57,7 @@ def sidecar(report: Report, data: Path, switch_folder: Path, archive: Path | Non
             'boot_s': bootlog.boot_seconds(archive, boot, boot_time) if archive else None,
             'panics': [] if report.finished else health.panics(switch_folder, started - timedelta(minutes=1)),
             'pair_records': health.pairing(data),
+            'apps': health.apps(data),
         },
         'pulled': datetime.now(UTC).isoformat(timespec='seconds'),
     }

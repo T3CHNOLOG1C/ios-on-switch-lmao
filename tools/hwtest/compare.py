@@ -129,6 +129,10 @@ def health_lines(latest: Report, previous: Report | None) -> list[str]:
     was = before.get('boot_s')
     crashes = f'this boot: crashes {counted("crashes")}; CADisplay aborts {counted("cadisplay_aborts")}'
     lines = [f'{crashes}; jetsam events {health.get("jetsams", 0)}; paired hosts {health.get("pair_records", 0)}']
+    apps = health.get('apps')
+    if apps:
+        counts = '{installed} installed, {placeholders} placeholders, {system_apps_wanted} system apps wanted'
+        lines.append('apps: ' + counts.format(**apps))
     if boot is not None:
         lines.append(f'boot to SpringBoard {boot:g} s' + (f" (last run's boot {was:g} s)" if was is not None else ''))
     return lines
