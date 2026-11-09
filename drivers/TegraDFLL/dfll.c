@@ -31,16 +31,18 @@
 #define DFLL_I2C_STS 0x48
 #define DFLL_LUT 0x200
 #define DFLL_REF_RATE 51000000UL
-#define MAX77812_UV(code) (250000u + 5000u * (unsigned)(code))
+#define VOUT_UV(code) tdfll_platform_vout_uv((u8)(code))
 
 /* clk-dfll.c (clk-dfll.h is not on this file's include path) */
 void tegra_dfll_resume(struct platform_device *pdev, bool on_dfll);
 
-/* clk-tegra124-dfll-fcpu.c: the T210B01 CPU CVB tables (global there, no header declares them) */
+/* clk-tegra124-dfll-fcpu.c: the CPU CVB tables (global there, no header declares them) */
 extern struct cvb_table tegra210b01_cpu_cvb_tables[4];
+extern struct cvb_table tegra210_cpu_cvb_tables[21];
 
-/* bounded waits (no interrupt to wait on): loop settle before the one check after enable; MAX77812 slew after a
- * VDD_CPU write (<= 1275 mV at the DT's 5 mV/us = 255 us; SwitchThermal waits the same 1 ms) */
+/* bounded waits (no interrupt to wait on): loop settle before the one check after enable; PMIC slew after a
+ * VDD_CPU write (MAX77812: <= 1275 mV at the DT's 5 mV/us = 255 us; MAX77621: 12 mV/us; SwitchThermal waits the same
+ * 1 ms) */
 #define ENABLE_SETTLE_MS 10
 #define VOUT_SLEW_MS 1
 
@@ -80,9 +82,16 @@ static void unlock(void)
 	switch_linux_mutex_unlock(api_lock);
 }
 
+/* the T210's floor table has two states where the T210B01's has three (TegraDFLL.h): past it, its last one */
+static unsigned int floor_index_for_chip(unsigned int index)
+{
+	return !tdfll_platform_is_t210b01() && index > 1 ? 1 : index;
+}
+
 static int apply_thermal(void)
 {
-	int a = tegra_dfll_update_thermal_index(st.td, TEGRA_DFLL_THERMAL_FLOOR, st.floor_index);
+	int a = tegra_dfll_update_thermal_index(st.td, TEGRA_DFLL_THERMAL_FLOOR,
+						floor_index_for_chip(st.floor_index));
 	int b = tegra_dfll_update_thermal_index(st.td, TEGRA_DFLL_THERMAL_CAP, st.cap_index);
 
 	return a ? a : b;
@@ -168,7 +177,7 @@ static int to_pllx_locked(char *why, size_t len)
 		return fail(why, len, -EIO,
 			    "VDD_CPU not restored to %u mV (TegraI2C %d); the CPU stays on PLLP "
 			    "408 MHz",
-			    MAX77812_UV(st.kept_vout) / 1000, ret);
+			    VOUT_UV(st.kept_vout) / 1000, ret);
 	}
 	msleep(VOUT_SLEW_MS);
 	if (!tdfll_platform_pllx_locked())
@@ -207,11 +216,12 @@ static int check_closed_loop(char *why, size_t len)
 		return fail(why, len, -EIO, "VDD_CPU unreadable after the switch (TegraI2C %d)",
 			    err);
 	}
+	vout &= tdfll_platform_vout_mask();
 	if (vout != dfll_last_sent(before) && vout != dfll_last_sent(after)) {
 		return fail(why, len, -EIO,
-			    "MAX77812 holds %u mV but the DFLL last sent %u mV (DFLL_I2C_STS %#x)",
-			    MAX77812_UV(vout) / 1000, MAX77812_UV(dfll_last_sent(after)) / 1000,
-			    after);
+			    "%s holds %u mV but the DFLL last sent %u mV (DFLL_I2C_STS %#x)",
+			    tdfll_platform_pmic_name(), VOUT_UV(vout) / 1000,
+			    VOUT_UV(dfll_last_sent(after)) / 1000, after);
 	}
 	return 0;
 }
@@ -239,8 +249,8 @@ int tegra_dfll_cpu_enable(unsigned long rate_hz, char *why, size_t len)
 	if (!ret)
 		ret = tdfll_platform_i2c5_shareable(why, len);
 	if (!ret && tdfll_platform_vout_read(&st.kept_vout)) {
-		ret = fail(why, len, -EIO, "VDD_CPU (MAX77812 %#x) does not answer",
-			   tdfll_platform_pmic_address());
+		ret = fail(why, len, -EIO, "VDD_CPU (%s %#x) does not answer",
+			   tdfll_platform_pmic_name(), tdfll_platform_pmic_address());
 	}
 	if (ret)
 		goto out;
@@ -278,7 +288,7 @@ int tegra_dfll_cpu_enable(unsigned long rate_hz, char *why, size_t len)
 		goto out;
 	}
 	printk("CPU on the DFLL, closed loop at %lu kHz (from PLLX %lu kHz, VDD_CPU was %u mV)\n",
-	       rate_hz / 1000, now / 1000, MAX77812_UV(st.kept_vout) / 1000);
+	       rate_hz / 1000, now / 1000, VOUT_UV(st.kept_vout) / 1000);
 out:
 	unlock();
 	return ret;
@@ -324,7 +334,7 @@ int tegra_dfll_cpu_disable_to_pllx(char *why, size_t len)
 		ret = to_pllx_locked(why, len);
 		if (!ret) {
 			printk("CPU back on PLLX, VDD_CPU %u mV\n",
-			       MAX77812_UV(st.kept_vout) / 1000);
+			       VOUT_UV(st.kept_vout) / 1000);
 		}
 	}
 	unlock();
@@ -391,7 +401,7 @@ void tegra_dfll_cpu_status(unsigned long *target_hz, unsigned long *measured, un
 		*target_hz = clk_get_rate(st.dfll);
 		*measured = measured_hz();
 		*vdd_mv =
-			MAX77812_UV(dfll_last_sent(tdfll_platform_dfll_readl(DFLL_I2C_STS))) / 1000;
+			VOUT_UV(dfll_last_sent(tdfll_platform_dfll_readl(DFLL_I2C_STS))) / 1000;
 	}
 	unlock();
 }
@@ -401,8 +411,15 @@ static const struct cvb_table *chosen_cvb(void)
 {
 	unsigned int i = 0;
 
-	for (i = 0; i < ARRAY_SIZE(tegra210b01_cpu_cvb_tables); i++) {
-		const struct cvb_table *t = &tegra210b01_cpu_cvb_tables[i];
+	const struct cvb_table *tables = tegra210b01_cpu_cvb_tables;
+	unsigned int count = ARRAY_SIZE(tegra210b01_cpu_cvb_tables);
+
+	if (!tdfll_platform_is_t210b01()) {
+		tables = tegra210_cpu_cvb_tables;
+		count = ARRAY_SIZE(tegra210_cpu_cvb_tables);
+	}
+	for (i = 0; i < count; i++) {
+		const struct cvb_table *t = &tables[i];
 
 		if ((t->speedo_id == -1 || t->speedo_id == tegra_sku_info.cpu_speedo_id) &&
 		    (t->process_id == -1 || t->process_id == tegra_sku_info.cpu_process_id))
@@ -449,11 +466,12 @@ void tegra_dfll_cpu_describe(unsigned long rate_hz, char *buf, size_t len)
 		u32 sent = dfll_last_sent(tdfll_platform_dfll_readl(DFLL_I2C_STS));
 		u64 measured = measured_hz();
 		snprintf(buf + n, len - n,
-			 "; %s, target %lu MHz, measured %llu MHz, VDD_CPU sent %u mV (MAX77812 "
+			 "; %s, target %lu MHz, measured %llu MHz, VDD_CPU sent %u mV (%s "
 			 "%#x)",
 			 (ctrl & 3) == DFLL_CTRL_CLOSED_LOOP ? "closed loop" : "NOT closed loop",
 			 clk_get_rate(st.dfll) / 1000000, (unsigned long long)(measured / 1000000),
-			 MAX77812_UV(sent) / 1000, tdfll_platform_pmic_address());
+			 VOUT_UV(sent) / 1000, tdfll_platform_pmic_name(),
+			 tdfll_platform_pmic_address());
 		n = strlen(buf);
 	}
 	if (tdfll_poll_timeouts())

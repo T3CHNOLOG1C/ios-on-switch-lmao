@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
- * Switch: the seam between the generic Linux shim (shim/linux.c) and the T210B01 board pieces (platform.c), and what
+ * Switch: the seam between the generic Linux shim (shim/linux.c) and the board pieces (platform.c), and what
  * dfll.c needs from both. Linux-side only (force-included prelude assumed).
  */
 #ifndef TDFLL_PLATFORM_H
@@ -50,10 +50,17 @@ int tdfll_platform_cpu_on_pllx(char *why, size_t len);
 bool tdfll_platform_pllx_locked(void);
 /* I2C5 is clocked, out of reset and in multi-master mode, so the DFLL's own I2C master may share PWR_I2C with it. */
 int tdfll_platform_i2c5_shareable(char *why, size_t len);
-/* VDD_CPU's MAX77812 M4_VOUT code over TegraI2C (one retry on arbitration loss); write reads back. 0 or TEGRA_I2C_E* */
+/* VDD_CPU's vsel register (MAX77812 M4_VOUT, or a T210's MAX77621 VOUT) over TegraI2C (one retry on arbitration
+ * loss); write reads back. 0 or TEGRA_I2C_E* */
 int tdfll_platform_vout_read(u8 *code);
 int tdfll_platform_vout_write(u8 code);
 u8 tdfll_platform_pmic_address(void);
+const char *tdfll_platform_pmic_name(void);
+/* the register's selector bits (0xff, or a MAX77621's 0x7f below its enable bit) and the voltage a code means */
+u8 tdfll_platform_vout_mask(void);
+unsigned int tdfll_platform_vout_uv(u8 code);
+/* after init: a T210B01 (the OLED's chip), else a T210 (the 2017 Switch) */
+bool tdfll_platform_is_t210b01(void);
 /* a DFLL register (offsets as clk-dfll.c names them; the LUT RAM is at 0x200), for status only */
 u32 tdfll_platform_dfll_readl(u32 offset);
 /* "SKU 0x83 A01, CPU speedo 0/1612 process 0, ..." */

@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: GPL-2.0
-// Tegra210B01 (Switch OLED) CPU DFLL (CL-DVFS, closed-loop CPU DVFS) for statically linked Switch drivers.
+// Tegra210 / Tegra210B01 CPU DFLL (CL-DVFS, closed-loop CPU DVFS) for statically linked Switch drivers.
 //
 // The DFLL is a CPU-voltage-tracking oscillator (DVCO) plus a control loop that drives VDD_CPU over its own I2C
 // master: given a target frequency it raises or lowers VDD_CPU until the DVCO, which clocks the A57 cluster, runs at
 // that frequency. Because the clock follows the real rail voltage, a voltage that is too low (a thermal cap, a slow
 // PMIC) makes the CPU run slower, never out of spec. This is L4T's driver, vendored with no changes from
 // CTCaer/switch-l4t-kernel-4.9 linux-dev 2d0059fd (linux/: clk-dfll.c, clk-tegra124-dfll-fcpu.c with the
-// tegra210b01 CVB/thermal tables, cvb.c, speedo-tegra210.c and their headers) over a freestanding Linux shim
-// (shim/), so voltages, LUT, tuning and calibration are exactly L4T's. platform.c holds the board: the DT node
-// (switchroot OLED DT), CAR clocks/reset, fuses, VDD_CPU = MAX77812 M4 on I2C5.
+// tegra210 and tegra210b01 CVB/thermal tables, cvb.c, speedo-tegra210.c and their headers) over a freestanding
+// Linux shim (shim/), so voltages, LUT, tuning and calibration are exactly L4T's. platform.c holds the board: the DT
+// node (switchroot's OLED or Erista DT, by the chip), CAR clocks/reset, fuses, VDD_CPU on I2C5 (MAX77812 M4 on a
+// T210B01, MAX77621 on a T210).
 //
 // Nothing here runs unless called. The caller (SwitchThermal's on-demand governor) owns the policy: it picks the rate, maps temperature to the L4T thermal indices below and
 // decides when to leave DFLL mode. Every call is thread context only (I2C5 and IOSleep), serialized internally; none may
@@ -52,7 +53,9 @@ extern "C" {
 // L4T thermal indices (= cooling-device states of DT tegra210b01-nx-common.dtsi:1024-1054,1157-1214 with
 // dt-bindings/thermal/tegra210b01-trips.h; tables in clk-tegra124-dfll-fcpu.c tegra210b01_thermal_*_table). L4T
 // switches them on the SoC (Tdiode) and PLL sensor trips with 1 C hysteresis; the caller does that mapping here.
-// Until the caller sets them the driver keeps its own boot defaults: the cold floor and the tightest cap.
+// Until the caller sets them the driver keeps its own boot defaults: the cold floor and the tightest cap. A T210's
+// tables (tegra210_thermal_*_table) have two floor states (950 mV below the trip, then none) and the same three caps
+// (1170, 1132 mV); a floor index past its table is applied as its last state.
 enum {
 	TEGRA_DFLL_FLOOR_COLD = 0,  // below 20 C: VDD_CPU never below 800 mV
 	TEGRA_DFLL_FLOOR_WARM =

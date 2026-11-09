@@ -652,7 +652,11 @@ void reportClocks(const char *when)
     if (err) {
         snprintf(rail, sizeof(rail), "VDD_CPU unreadable (I2C5 %d)", err);
     } else {
-        snprintf(rail, sizeof(rail), "VDD_CPU %u mV (MAX77812 0x%02x)", voutMilliVolts(vout), address);
+        if (address == kMax77621Address) {
+            snprintf(rail, sizeof(rail), "VDD_CPU %u mV (MAX77621 0x%02x)", max77621MilliVolts(vout), address);
+        } else {
+            snprintf(rail, sizeof(rail), "VDD_CPU %u mV (MAX77812 0x%02x)", voutMilliVolts(vout), address);
+        }
     }
     IOLog("SwitchClocks %s: CPU %s from %s (CCLK %#x; PLLX %s = %u.%u x %u / %u / %u), %s; EMC %s from %s"
           " (CLK_SOURCE_EMC %#x)\n",

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * Tegra210B01 (Switch OLED) board pieces behind the vendored L4T DFLL driver: the device tree node, the CAR clocks
- * and reset it asks for, VDD_CPU's MAX77812 as a regulator, the fuses and chip revision the speedo code reads, and the
- * read-only checks dfll.c makes before it moves the CPU clock.
+ * The Switch's board pieces behind the vendored L4T DFLL driver: the device tree node, the CAR clocks and reset it
+ * asks for, VDD_CPU as a regulator (the OLED's MAX77812 on a T210B01, the 2017 Switch's MAX77621 on a T210), the fuses
+ * and chip revision the speedo code reads, and the read-only checks dfll.c makes before it moves the CPU clock.
  *
  * Sources ("L4T" = CTCaer/switch-l4t-kernel-4.9 linux-dev 2d0059fd; "DT-soc" = CTCaer/l4t-hardware-soc-t210
  * l4t/l4t-r32.3.1 kernel-dts; "DT-nx" = CTCaer/switch-l4t-platform-t210-nx linux-dev kernel-dts/nx-platforms; hekate =
@@ -36,6 +36,11 @@
  *               M4 = vdd-cpu, M4_VOUT 0x26, 250000 + 5000 uV * code, 0xff selectors, regmap vsel (L4T
  *               max77812-regulator.c:56,97-101,386-411); constraints 250..1525 mV (DT-nx tegra210b01-nx-pmic.dtsi:
  *               77-80).
+ *   T210 (DT-nx tegra210-odin-common.dtsi:1093-1106, tegra210-odin-pmic.dtsi:27-52; hekate max7762x.h): the DFLL
+ *               node differs in align-step-uv 6250 and sample-rate 25000; VDD_CPU is a MAX77621 at 0x1B, VOUT 0x00
+ *               bits 6:0 = (uV - 606250) / 6250 (L4T max8973-regulator.c), bit 7 its enable, which the EN pin
+ *               (MAX77620 GPIO5, maxim,externally-enable) overrides, so the DFLL's 7-bit writes leave it on;
+ *               constraints 618750..1400000 uV, 126 voltages.
  *   I2C5 controller 0x7000d000: I2C_CNFG bit 17 MULTI_MASTER_MODE, which L4T's i2c-tegra.c sets on every T210
  *               controller (i2c-tegra.c:56,1046-1047, tegra210_i2c_hw.has_multi_master_mode = true at 2335-2344).
  */
@@ -104,6 +109,8 @@
 #define MAX77812_PHASE31 0x31
 #define MAX77812_PHASE211 0x33
 #define MAX77812_M4_VOUT 0x26
+#define MAX77621_CPU 0x1b
+#define MAX77621_VOUT 0x00
 
 static volatile u8 *car, *fuse, *apbmisc, *i2c5, *dfll;
 static int init_err = 1; /* 1: not tried yet */
@@ -124,11 +131,12 @@ static int fail(char *why, size_t len, int err, const char *fmt, ...)
 	return err;
 }
 
-static struct device_node max77812_m4 = {
+static struct device_node vdd_cpu_node = {
 	.name = "m4vout",
 	.full_name = "/i2c@7000d000/max77812@33/regulators/m4vout",
 };
-static const char *const dfll_compatible[] = {"nvidia,tegra210b01-dfll", "nvidia,tegra210-dfll"};
+/* the node's first compatible picks the fcpu table set (of_match_node scores by the node's order): the chip's */
+static const char *dfll_compatible[] = {"nvidia,tegra210b01-dfll", "nvidia,tegra210-dfll"};
 static const char *const dfll_clock_names[] = {"soc", "ref", "i2c"};
 /* <&tegra_car TEGRA210_CLK_DFLL_SOC>, <... DFLL_REF>, <... I2C5> as the names this shim registers them under */
 static const char *const dfll_clocks[] = {"dfll_soc", "dfll_ref", "i2c5"};
@@ -136,8 +144,8 @@ static const char *const dfll_reset_names[] = {"dvco"};
 static const char *const dfll_output_names[] = {"dfllCPU_out"};
 static const char *const dfll_out_clock_name[] = {"dfll_cpu"};
 static const char *const dfll_status[] = {"okay"};
-static const u32 v_align_step_uv[] = {5000};
-static const u32 v_sample_rate[] = {12500};
+static u32 v_align_step_uv[] = {5000};
+static u32 v_sample_rate[] = {12500};
 static const u32 v_droop_ctrl[] = {0x00000f00};
 static const u32 v_force_mode[] = {1};
 static const u32 v_cf[] = {6};
@@ -155,7 +163,7 @@ static const struct tdfll_property dfll_props[] = {
 	PROP_STR("clock-output-names", dfll_output_names),
 	PROP_STR("out-clock-name", dfll_out_clock_name),
 	PROP_STR("status", dfll_status),
-	{.name = "vdd-cpu-supply", .phandle = &max77812_m4},
+	{.name = "vdd-cpu-supply", .phandle = &vdd_cpu_node},
 	PROP_U32("nvidia,align-step-uv", v_align_step_uv),
 	PROP_U32("nvidia,sample-rate", v_sample_rate),
 	PROP_U32("nvidia,droop-ctrl", v_droop_ctrl),
@@ -226,7 +234,7 @@ static struct regulator vdd_cpu = {
 struct regulator *tdfll_platform_regulator(struct device *dev, const char *id)
 {
 	if (!id || strcmp(id, "vdd-cpu") || !dev ||
-	    of_parse_phandle(dev->of_node, "vdd-cpu-supply", 0) != &max77812_m4)
+	    of_parse_phandle(dev->of_node, "vdd-cpu-supply", 0) != &vdd_cpu_node)
 		return NULL;
 	return &vdd_cpu;
 }
@@ -236,25 +244,46 @@ u8 tdfll_platform_pmic_address(void)
 	return (u8)vdd_cpu.client.addr;
 }
 
+const char *tdfll_platform_pmic_name(void)
+{
+	return vdd_cpu.client.name;
+}
+
+u8 tdfll_platform_vout_mask(void)
+{
+	return (u8)vdd_cpu.vsel_mask;
+}
+
+unsigned int tdfll_platform_vout_uv(u8 code)
+{
+	return (unsigned int)(vdd_cpu.min_uV + vdd_cpu.uV_step * (int)(code & vdd_cpu.vsel_mask));
+}
+
+bool tdfll_platform_is_t210b01(void)
+{
+	return tegra_sku_info.id_and_rev == TEGRA210B01_REVISION_A01;
+}
+
 /* I2C5 is shared with the DFLL's own master: an arbitration loss is expected now and then, so one retry */
 int tdfll_platform_vout_read(u8 *code)
 {
 	int err = tegra_i2c_init(PMIC_BUS);
 
 	if (!err)
-		err = tegra_i2c_read(PMIC_BUS, (u8)vdd_cpu.client.addr, MAX77812_M4_VOUT, code, 1);
+		err = tegra_i2c_read(PMIC_BUS, (u8)vdd_cpu.client.addr, (u8)vdd_cpu.vsel_reg, code, 1);
 	if (err == TEGRA_I2C_EARB)
-		err = tegra_i2c_read(PMIC_BUS, (u8)vdd_cpu.client.addr, MAX77812_M4_VOUT, code, 1);
+		err = tegra_i2c_read(PMIC_BUS, (u8)vdd_cpu.client.addr, (u8)vdd_cpu.vsel_reg, code, 1);
 	return err;
 }
 
+/* the whole register goes back as it was read (a MAX77621's enable bit 7 included) */
 int tdfll_platform_vout_write(u8 code)
 {
 	u8 check = 0;
-	int err = tegra_i2c_write(PMIC_BUS, (u8)vdd_cpu.client.addr, MAX77812_M4_VOUT, &code, 1);
+	int err = tegra_i2c_write(PMIC_BUS, (u8)vdd_cpu.client.addr, (u8)vdd_cpu.vsel_reg, &code, 1);
 
 	if (err == TEGRA_I2C_EARB) {
-		err = tegra_i2c_write(PMIC_BUS, (u8)vdd_cpu.client.addr, MAX77812_M4_VOUT, &code,
+		err = tegra_i2c_write(PMIC_BUS, (u8)vdd_cpu.client.addr, (u8)vdd_cpu.vsel_reg, &code,
 				      1);
 	}
 	if (!err)
@@ -375,7 +404,11 @@ void tdfll_platform_describe_chip(char *buf, size_t len)
 
 	snprintf(buf, len, "SKU %#x%s, CPU speedo %d/%d process %d (fuse rev %d, IDDQ %d)",
 		 s->sku_id,
-		 s->id_and_rev == TEGRA210B01_REVISION_A01 ? " T210B01 A01" : " not T210B01",
+		 s->id_and_rev == TEGRA210B01_REVISION_A01 ? " T210B01 A01" :
+		 s->id_and_rev == TEGRA210_REVISION_A02    ? " T210 A02" :
+		 s->id_and_rev == TEGRA210_REVISION_A01q   ? " T210 A01q" :
+		 s->id_and_rev == TEGRA210_REVISION_A01    ? " T210 A01" :
+							      " unknown chip",
 		 s->cpu_speedo_id, s->cpu_speedo_value, s->cpu_process_id, s->speedo_rev,
 		 s->cpu_iddq_value);
 }
@@ -622,22 +655,46 @@ static int platform_init(char *why, size_t len)
 	switch_mmio_write32_flush(car, MISC_CLK_ENB,
 				  switch_mmio_read32(car, MISC_CLK_ENB) | MISC_FUSE_VISIBLE);
 	init_revision();
-	if (tegra_sku_info.id_and_rev != TEGRA210B01_REVISION_A01)
-		return fail(why, len, -ENODEV, "not a T210B01 A01 (HIDREV %#x)", hidrev);
+	if (tegra_sku_info.id_and_rev != TEGRA210B01_REVISION_A01 &&
+	    tegra_sku_info.id_and_rev != TEGRA210_REVISION_A01 &&
+	    tegra_sku_info.id_and_rev != TEGRA210_REVISION_A01q &&
+	    tegra_sku_info.id_and_rev != TEGRA210_REVISION_A02)
+		return fail(why, len, -ENODEV, "neither a T210B01 A01 nor a T210 (HIDREV %#x)", hidrev);
 	tegra210_init_speedo_data(&tegra_sku_info);
 	if (tegra_sku_info.cpu_speedo_value <= 0 || tegra_sku_info.cpu_process_id < 0) {
 		return fail(why, len, -ENODEV, "CPU speedo not fused (value %d, process %d)",
 			    tegra_sku_info.cpu_speedo_value, tegra_sku_info.cpu_process_id);
 	}
-	vdd_cpu.client.addr = (switch_mmio_read32(fuse, FUSE_ODM28_B01) & 1) ? MAX77812_PHASE211
-									     : MAX77812_PHASE31;
+	if (tdfll_platform_is_t210b01()) {
+		vdd_cpu.client.addr = (switch_mmio_read32(fuse, FUSE_ODM28_B01) & 1) ?
+					      MAX77812_PHASE211 :
+					      MAX77812_PHASE31;
+	} else {
+		/* the T210's DT node and its MAX77621, as the file comment lists them */
+		dfll_compatible[0] = "nvidia,tegra210-dfll";
+		dfll_compatible[1] = "nvidia,tegra210b01-dfll";
+		v_align_step_uv[0] = 6250;
+		v_sample_rate[0] = 25000;
+		vdd_cpu_node.name = "max77621";
+		vdd_cpu_node.full_name = "/i2c@7000d000/max77621@1b";
+		vdd_cpu.min_uV = 606250;
+		vdd_cpu.uV_step = 6250;
+		vdd_cpu.n_voltages = 126;
+		vdd_cpu.constraint_min_uV = 618750;
+		vdd_cpu.constraint_max_uV = 1400000;
+		vdd_cpu.vsel_reg = MAX77621_VOUT;
+		vdd_cpu.vsel_mask = 0x7f;
+		memcpy(vdd_cpu.client.name, "max77621", sizeof("max77621"));
+		vdd_cpu.client.dev.init_name = "max77621";
+		vdd_cpu.client.addr = MAX77621_CPU;
+	}
 
 	/* VDD_CPU's PMIC must answer where the fuse says it is: the DFLL will address it blindly. Nothing above has
 	 * changed any state, so a transient failure (lost arbitration, timeout) is -EAGAIN and the next init retries. */
 	err = tdfll_platform_vout_read(&vout);
 	if (err) {
 		return fail(why, len, err == TEGRA_I2C_ENACK ? -ENODEV : -EAGAIN,
-			    "MAX77812 at I2C5 %#x does not answer (TegraI2C %d)",
+			    "%s at I2C5 %#x does not answer (TegraI2C %d)", vdd_cpu.client.name,
 			    vdd_cpu.client.addr, err);
 	}
 

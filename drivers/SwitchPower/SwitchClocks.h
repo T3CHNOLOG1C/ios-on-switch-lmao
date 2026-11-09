@@ -37,6 +37,7 @@
 #include <stdint.h>
 #include <IOKit/IOLib.h>
 #include "../TegraI2C/TegraI2C.h"
+#include "../../kits/SwitchChip/SwitchChip.h"
 #include "../../kits/SwitchMMIO/SwitchMMIO.h"
 
 namespace switchclk {
@@ -63,10 +64,17 @@ constexpr unsigned kPllpKHz = 408000;
 constexpr unsigned kPmicBus = 5;
 constexpr uint8_t kMax77812Addresses[] = {0x33, 0x31};
 constexpr uint8_t kM4Vout = 0x26;
+// The 2017 Switch's VDD_CPU: a MAX77621 (hekate max7762x.h), VOUT bits 6:0 = (mV - 606.25) / 6.25, bit 7 its enable.
+constexpr uint8_t kMax77621Address = 0x1b, kMax77621Vout = 0x00;
 
 inline unsigned voutMilliVolts(uint8_t code)
 {
     return 250u + 5u * code;
+}
+
+inline unsigned max77621MilliVolts(uint8_t code)
+{
+    return (606250u + 6250u * (code & 0x7fu)) / 1000u;
 }
 
 inline unsigned refKHz(volatile uint8_t *car)
@@ -193,10 +201,20 @@ inline const char *emcSourceName(unsigned source)
 }
 
 // VDD_CPU's MAX77812 address and M4_VOUT code; TEGRA_I2C_* error when neither address answers. Thread context
-// (I2C5 is interrupt-driven and may sleep until the GIC is up).
+// (I2C5 is interrupt-driven and may sleep until the GIC is up). On a T210 (no MAX77812) the MAX77621's VOUT instead,
+// with *address = kMax77621Address; its codes mean other voltages (max77621MilliVolts), so callers that write a code
+// must check the address first.
 inline int readCpuRail(uint8_t *address, uint8_t *vout)
 {
     int err = tegra_i2c_init(kPmicBus);
+    if (!err && !switch_chip_is_t210b01()) {
+        err = tegra_i2c_read(kPmicBus, kMax77621Address, kMax77621Vout, vout, 1);
+        if (err == TEGRA_I2C_EARB)
+            err = tegra_i2c_read(kPmicBus, kMax77621Address, kMax77621Vout, vout, 1);
+        if (!err)
+            *address = kMax77621Address;
+        return err;
+    }
     for (unsigned i = 0; !err && i < sizeof(kMax77812Addresses); ++i) {
         err = tegra_i2c_read(kPmicBus, kMax77812Addresses[i], kM4Vout, vout, 1);
         if (err == TEGRA_I2C_EARB)
