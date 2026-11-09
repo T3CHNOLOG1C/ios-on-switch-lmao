@@ -83,12 +83,18 @@ kernel void half_arithmetic(device const half4 *a [[buffer(0)]], device const ha
     out[4 * id + 3] = rx * ry;
 }
 
-/// gpu.sm53_probe: each form NAK_DEBUG=sm53_probe lowers to SM53's half ALU with an f32 result. The first two hold if
-/// the op rounds to half before it widens, the last three if it rounds the exact result once to f32.
+/// NAK lowers a shader the SM53 probe's way only if it holds this value (nak/opt_sm53_half_probe.rs, debug builds): the
+/// probe kernels compare their thread index with it, which no dispatch reaches
+constant uint SM53_PROBE_MARKER = 0x7fa55353u;
+
+/// gpu.sm53_probe: each form NAK lowers to SM53's half ALU with an f32 result. The first two hold if the op rounds to
+/// half before it widens, the last three if it rounds the exact result once to f32.
 kernel void sm53_probe(device const half *a [[buffer(0)]], device const half *b [[buffer(1)]],
                        device const half *c [[buffer(2)]], device float *out [[buffer(3)]],
                        uint id [[thread_position_in_grid]])
 {
+    if (id == SM53_PROBE_MARKER)
+        return;
     const half x = a[id], y = b[id], z = c[id];
     const half sum = x + y, product = x * y;
     out[5 * id] = float(sum);
@@ -98,11 +104,13 @@ kernel void sm53_probe(device const half *a [[buffer(0)]], device const half *b 
     out[5 * id + 4] = fma(float(x), float(y), float(z));
 }
 
-/// gpu.sm53_probe: an f32 narrowed to half and its round trip through half, which NAK_DEBUG=sm53_probe emits as one
-/// HADD2 each, reading the f32 through HADD2's F32 swizzle
+/// gpu.sm53_probe: an f32 narrowed to half and its round trip through half, which NAK emits as one HADD2 each, reading
+/// the f32 through HADD2's F32 swizzle
 kernel void sm53_f32_source(device const float *x [[buffer(0)]], device half *narrowed [[buffer(1)]],
                             device float *roundTrip [[buffer(2)]], uint id [[thread_position_in_grid]])
 {
+    if (id == SM53_PROBE_MARKER)
+        return;
     const half h = half(x[id]);
     narrowed[id] = h;
     roundTrip[id] = float(h);

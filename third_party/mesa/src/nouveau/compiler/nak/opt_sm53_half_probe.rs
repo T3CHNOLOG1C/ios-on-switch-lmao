@@ -3,7 +3,9 @@
 
 //! ios-on-switch-lmao: SM53's half ALU with an f32 result (OFMT F32), in the
 //! two readings the device has to tell apart, for SwitchHWTest's
-//! gpu.compute.sm53_probe (NAK_DEBUG=sm53_probe, never in release builds):
+//! gpu.sm53_probe (never in release builds). They apply only to a shader
+//! carrying SM53_PROBE_MARKER, which the probe's Metal source compares its
+//! thread index with:
 //!
 //! - the f32 widening of a half sum, product or fma is the op with an f32
 //!   result, if the op rounds to half before it widens;
@@ -19,6 +21,10 @@
 use crate::ir::*;
 
 use rustc_hash::FxHashMap;
+
+/// hw_test_app/shaders/Scenes.metal SM53_PROBE_MARKER: a signalling NaN's
+/// bits, a value no other shader has a use for
+const SM53_PROBE_MARKER: u32 = 0x7fa5_5353;
 
 #[derive(Clone, Copy, PartialEq)]
 enum Half {
@@ -160,6 +166,15 @@ fn record(defs: &mut FxHashMap<SSAValue, Def>, op: &Op) {
 }
 
 impl Shader<'_> {
+    pub fn carries_sm53_probe_marker(&self) -> bool {
+        self.functions
+            .iter()
+            .flat_map(|f| f.blocks.iter())
+            .flat_map(|b| b.instrs.iter())
+            .flat_map(|i| i.op.srcs_as_slice())
+            .any(|s| matches!(s.src_ref, SrcRef::Imm32(SM53_PROBE_MARKER)))
+    }
+
     pub fn opt_sm53_half_probe(&mut self) {
         for f in &mut self.functions {
             let mut defs = FxHashMap::default();

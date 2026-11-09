@@ -3363,7 +3363,7 @@ pub struct OpHAdd2 {
     pub ftz: bool,
     pub f32: bool,
     /// ios-on-switch-lmao: SM53 reads srcs[0] as an f32 for both lanes (the
-    /// F32 swizzle). Only NAK_DEBUG=sm53_probe emits it, after copy-prop.
+    /// F32 swizzle). Only the SM53 probe emits it, after copy-prop.
     pub a_f32: bool,
 }
 
