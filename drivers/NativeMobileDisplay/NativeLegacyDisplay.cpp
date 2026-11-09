@@ -33,6 +33,7 @@
 #include "../TegraSMMU/TegraSMMU.h"
 #include "../TegraSMMU/TegraSMMUDomain.h"
 #include "DisplaySmmuProbe.h"
+#include "NativePlaneFence.h"
 #include "NativePlanes.h"
 #include "SwitchFrameInfo.h"
 #include "SwitchFrameStall.h"
@@ -126,6 +127,11 @@ extern "C" __attribute__((weak)) int tegra_gm20b_surface_tiled(uint64_t)
     return 0;
 }
 
+extern "C" __attribute__((weak)) int tegra_gm20b_scanout_fence(void *, uint64_t)
+{
+    return -1;
+}
+
 extern "C" __attribute__((weak)) int tegra_gm20b_scanout_outstanding(const void *)
 {
     return 0;
@@ -139,6 +145,11 @@ extern "C" __attribute__((weak)) void *tegra_gm20b_surface_hold(uint64_t, int *t
 
 extern "C" __attribute__((weak)) void tegra_gm20b_surface_unhold(void *)
 {}
+
+extern "C" __attribute__((weak)) int tegra_gm20b_surface_layout(uint64_t, struct tgm_layout *)
+{
+    return 0;
+}
 
 extern "C" __attribute__((weak)) void tegra_gm20b_frame_take(struct SwitchFrameGpu *out)
 {
@@ -933,11 +944,12 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         OSObject *surface;
         void *layout;
         uint64_t low, high;  // the surface bytes mapped (page-aligned) at the slot's IOVA
-        uint64_t used;
+        uint32_t used;
+        bool tiled;  // the GPU renders the surface block-linear: window B scans it so
     };
 
     PlaneSlot planeSlots[kPlaneSlots] = {};
-    uint64_t planeSlotUses = 0;
+    uint32_t planeSlotUses = 0;
 
     struct PlaneSet {
         bool on;
@@ -1742,6 +1754,7 @@ private:
         }
         add("; planes %s: flips %u (b-only %u) latched %u, maps %u, dropped %u, underflow %u, unready %u", planesState,
             stPlaneFlips, stPlaneOnly, stPlaneLatched, stPlaneMaps, stPlaneDropped, stPlaneUnderflows, stPlaneUnready);
+        planeTotalsClose();
         stPlaneFlips = stPlaneOnly = stPlaneLatched = stPlaneMaps = stPlaneDropped = stPlaneUnderflows =
             stPlaneUnready = 0;
         add("; long %u: idle %u/%u ca %u/%u gpu %u/%u queue %u/%u latch %u/%u rate %u/%u",
@@ -3522,6 +3535,7 @@ public:
         if (primary) {
             __atomic_store_n(&primaryDisplay, this, __ATOMIC_RELEASE);
             columnScanRegister();
+            planeTotalsRegister();
         }
         return true;
     }
@@ -3761,6 +3775,7 @@ public:
                 return;
             }
             __asm__ volatile("dsb sy" ::: "memory");
+            planeNextUnfenced();
             noteTaken(request, kickAt);  // before the flip, which carries it to the present
             if (block && !colourBlank)
                 presentBlock();
@@ -3819,6 +3834,7 @@ public:
         if (gpuCopy && !gpuBypass &&
             offerGpuCopy(request, memory, sourceStride, allocation, width, height, tiled, kickAt))
             return;
+        planeNextUnfenced();  // no GPU present carries this frame from here on
         if (!gpuBypass && native_legacy_gpu_offer(this, memory, sourceStride, width, height)) {
             // The GPU writes the scanout memory behind the CPU's back: the differential copy's picture of it is stale from now on.
             native_legacy_swap_stage(1);
@@ -4251,6 +4267,10 @@ public:
     // The GPU client reported its copy (status 0) or lost it. Success retires the swap like a finished copy; anything else uses the CPU copy.
     void finishGpuSwap(int status)
     {
+        if (gpuScanout && planeFencePending) {
+            finishPlaneFence(status);
+            return;
+        }
         if (gpuScanout) {
             finishGpuCopy(status);
             return;
@@ -4350,6 +4370,7 @@ public:
         copy.targetPitch = static_cast<uint32_t>(kNativeBlockStride);
         copy.blockHeightLog2 = 4;  // kNativeBlockGobs, the DC's BLOCK_HEIGHT(4)
         copy.flags = tiled ? TEGRA_SCANOUT_COPY_SOURCE_BLOCK : 0;
+        copy.alsoWritten = planeNextAlsoWritten();
         memory->retain();
         if (tegra_gm20b_scanout_copy(&copy)) {
             memory->release();
@@ -4401,6 +4422,11 @@ public:
             return;
         }
         const unsigned waited = (held ? self->gpuDeadlines : self->gpuDeadlines + 1) * kGpuCopyDeadlineMS;
+        if (planeFencePending) {
+            panic("SwitchDisplay: GPU present %llu (window B's fence, slot %d) not completed in %u ms: %s",
+                  self->gpuSequence, planeFencing.slot, waited,
+                  held ? "the GPU driver still holds it" : "the GPU driver released it with no completion");
+        }
         if (self->gpuDirect != kNoBuffer) {
             panic("SwitchDisplay: GPU present %llu (fence only, direct slot %d) not completed in %u ms: %s",
                   self->gpuSequence, self->gpuDirect - kSlot0, waited,
@@ -4786,6 +4812,7 @@ public:
         copy.sourceStride = stride;
         copy.sourceBytes = allocation;
         copy.flags = TEGRA_SCANOUT_COPY_FENCE_ONLY;
+        copy.alsoWritten = planeNextAlsoWritten();
         memory->retain();
         if (tegra_gm20b_scanout_copy(&copy)) {
             memory->release();
@@ -4871,6 +4898,8 @@ public:
     }
 
 #include "NativePlanesDisplay.h"
+#include "NativePlaneFenceDisplay.h"
+#include "NativePlanesTotals.h"
 #include "NativeColumnScanDisplay.h"
 
     IOReturn collectCompletionReports(uint32_t, void *, uint32_t *count, uint32_t) override
@@ -5205,7 +5234,11 @@ public:
     // (native_legacy_detach_ready false) nothing is detached and these change nothing.
     void publishPlaneLimits()
     {
-        const native_planes::Limits limits;
+#if SWITCH_IPSW_KIND_24B119
+        constexpr native_planes::Limits limits = native_planes::kLimits24B119;
+#else
+        constexpr native_planes::Limits limits;
+#endif
 
         struct Entry {
             const char *key;
@@ -5243,6 +5276,8 @@ public:
         publish("DisplayPipePlaneBaseAlignment", base, 1, 64);
         const Entry layers[] = {{"MaxNumLayers", limits.maxLayers}};
         publish("IOMFBNumLayers", layers, 1, 32);
+        if (limits.packedYuvUnsupported)
+            setProperty("IOMFBYUVPackedUnSupported", true);
     }
 
     IOReturn getGammaTable(void *table) override

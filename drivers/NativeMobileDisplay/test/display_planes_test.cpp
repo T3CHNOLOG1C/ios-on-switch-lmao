@@ -461,3 +461,21 @@ TEST(DisplayPlanes, PublishedAlignmentSuitsEveryReader)
     EXPECT_EQ(layers[1].surface.stride[0], 3072u);
     EXPECT_EQ(checkUpdated(2u | kBackgroundBit, kOpaqueBlack, has, layers, W, H, limits), (unsigned)kAccepted);
 }
+
+// iOS 27 publishes iOS 17's limits and, where QuartzCore 24B119 no longer goes by J120's chip id, packed 10-bit YUV ruled
+// out.
+TEST(DisplayPlanes, Limits24B119AreIos17sWithoutPackedYuv)
+{
+    const Limits ios17;
+    const Limits &ios27 = kLimits24B119;
+    EXPECT_FALSE(ios17.packedYuvUnsupported);
+    EXPECT_TRUE(ios27.packedYuvUnsupported);
+    EXPECT_EQ(ios27.minScaleFraction, ios17.minScaleFraction);
+    EXPECT_EQ(ios27.maxScale, ios17.maxScale);
+    EXPECT_EQ(ios27.maxSrcRectWidth, ios17.maxSrcRectWidth);
+    EXPECT_EQ(ios27.maxSrcRectTotal, ios17.maxSrcRectTotal);
+    EXPECT_EQ(ios27.maxSrcBuffer, ios17.maxSrcBuffer);
+    EXPECT_EQ(ios27.planeBaseAlignment, ios17.planeBaseAlignment);
+    EXPECT_EQ(ios27.strideAlignment, ios17.strideAlignment);
+    EXPECT_EQ(ios27.maxLayers, ios17.maxLayers);
+}

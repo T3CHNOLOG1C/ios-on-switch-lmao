@@ -324,6 +324,25 @@ TEST(GM20BPresentSource, FenceOnlyPresentHasNoCopy)
 		     "NVB0B5_LAUNCH_DMA_NON_PIPELINED");
 }
 
+// A present waits for the writers of window B's surface too (TegraScanoutCopy alsoWritten), so the display writes window
+// B's registers for a surface the GPU renders only after that work; window B's own fence maps nothing and copies nothing.
+TEST(GM20BPresentSource, PresentWaitsForWindowBsWritersToo)
+{
+	const std::string copy = flat(Between(gpu(), "static int present_copy(", "\n}\n"));
+	EXPECT_THAT(copy, HasSubstr("present_imports(user, src_pa, also_pa)"));
+	EXPECT_THAT(copy, HasSubstr("(matched && !present_imports(user, src_pa, also_pa))"));
+	EXPECT_THAT(flat(Between(gpu(), "static int present_imports(", "\n}\n")),
+		    HasSubstr("vm_imports(user->vm, src_pa) || (also_pa && vm_imports(user->vm, "
+			      "also_pa))"));
+	EXPECT_THAT(flat(Between(client(), "extern \"C\" int tegra_gm20b_scanout_copy(", "\n}\n")),
+		    HasSubstr("copy->alsoWritten & ~0xfffULL"));
+	const std::string fence =
+		flat(Between(client(), "extern \"C\" int tegra_gm20b_scanout_fence(", "\n}\n"));
+	EXPECT_THAT(fence, HasSubstr("tgm_present_copy(0, pa & ~0xfffULL, 0, 0, 0, 1, 1, 0, 0, 0, "
+				     "presentDone, display)"));
+	EXPECT_THAT(fence, Not(HasSubstr("presentSurface(")));
+}
+
 // A tiled (block-linear) source: the copy engine reads it block-linear with the tiled block height, never as pitch, through
 // a mapping of the kind its texels were written under; a surface's layout comes from its decision (SurfaceLayout), never
 // from how one client bound it.

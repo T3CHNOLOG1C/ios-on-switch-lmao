@@ -13,7 +13,7 @@
 #pragma once
 #include <stdint.h>
 
-#define TEGRA_SCANOUT_COPY_VERSION 2u
+#define TEGRA_SCANOUT_COPY_VERSION 3u
 // flags: no copy; the completion only says the compositor's GPU work on the source is done (direct scanout: the display
 // scans the source itself, through the SMMU). target, targetBytes, targetPitch and blockHeightLog2 are ignored.
 #define TEGRA_SCANOUT_COPY_FENCE_ONLY 1u
@@ -47,6 +47,9 @@ struct TegraScanoutCopy {
     uint32_t targetPitch;      // 5120 bytes per line of pixels (80 GOBs across)
     uint32_t blockHeightLog2;  // 4: 16 GOBs per block
     uint32_t flags;            // TEGRA_SCANOUT_COPY_FENCE_ONLY (version 2)
+    // The first page of another IOSurface the present also waits for the writers of, 0 for none (version 3): window B's
+    // surface, when the GPU renders it and its change goes to the screen with this frame.
+    uint64_t alsoWritten;
 };
 
 #ifdef __cplusplus
@@ -59,6 +62,10 @@ extern "C" {
 // outstanding at a time: the next comes only after the previous one's completion. The copy waits only for work its producers
 // had already submitted at the offer.
 int tegra_gm20b_scanout_copy(const struct TegraScanoutCopy *copy);
+// Provided by the GPU driver (weak in NativeLegacyDisplay): a present with no copy that completes once the work the writers
+// of the IOSurface whose first page is `pa` had submitted is done (window B's surface, changing alone). The same contract
+// as tegra_gm20b_scanout_copy otherwise: one offer outstanding per display, native_legacy_gpu_complete once for it.
+int tegra_gm20b_scanout_fence(void *display, uint64_t pa);
 // Provided by NativeLegacyDisplay: the offer's copy is done (status 0: every byte of the target is in DRAM, the copy engine's writes
 // flushed past the GPU L2 before the semaphore release that raised the completion) or failed (status != 0: the target may hold a
 // partial frame; the display does not flip to it). Any context, the GPU's interrupt filter included; it only records the status

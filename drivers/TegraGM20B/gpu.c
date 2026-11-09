@@ -4914,9 +4914,16 @@ static int present_writer_on(void)
 	return 1;
 }
 
-static int present_copy(uint64_t src_va, uint64_t src_pa, uint64_t stride, int src_block,
-			uint32_t width, uint32_t height, uint64_t dst_va, uint32_t dst_pitch,
-			uint32_t block_height_log2, void (*done)(void *, int), void *arg)
+/* Whether user's address space imports the present's source or its other surface (also_pa, 0: none). */
+static int present_imports(const struct tgm_chan *user, uint64_t src_pa, uint64_t also_pa)
+{
+	return vm_imports(user->vm, src_pa) || (also_pa && vm_imports(user->vm, also_pa));
+}
+
+static int present_copy(uint64_t src_va, uint64_t src_pa, uint64_t also_pa, uint64_t stride,
+			int src_block, uint32_t width, uint32_t height, uint64_t dst_va,
+			uint32_t dst_pitch, uint32_t block_height_log2, void (*done)(void *, int),
+			void *arg)
 {
 	struct tgm_chan *chan = present.chan;
 	struct tgm_chan *user = NULL;
@@ -4959,14 +4966,14 @@ static int present_copy(uint64_t src_va, uint64_t src_pa, uint64_t stride, int s
 	mutex_lock(&live_lock);
 	list_for_each_entry(user, &live_chans, live)
 	{
-		if (present_writer_on() && !user->kernel && vm_imports(user->vm, src_pa))
+		if (present_writer_on() && !user->kernel && present_imports(user, src_pa, also_pa))
 			matched = 1;
 	}
 	list_for_each_entry(user, &live_chans, live)
 	{
 		uintptr_t off = (uintptr_t)user->fence_cpu - (uintptr_t)fences.va;
 		if (user->kernel || READ_ONCE(user->error) || off >= TGM_FENCE_BYTES || n == room ||
-		    (matched && !vm_imports(user->vm, src_pa)) ||
+		    (matched && !present_imports(user, src_pa, also_pa)) ||
 		    (s32)(tgm_chan_completed(user) - user->submitted) >= 0)
 			continue;
 		present.wait[n].id = user->id;
@@ -5039,16 +5046,17 @@ static int present_copy(uint64_t src_va, uint64_t src_pa, uint64_t stride, int s
 }
 
 /* Refused while the gate is shut: the display copies that frame on the CPU. */
-int tgm_present_copy(uint64_t src_va, uint64_t src_pa, uint64_t stride, int src_block,
-		     uint32_t width, uint32_t height, uint64_t dst_va, uint32_t dst_pitch,
-		     uint32_t block_height_log2, void (*done)(void *, int), void *arg)
+int tgm_present_copy(uint64_t src_va, uint64_t src_pa, uint64_t also_pa, uint64_t stride,
+		     int src_block, uint32_t width, uint32_t height, uint64_t dst_va,
+		     uint32_t dst_pitch, uint32_t block_height_log2, void (*done)(void *, int),
+		     void *arg)
 {
 	int ret = 0;
 
 	if (!gate_try())
 		return -EBUSY;
-	ret = present_copy(src_va, src_pa, stride, src_block, width, height, dst_va, dst_pitch,
-			   block_height_log2, done, arg);
+	ret = present_copy(src_va, src_pa, also_pa, stride, src_block, width, height, dst_va,
+			   dst_pitch, block_height_log2, done, arg);
 	gate_leave();
 	return ret;
 }

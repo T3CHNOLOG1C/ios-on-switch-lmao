@@ -6840,13 +6840,24 @@ native_switch_disabled(const char *name)
 static const char *const native_switch_bluetoothd_environment[] = {
 	"BT_HCI_TRANSPORT=H4BC:POSIX:com.apple.uart.bluetooth,3000000", NULL
 };
+/*
+ * CA_PRINT_DETACHING (QuartzCore 24B119 ca_debug_options[32], read from the environment on release builds too) makes the
+ * render server log why each layer it considers was or was not detached: "[CA]", "[Server] ... format" and "[Display]
+ * Surface ID:0x%x detach result: %s", os_log info in com.apple.coreanimation's CADebug category, which the debug overlay's
+ * logging profile (drivers/NativeMobileDisplay/logging) persists. Diagnostic only.
+ */
+#if DEVELOPMENT || DEBUG
+#define NATIVE_SWITCH_CA_PRINT_DETACHING "CA_PRINT_DETACHING=1",
+#else
+#define NATIVE_SWITCH_CA_PRINT_DETACHING
+#endif
 #if NATIVE_SWITCH_CA_VBL
 static const char *const native_switch_backboardd_environment[] = {
-	"CA_DISABLE_DETACHED=1", "CA_FORCE_TIMER=1", NULL
+	"CA_DISABLE_DETACHED=1", "CA_FORCE_TIMER=1", NATIVE_SWITCH_CA_PRINT_DETACHING NULL
 };
 #else
 static const char *const native_switch_backboardd_environment[] = {
-	"CA_DISABLE_DETACHED=1", NULL
+	"CA_DISABLE_DETACHED=1", NATIVE_SWITCH_CA_PRINT_DETACHING NULL
 };
 #endif
 

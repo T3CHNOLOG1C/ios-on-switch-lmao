@@ -92,8 +92,8 @@ static bool planeSame(const PlaneSet &a, const PlaneSet &b)
     const native_planes::Image &y = b.image;
     return a.slot == b.slot && x.colorDepth == y.colorDepth && x.position == y.position && x.size == y.size &&
            x.prescaled == y.prescaled && x.dda == y.dda && x.lineStride == y.lineStride && x.hOffset == y.hOffset &&
-           x.options == y.options && x.start[0] == y.start[0] && x.start[1] == y.start[1] && x.matrix == y.matrix &&
-           x.fullRange == y.fullRange;
+           x.vOffset == y.vOffset && x.surfaceKind == y.surfaceKind && x.options == y.options &&
+           x.start[0] == y.start[0] && x.start[1] == y.start[1] && x.matrix == y.matrix && x.fullRange == y.fullRange;
 }
 
 void planeDecide(const OriginalLegacySwapRequest *request, PlaneDecision &d)
@@ -156,12 +156,13 @@ void planeDecide(const OriginalLegacySwapRequest *request, PlaneDecision &d)
     if (roles.plane >= 0) {
         native_planes::Image image;
         const PlaneLayerRecord &r = planeLayers[roles.plane];
-        if (!planesOn) {
+        tgm_layout block = {};
+        if (!planesOn || !native_planes::imageOf(r.layer, width, height, image, surfaceLayout(r.surface, block))) {
             if (stats)
                 ++stPlaneDropped;
-        } else if (native_planes::imageOf(r.layer, width, height, image) && image.visible) {
+        } else if (image.visible) {
             const int slot = planeSlotFor(native_legacy_surface_descriptor(r.surface), image.readLow, image.readHigh,
-                                          !image.yuv, r.surface);
+                                          !image.yuv, r.surface, image.surfaceKind != 0);
             if (slot >= 0) {
                 want = {true, slot, image, 0};
             } else if (stats) {
@@ -173,10 +174,22 @@ void planeDecide(const OriginalLegacySwapRequest *request, PlaneDecision &d)
     d.set = want;
 }
 
+// The GPU driver's layout of a surface it renders block-linear (by its first page): `block` filled, or null for rows.
+static const tgm_layout *surfaceLayout(OSObject *surface, tgm_layout &block)
+{
+    IOMemoryDescriptor *memory = native_legacy_surface_descriptor(surface);
+    if (!memory || !memory->metaCast("IOMemoryDescriptor"))
+        return nullptr;
+    IOByteCount length = 0;
+    const addr64_t pa = memory->getPhysicalSegment(0, &length, kIOMemoryMapperNone);
+    return pa && tegra_gm20b_surface_layout(pa & ~0xfffULL, &block) == 1 ? &block : nullptr;
+}
+
 // --- IOVA slots ---------------------------------------------------------------------------------------------------------
 bool planeSlotBusy(int k) const
 {
     if (planeLatch.busy(k) || (planeTarget.on && planeTarget.slot == k) ||
+        (planeFencePending && planeFencing.on && planeFencing.slot == k) ||
         (planeNextSet && planeNext.on && planeNext.slot == k) || (planeHeldSet && planeHeld.on && planeHeld.slot == k))
         return true;
     for (unsigned e = 0; e < TegraScanoutRing::kMaxEntries; ++e) {
@@ -187,17 +200,20 @@ bool planeSlotBusy(int k) const
 }
 
 // The slot holding [low, high) of the surface's memory (mapped now into the least recently used slot no set uses, if not
-// yet): -1 when every slot is in use or the pages cannot be had, or the GPU renders the surface block-linear (window B
-// scans rows). A surface the CPU may have written (RGB: an image decoded in software) is cleaned to DRAM once when it is
-// mapped: DC A does not snoop the CPU's caches. Video comes from VIC (or a CPU copy that cleans) already in DRAM
-// [V: r17-video TegraVICPresent]. surface: the IOSurface the memory is, held with it (none for the display's own buffers).
-int planeSlotFor(IOMemoryDescriptor *memory, uint64_t low, uint64_t high, bool clean, OSObject *surface = nullptr)
+// yet): -1 when every slot is in use or the pages cannot be had, or the layout the GPU holds the surface in is not the one
+// the window's registers were made for (`tiled`: block-linear). A surface the CPU may have written (RGB: an image decoded
+// in software) is cleaned to DRAM once when it is mapped: DC A does not snoop the CPU's caches. Video comes from VIC (or a
+// CPU copy that cleans) already in DRAM [V: r17-video TegraVICPresent]. surface: the IOSurface the memory is, held with
+// it (none for the display's own buffers).
+int planeSlotFor(IOMemoryDescriptor *memory, uint64_t low, uint64_t high, bool clean, OSObject *surface = nullptr,
+                 bool tiled = false)
 {
     if (!memory || !memory->metaCast("IOMemoryDescriptor") || high <= low || high - low > kPlaneSlotSpan)
         return -1;
     int victim = -1;
     for (unsigned k = 0; k < kPlaneSlots; ++k) {
-        if (planeSlots[k].memory == memory && planeSlots[k].low == low && planeSlots[k].high == high) {
+        if (planeSlots[k].memory == memory && planeSlots[k].low == low && planeSlots[k].high == high &&
+            planeSlots[k].tiled == tiled) {
             planeSlots[k].used = ++planeSlotUses;
             return static_cast<int>(k);
         }
@@ -248,13 +264,13 @@ int planeSlotFor(IOMemoryDescriptor *memory, uint64_t low, uint64_t high, bool c
     memory->retain();
     if (surface)
         surface->retain();
-    planeSlots[victim] = {memory, surface, nullptr, low, end, ++planeSlotUses};
+    planeSlots[victim] = {memory, surface, nullptr, low, end, ++planeSlotUses, tiled};
     cleanDomain();
-    int tiled = 0;
+    int held = 0;
     IOByteCount length = 0;
     const addr64_t first = memory->getPhysicalSegment(0, &length, kIOMemoryMapperNone);
-    planeSlots[victim].layout = first ? tegra_gm20b_surface_hold(first & ~0xfffULL, &tiled) : nullptr;
-    if (tiled) {
+    planeSlots[victim].layout = first ? tegra_gm20b_surface_hold(first & ~0xfffULL, &held) : nullptr;
+    if (planeSlots[victim].layout && (held != 0) != tiled) {
         planeDropSlot(static_cast<unsigned>(victim));
         return -1;
     }
@@ -356,8 +372,8 @@ void planeWriteRegisters(const PlaneSet &p)
     buf[kStartAddrU] = m.yuv ? static_cast<uint32_t>(base + m.start[1]) : 0;
     buf[kStartAddrHiU] = 0;
     buf[kHOffset] = m.hOffset;
-    buf[kVOffset] = 0;
-    buf[kSurfaceKind] = 0;
+    buf[kVOffset] = m.vOffset;
+    buf[kSurfaceKind] = m.surfaceKind;
     buf[kCdeControl] = 0;
     win[kBlendLayer] = kBlendBypass | 2;  // opaque, behind window A (depth 0)
     win[kBlendMatch] = 0;
@@ -434,13 +450,13 @@ void kickPlaneOnly(const OriginalLegacySwapRequest *request, const PlaneDecision
             ++stPlaneOnly;
         PlaneSet p = d.set;
         p.seq = seq;
-        if (ring.held != kNoBuffer) {
-            entryPlane[ring.held] = p;
-            entryPlaneSet[ring.held] = true;
-            entrySeq[ring.held] = seq;
-            planeTarget = p;
+        if (native_planes::planeRoute(planeFenced(p), false, false) == native_planes::PlaneRoute::kNow) {
+            planeOut(p);
+        } else if (planeFence(p)) {
+            transferred = true;  // the next swap waits for the fence's completion
+            return;
         } else {
-            planeFlipOnly(p);
+            planeNotShown(p);
         }
     } else {
         retireUnshown(seq);
@@ -451,6 +467,20 @@ void kickPlaneOnly(const OriginalLegacySwapRequest *request, const PlaneDecision
         return;
     }
     rekick = true;  // the next swap may already be queued behind this one: take it in the same kick
+}
+
+// p to window B: from the next frame boundary, or with the window A frame still held for a flip (which must reach the screen
+// first).
+void planeOut(const PlaneSet &p)
+{
+    if (ring.held != kNoBuffer) {
+        entryPlane[ring.held] = p;
+        entryPlaneSet[ring.held] = true;
+        entrySeq[ring.held] = p.seq;
+        planeTarget = p;
+    } else {
+        planeFlipOnly(p);
+    }
 }
 
 // Retiring at the latch, a taken swap (take sequence seq) whose frame no window A flip carries: it retires with whatever is
