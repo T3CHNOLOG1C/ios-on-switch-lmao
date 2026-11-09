@@ -32,19 +32,25 @@ Not Erista-specific: the image builder needs macOS APFS tools.
 ## Building without a Mac
 
 Upstream's workflows run on GitHub's hosted `xcode-27` image, so a push to `erista` runs CI and a tag equal to
-`MODULE.bazel`'s version (`0.1.0-erista.1`) publishes a release of this fork; `install/release.bzl` points at it.
-On a Mac, `bazelisk run //:image -- --//install:prebuilt=release ...` then needs no Xcode. An Intel Mac gets
-`host-tools-darwin-x86_64.tar` (universal `apfs_tool`, `lz4` and the `arm64e` translator, macOS 12 up) but no
-shader toolset, so the shader seed still has to come from an Apple silicon Mac.
+`MODULE.bazel`'s version (`0.1.0-erista.1`) builds this fork's assets: the kernel, loader and overlay for both IPSW
+kinds (`image-inputs-21H461.tar`, `image-inputs-24B119.tar`), `sd.zip` with the installer, and the host tools for
+arm64 and Intel Macs (universal `apfs_tool`, `lz4` and the `arm64e` translator, macOS 12 up). They stay a run
+artifact, `release-assets`, for 90 days; nothing is published as a GitHub release.
 
-The release carries image inputs for both IPSW kinds (`image-inputs-21H461.tar`, `image-inputs-24B119.tar`);
-`@switch_release` selects by `--//ipsw:kind`, so `--config=ios27` works from the release too. The iOS 27 kernel is
-the debug profile's DEVELOPMENT build: xnu-12377 has no RELEASE records yet (`kernel/xnu-12377.121.6/config/selected.bzl`). iOS 27's kext
-prelink then runs on the Mac with the release's translator, blacktop/ipsw for the Mac's CPU and `xcrun nm` /
-`c++filt` from whatever Xcode or Command Line Tools `xcode-select` names; the ptrauth string discriminators it
-needs are computed in Python (`translate/arm64e/xnu/prelink26/ptrauth_disc.py`, checked against clang by
-`ptrauth_disc_test` on CI) instead of by compiling and running arm64e code. The pretranslation of the OS and the
-cryptexes runs the same prebuilt translator; on a 2014 Intel Mac expect hours.
+```sh
+gh run download --repo T3CHNOLOG1C/ios-on-switch-lmao -n release-assets -D ~/lmao-assets <run id>
+```
+
+On a Mac, `bazelisk run --repo_env=SWITCH_RELEASE_DIR=$HOME/lmao-assets --//install:prebuilt=release ... //:image`
+then needs no Xcode: `install/release.bzl` takes the assets and `SHA256SUMS` from that directory. `@switch_release`
+selects the image inputs by `--//ipsw:kind`, so `--config=ios27` works from them too. iOS 27's kext prelink runs on
+the Mac with the prebuilt translator, blacktop/ipsw for the Mac's CPU and `xcrun nm` / `c++filt` from whatever Xcode
+or Command Line Tools `xcode-select` names; the ptrauth string discriminators it needs are computed in Python
+(`translate/arm64e/xnu/prelink26/ptrauth_disc.py`, checked against clang by `ptrauth_disc_test` on CI) instead of by
+compiling and running arm64e code. The pretranslation of the OS and the cryptexes runs the same prebuilt translator;
+on a 2014 Intel Mac expect hours. The iOS 27 kernel is the debug profile's DEVELOPMENT build: xnu-12377 has no RELEASE
+records yet (`kernel/xnu-12377.121.6/config/selected.bzl`). An Intel Mac gets no shader toolset, so the shader seed
+still has to come from an Apple silicon Mac.
 
 ### The shader toolset on an Intel Mac
 
@@ -79,7 +85,7 @@ bazelisk run //:image -- --//install:prebuilt=release \
 ## An image from a friend's Mac
 
 Any Apple silicon Mac with [Bazelisk](https://github.com/bazelbuild/bazelisk) builds the Erista image from the
-release, with no Xcode and nothing as root. iOS 27's kext prelink runs `xcrun nm` and `c++filt`, so that Mac needs the
+asset folder above (220 MB, sent along or downloaded from the tag's run), with no Xcode and nothing as root. iOS 27's kext prelink runs `xcrun nm` and `c++filt`, so that Mac needs the
 Command Line Tools (`xcode-select --install`); iOS 17 does not. Allow 30 GB free and a few hours: the IPSW is
 downloaded from Apple, the shader seed is built with the release's toolset, and the arm64e volumes and cryptexes are
 translated on that Mac.
@@ -87,14 +93,14 @@ translated on that Mac.
 ```sh
 git clone -b erista https://github.com/T3CHNOLOG1C/ios-on-switch-lmao
 cd ios-on-switch-lmao
-bazelisk run --config=ios27 --config=erista --//install:prebuilt=release //:image
+bazelisk run --repo_env=SWITCH_RELEASE_DIR=$HOME/lmao-assets --//install:prebuilt=release --config=ios27 --config=erista //:image
 ```
 
 `out/sd/switchroot/ios/IOS27.SII.*` is the install image (`install/README.md`), split for FAT32. Zip the folder and
 send it; it holds Apple's iOS, so not to a public link. On the card, from any OS:
 
 1. Copy `switchroot/ios/` onto the FAT partition.
-2. From the release's `sd.zip`, copy `bootloader/payloads/install-ios.bin`, `bootloader/ini/ios.ini` and
+2. From the asset folder's `sd.zip`, copy `bootloader/payloads/install-ios.bin`, `bootloader/ini/ios.ini` and
    `bootloader/res/icon_ios_hue.bmp` next to hekate's.
 3. In hekate, Payloads, run `install-ios.bin`, pick the image, and POWER writes it onto the card's Linux or Android
    partition (16 GiB at least) and makes its boot files hekate's iOS entry.
@@ -105,10 +111,10 @@ a 2017 Switch.
 ### A new kernel without a reinstall
 
 hekate's iOS entry boots `switchroot/ios/bl33.bin` from the FAT: U-Boot with the boot script, the loader, the DTB and
-the kernel window behind it. A kernel or loader change is a new `bl33.bin`, which needs no Mac of note:
+the kernel window behind it. A kernel or loader change is a new `bl33.bin`, which needs no Mac of note (a newer tag's asset folder brings the new kernel):
 
 ```sh
-bazelisk build --config=ios27 --config=erista --//install:prebuilt=release //boot:package
+bazelisk build --repo_env=SWITCH_RELEASE_DIR=$HOME/lmao-assets --//install:prebuilt=release --config=ios27 --config=erista //boot:package
 ```
 
 runs on the Intel Air too, and `bazel-bin/boot/ios/switchroot/ios/bl33.bin` replaces the card's. The installer only
