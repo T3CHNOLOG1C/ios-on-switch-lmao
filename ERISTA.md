@@ -16,7 +16,7 @@ Still OLED/T210B01-specific, in the order they will stop an Erista boot:
 
 | Where | What |
 |---|---|
-| `//bazel/pinned:firmware/oled-sku3.dtb`, U-Boot opcode fingerprints and the fixed framebuffer in the boot script | switchroot's Icosa DTB and U-Boot build; LCD framebuffer handoff (`boot/handoff/probe.c`) |
+| the fixed framebuffer in the boot script | hekate's 720x1280 framebuffer at `0xF5A00000` is assumed on both consoles; `--config=erista` packages switchroot's Icosa DTB (`//bazel/pinned:firmware/icosa.dtb`, the same L4T release as the pinned U-Boot) |
 | `drivers/TegraBPMP`, `SwitchPower/SwitchPMIC.cpp` | EMC rate changes go through the B01 BPMP firmware; on a T210 the rate stays at hekate's (the loader and the kernel both skip the raise), the EMC DVFS governor has nothing to drive |
 | `NativeMobileDisplay/TegraDisplayPower` | the SC7 cold display init now follows hekate's T210 branches (PLLD SDM/MISC1, DSI init-seq index, no B01 pad trimmers, T210 pad/MIPI calibration) and panel branches (JDI level-2 table, InnoLux/AUO power control, 5.5" settle, AVDD and WLED pins). Written from hekate's di.c/di.inl, never run on a T210; the LCDs' per-panel power-down register tables (`_di_dsi_panel_deinit_config_*`) are not sent before sleep in |
 | `drivers/SwitchUSB` pad setup | the falcon firmware is now picked by chip (`tegra21x_xusb_firmware` on a T210); the pad controller sequence (`VREG_FIX18`, the B01 UPHY lane register file in `XusbLanes.h`, no SS clock scaling in the mailbox) is still the B01's and untested on a T210 |
@@ -75,3 +75,43 @@ bazelisk run //:image -- --//install:prebuilt=release \
   --//install:shader_seed=@switch_shader_seed//:tree \
   --//install:shader_seed_size=@switch_shader_seed//:size
 ```
+
+## An image from a friend's Mac
+
+Any Apple silicon Mac with [Bazelisk](https://github.com/bazelbuild/bazelisk) builds the Erista image from the
+release, with no Xcode and nothing as root. iOS 27's kext prelink runs `xcrun nm` and `c++filt`, so that Mac needs the
+Command Line Tools (`xcode-select --install`); iOS 17 does not. Allow 30 GB free and a few hours: the IPSW is
+downloaded from Apple, the shader seed is built with the release's toolset, and the arm64e volumes and cryptexes are
+translated on that Mac.
+
+```sh
+git clone -b erista https://github.com/T3CHNOLOG1C/ios-on-switch-lmao
+cd ios-on-switch-lmao
+bazelisk run --config=ios27 --config=erista --//install:prebuilt=release //:image
+```
+
+`out/sd/switchroot/ios/IOS27.SII.*` is the install image (`install/README.md`), split for FAT32. Zip the folder and
+send it; it holds Apple's iOS, so not to a public link. On the card, from any OS:
+
+1. Copy `switchroot/ios/` onto the FAT partition.
+2. From the release's `sd.zip`, copy `bootloader/payloads/install-ios.bin`, `bootloader/ini/ios.ini` and
+   `bootloader/res/icon_ios_hue.bmp` next to hekate's.
+3. In hekate, Payloads, run `install-ios.bin`, pick the image, and POWER writes it onto the card's Linux or Android
+   partition (16 GiB at least) and makes its boot files hekate's iOS entry.
+
+Without `--config=erista` the ADT, the boot script's board test and the DTB are the OLED's and the image does not boot
+a 2017 Switch.
+
+### A new kernel without a reinstall
+
+hekate's iOS entry boots `switchroot/ios/bl33.bin` from the FAT: U-Boot with the boot script, the loader, the DTB and
+the kernel window behind it. A kernel or loader change is a new `bl33.bin`, which needs no Mac of note:
+
+```sh
+bazelisk build --config=ios27 --config=erista --//install:prebuilt=release //boot:package
+```
+
+runs on the Intel Air too, and `bazel-bin/boot/ios/switchroot/ios/bl33.bin` replaces the card's. The installer only
+checks boot files against the image's manifest when it installs, and the image on the FAT stays as it was for the next
+reinstall. What lives on the APFS volume (the overlay's drivers and daemons, the GPU bundle, the seed) needs
+`//:image` and the installer again.

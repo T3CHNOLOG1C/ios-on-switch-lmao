@@ -129,7 +129,10 @@ boot_package(
     bootlogo = "//boot/logo:bootlogo.bmp",
     bt_patch = "//bazel/pinned:firmware/BCM4356A3.hcd",
     data_seed = "//bazel/pinned:data-seed/data-v10.dbr",
-    dtb = "//bazel/pinned:firmware/oled-sku3.dtb",
+    dtb = select({
+        "//bazel:board_icosa": "//bazel/pinned:firmware/icosa.dtb",
+        "//conditions:default": "//bazel/pinned:firmware/oled-sku3.dtb",
+    }),
     exporter = "//bazel/pinned:firmware/exporter.uimg",
     icon = "//boot/logo:icon_ios_hue.bmp",
     ini = ":ios_ini",

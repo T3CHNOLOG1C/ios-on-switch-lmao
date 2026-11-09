@@ -13,9 +13,10 @@
 #       21H461 OS volume: check the licence before publishing the repository.
 #   prelink/dma-kernel.json.xz, prelink/dma-prelink.json
 #       The V20 prelink report the SMP prelink inherits (its parent pass no longer exists) and its roots.
-#   firmware/bl31.bin, bl33.bin, oled-sku3.dtb
-#       switchroot's ATF and U-Boot (Ubuntu Noble 5.1.2 entry; U-Boot 2024.NX02 @ 722e2b86) and the OLED device tree
-#       (nx-plat.dtimg entry 3), as the boot entry chains them.
+#   firmware/bl31.bin, bl33.bin, oled-sku3.dtb, icosa.dtb
+#       switchroot's ATF and U-Boot (Ubuntu Noble 5.1.2 entry; U-Boot 2024.NX02 @ 722e2b86) and the OLED and Erista
+#       device trees (nx-plat.dtimg entries 3 and 0; icosa.dtb from the 2026-05-13 image, the same U-Boot), as the boot
+#       entry chains them.
 #   firmware/exporter.uimg
 #       The RAM metadata exporter (bazel run //boot:firmware_export rebuilds it).
 #   firmware/BCM4356A3.hcd
