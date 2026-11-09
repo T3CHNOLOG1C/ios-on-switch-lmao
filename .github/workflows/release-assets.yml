@@ -26,13 +26,21 @@ jobs:
           cache: release
           buildbuddy-api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
           upload: ${{ inputs.upload }}
+      # The fork's release extension (install/release.bzl) and module version differ from the lockfile upstream
+      # committed; refresh its entry here and print what to commit.
+      - name: Refresh the lockfile
+        run: |
+          bazel mod deps --lockfile_mode=update >/dev/null
+          git diff --exit-code MODULE.bazel.lock || echo "::warning::MODULE.bazel.lock changed: commit the diff above."
       - name: Read the version
         id: version
         env:
           TAG: ${{ inputs.tag }}
         run: |
-          version="$(bazel mod graph --depth=0 --color=no 2>/dev/null | sed -n 's/^<root> (switch-ios@\(.*\))$/\1/p')"
+          graph="$(bazel mod graph --depth=0 --color=no)"
+          version="$(printf '%s\n' "$graph" | sed -n 's/^<root> (switch-ios@\(.*\))$/\1/p')"
           if [ -z "$version" ] || [ "$version" = _ ]; then
+            printf '%s\n' "$graph"
             echo "::error::MODULE.bazel's module() has no version."
             exit 1
           fi

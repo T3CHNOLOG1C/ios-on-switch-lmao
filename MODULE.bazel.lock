@@ -260,14 +260,14 @@
   "moduleExtensions": {
     "//install:release.bzl%release": {
       "general": {
-        "bzlTransitiveDigest": "/rzTbEmxlRLCxPuQLE2HOknx1kneRaxz571Mvitp6B0=",
-        "usagesDigest": "kz4Bx3yrUSQachzleMrWfwpEYNS1LXH8mdZTjqB7yg4=",
+        "bzlTransitiveDigest": "Fsg/zRwVeDpsczoS70oDG17W7qaMGKG6jpMNER6Eqzw=",
+        "usagesDigest": "eioxB1BtdJzgdn8XhKfItJ+zF9eHcRP4l2KYHH1Iem8=",
         "recordedInputs": [],
         "generatedRepoSpecs": {
           "switch_release": {
             "repoRuleId": "@@//install:release.bzl%switch_release",
             "attributes": {
-              "version": "0.1.0"
+              "version": "0.1.0-erista.1"
             }
           }
         }
@@ -368,7 +368,7 @@
     "@@rules_python+//python/uv:uv.bzl%uv": {
       "general": {
         "bzlTransitiveDigest": "RH0xYDM+3D/BJrY901xKB9oHbAVDI7DBo6UhvEjliCw=",
-        "usagesDigest": "HVf6HRV3ZMprG6/Z6qUZ54XET2mF7Y+g+aoyD8bhlJk=",
+        "usagesDigest": "RDETpQs9pj+MwHGKXeIu8gmgjgzkthp18NJEPaMykSM=",
         "recordedInputs": [
           "REPO_MAPPING:rules_python+,bazel_tools bazel_tools",
           "REPO_MAPPING:rules_python+,platforms platforms"
