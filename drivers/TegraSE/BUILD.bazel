@@ -34,6 +34,7 @@ kernel_driver(
     hdr_deps = [
         "drivers/ArmGIC",
         "kits/SwitchCAR",
+        "kits/SwitchChip",
         "kits/SwitchDMA",
         "kits/SwitchMMIO",
         "kits/SwitchRefusal",

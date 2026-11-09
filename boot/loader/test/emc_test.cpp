@@ -6,5 +6,5 @@ extern "C" unsigned emc_scenarios(void);
 
 TEST(LoaderEmc, RaiseAndRefusalsAgainstTheModel)
 {
-    EXPECT_EQ(emc_scenarios(), 13u);
+    EXPECT_EQ(emc_scenarios(), 14u);
 }

@@ -7,6 +7,7 @@
 #define LIC_FIR_SET UINT64_C(0x60004018) /* ICTLR CPU_IEP_FIR_SET: bit 6 rings the BPMP (outgoing-doorbell <6>) */
 #define CAR         UINT64_C(0x60006000)
 #define I2C5        UINT64_C(0x7000d000)
+#define HIDREV      UINT64_C(0x70000804) /* APB_MISC_GP_HIDREV: major revision bits 7:4, 2 = T210B01 */
 
 /* Per-CPU atomic channel 0 (nv_bpmp.c t210_chcfg per_cpu_ch_0); the kernel's TegraBPMP uses thread channels 4-7. */
 #define CH_MASK         3u
@@ -195,6 +196,10 @@ void loader_emc_raise(uint32_t khz, uint32_t frequency, struct loader_emc_report
     report->bpmp_code = 0;
     report->before_khz = report->after_khz = report->core_mv = report->area = 0;
     per_us = frequency / 1000000;
+    if (((rd(HIDREV) >> 4) & 0xfu) != 2u) {
+        report->result = LOADER_EMC_NOT_T210B01;
+        return;
+    }
     if (!rd(SEMA)) {
         report->result = LOADER_EMC_NO_FIRMWARE;
         return;

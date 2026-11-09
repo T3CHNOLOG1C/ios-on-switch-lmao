@@ -7,13 +7,17 @@ model/compatible/arm-io SoC (`tools/package/native_oled_adt.py` BOARDS), U-Boot'
 (`boot/u-boot-script.txt`, `tools/package/boot_script.py` BOARD_TESTS: hekate's sku 0 on a T210), the emulator's
 fuse page (`tools/emu/hekate.py`), and the kernel's idle-board match (`osfmk/arm64/cpu.c` accepts `nintendo,icosa`).
 
+Decided at run time from APB_MISC_GP_HIDREV (`kits/SwitchChip`): TegraSE and the AppleKeyStore probe use SE1 only
+on a T210; the loader's seed takes its DRBG output from SE1 (AHB master 14) there; the loader's EMC raise reports
+`LOADER_EMC_NOT_T210B01` and leaves the clock where hekate's Minerva put it, and the kernel's TegraBPMP finds no
+mailbox and says so.
+
 Still OLED/T210B01-specific, in the order they will stop an Erista boot:
 
 | Where | What |
 |---|---|
 | `//bazel/pinned:firmware/oled-sku3.dtb`, U-Boot opcode fingerprints and the fixed framebuffer in the boot script | switchroot's Icosa DTB and U-Boot build; LCD framebuffer handoff (`boot/handoff/probe.c`) |
-| `boot/loader/emc.c`, `boot/installer/main.c` | EMC raise with the B01 `emcb01_dvb_dvfs_table`; T210 needs `emc_dvb_dvfs_table` or no raise |
-| `drivers/TegraSE`, `boot/loader/seed.c` | SE2 and the MEM_IF_BUSY drain exist only on B01; Erista has one SE |
+| `drivers/TegraBPMP`, `SwitchPower/SwitchPMIC.cpp` | EMC rate changes go through the B01 BPMP firmware; on a T210 the rate stays at hekate's (the loader and the kernel both skip the raise), the EMC DVFS governor has nothing to drive |
 | `drivers/SwitchBrightness` (`TegraPanel*`), `NativeMobileDisplay/TegraDisplayPower` | OLED brightness is DCS 0x51 over DSI; Erista LCDs (JDI/InnoLux/AUO) have a PWM backlight and other on/off sequences |
 | `drivers/SwitchUSB/firmware` | embeds `tegra210b01_xusb_firmware`; Erista needs `tegra21x_xusb_firmware`; `VREG_FIX18` pad setup is B01's |
 | `drivers/TegraDFLL`, `SwitchPower/SwitchPMIC.cpp`, `tools/emu/patches/0031` | VDD_CPU is a MAX77812 (I2C5 0x31/0x33); Erista has MAX77621s (CPU 0x1B, GPU 0x1C), T210 CVB/speedo tables. Without it `SwitchThermal` falls back to the fixed PLLX ladder |

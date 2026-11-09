@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// TegraSE: the T210B01 Security Engines SE1 (0x70012000, SPI 58 = INTID 90) and SE2 (0x70412000, SPI 190 = INTID 222,
-// L4T tegra210b01-soc-base.dtsi) as the kernel's AES and SHA engines.
+// TegraSE: the Security Engines SE1 (0x70012000, SPI 58 = INTID 90) and, on a T210B01 only, SE2 (0x70412000, SPI 190 =
+// INTID 222, L4T tegra210b01-soc-base.dtsi) as the kernel's AES and SHA engines.
 //
 // What runs here:
 //   - Both engines behind one queue: a caller takes whichever is free (TegraSE.h), so two callers run in parallel.
@@ -57,6 +57,7 @@
 #include "TegraSE.h"
 #include "../ArmGIC/SwitchInterrupts.h"
 #include "../../kits/SwitchCAR/SwitchCAR.h"
+#include "../../kits/SwitchChip/SwitchChip.h"
 #include "../../kits/SwitchDMA/SwitchDMABuffer.h"
 #include "../../kits/SwitchRefusal/SwitchRefusal.h"
 #include "../../kits/SwitchDMA/SwitchDcache.h"
@@ -162,6 +163,7 @@ Engine gEngines[kEngines] = {
     {"SE1", 0x70012000, 32 + 58, 1u << 14, nullptr, nullptr, 0, 0, 0, 0, false, false, false, 0, {}, 0, {}, {}, {}, 0},
     {"SE2", 0x70412000, 32 + 190, 1u << 13, nullptr, nullptr, 0, 0, 0, 0, false, false, false, 0, {}, 0, {}, {}, {}, 0},
 };
+unsigned gEngineCount = kEngines;  // 1 on a T210: it has no SE2
 volatile uint8_t *gAhb;
 IOWorkLoop *gLoop;
 IOLock *gQueue;
@@ -1518,7 +1520,11 @@ void seThread(void *, wait_result_t)
     unsigned up = 0;
     char line[256];
     int at = snprintf(line, sizeof line, "TegraSE: clock source %#x;", switch_car_read(kCarSourceSe));
-    for (unsigned which = 0; which < kEngines; ++which) {
+    if (!switch_chip_is_t210b01()) {
+        gEngineCount = 1;
+        at += snprintf(line + at, sizeof line - static_cast<size_t>(at), " T210, no SE2;");
+    }
+    for (unsigned which = 0; which < gEngineCount; ++which) {
         Engine &e = gEngines[which];
         if (!tegra_se_claim(which + 1, TEGRA_SE_OWNER_DRIVER, 10000)) {
             IOLog("TegraSE: %s still held by the AppleKeyStore probe after 10 s, off\n", e.name);
@@ -1614,7 +1620,7 @@ void seThread(void *, wait_result_t)
 
 extern "C" bool tegra_se_claim(unsigned engine, uint32_t owner, uint32_t ms)
 {
-    if (engine < 1 || engine > kEngines)
+    if (engine < 1 || engine > gEngineCount)
         return false;
     Engine &e = gEngines[engine - 1];
     for (uint32_t waited = 0;; ++waited) {
@@ -1628,7 +1634,7 @@ extern "C" bool tegra_se_claim(unsigned engine, uint32_t owner, uint32_t ms)
 
 extern "C" void tegra_se_release(unsigned engine, uint32_t owner)
 {
-    if (engine < 1 || engine > kEngines)
+    if (engine < 1 || engine > gEngineCount)
         return;
     (void)__sync_bool_compare_and_swap(&gEngines[engine - 1].owner, owner, 0u);
 }

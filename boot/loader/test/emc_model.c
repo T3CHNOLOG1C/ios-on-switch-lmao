@@ -15,6 +15,9 @@
 #define CAR       0x60006000u
 #define I2C5      0x7000d000u
 #define AREA_IRAM 0x4003f000u
+#define HIDREV    0x70000804u
+#define HIDREV_B01 0x00012120u
+#define HIDREV_T210 0x00012110u
 
 static struct {
     uint32_t sta, area, area_mem[32], trigger;
@@ -27,6 +30,7 @@ static struct {
     int32_t refuse_set;
     /* I2C5 */
     uint32_t cnfg, int_status, fifo_ctl, rx_word, rx_ready, tx[8], tx_n, sd0, i2c_ok, clock_on, reg_selected, int_mask;
+    uint32_t hidrev;
     uint64_t counter;
 } m;
 
@@ -111,6 +115,8 @@ static void i2c_run(void)
 
 uint32_t rd(uint64_t address)
 {
+    if (address == HIDREV)
+        return m.hidrev;
     if (address == SEMA)
         return m.firmware ? m.sta | 0x10000u : 0; /* other channels' bits non-zero: handshake */
     if (address == ATOMICS + 0xc00)
@@ -203,6 +209,7 @@ void wr(uint64_t address, uint32_t value)
 static void reset(void)
 {
     memset(&m, 0, sizeof(m));
+    m.hidrev = HIDREV_B01;
     m.firmware = 1;
     m.sta = 2; /* channel 0 free */
     m.area = AREA_IRAM;
@@ -306,6 +313,12 @@ unsigned emc_scenarios(void)
     m.refuse_set = -22;
     loader_emc_raise(1600000, 19200000, &r);
     CHECK(r.result == LOADER_EMC_REFUSED && r.bpmp_code == -22 && m.emc_hz == 204000000 && (m.sta & 3u) == 2u);
+    ++checks;
+
+    reset();
+    m.hidrev = HIDREV_T210; /* a T210: nothing asked of the BPMP, the clock left as hekate set it */
+    loader_emc_raise(1600000, 19200000, &r);
+    CHECK(r.result == LOADER_EMC_NOT_T210B01 && m.requests == 0 && m.set_rates == 0 && r.before_khz == 0);
     ++checks;
 
     return checks;

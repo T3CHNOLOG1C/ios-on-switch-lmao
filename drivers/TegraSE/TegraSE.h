@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// TegraSE: the T210B01 Security Engines SE1 and SE2 as the kernel's AES and SHA engines (TegraSE.cpp).
+// TegraSE: the Security Engines SE1 and (T210B01 only) SE2 as the kernel's AES and SHA engines (TegraSE.cpp).
 #ifndef TEGRA_SE_H
 #define TEGRA_SE_H
 #include <stddef.h>
@@ -13,7 +13,8 @@ extern "C" {
 int tegra_se_start(void);
 
 // One owner of an engine at a time: the AppleKeyStore stand-in's boot probe (NativeKeyStoreEvents/
-// TegraSecurityEngine.cpp) and this driver. engine 1 = SE1, 2 = SE2. Thread context; waits up to `ms`.
+// TegraSecurityEngine.cpp) and this driver. engine 1 = SE1, 2 = SE2 (false on a T210, which has none). Thread
+// context; waits up to `ms`.
 bool tegra_se_claim(unsigned engine, uint32_t owner, uint32_t ms);
 void tegra_se_release(unsigned engine, uint32_t owner);
 

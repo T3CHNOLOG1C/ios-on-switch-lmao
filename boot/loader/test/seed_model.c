@@ -13,7 +13,11 @@ volatile uint32_t *switch_seed_dma_words(void);
 
 #define CAR       0x60006000u
 #define AHB       0x6000c000u
+#define SE1       0x70012000u
 #define SE2       0x70412000u
+#define APB_MISC  0x70000800u
+#define HIDREV_B01 0x00012120u /* chip 0x21, major 2 */
+#define HIDREV_T210 0x00012110u
 #define SEED_PA   0x80000100u
 #define SOURCE_PA 0x80000400u
 #define WORDS     (SWITCH_SEED_BYTES / 4u)
@@ -29,13 +33,14 @@ enum {
     ZERO_OUTPUT = 128,
     ENTROPY_OFF = 256,
     ENTROPY_STUCK = 512,
-    REPEAT_OUTPUT = 1024
+    REPEAT_OUTPUT = 1024,
+    T210 = 2048 /* a T210: SE1, AHB master 14 */
 };
 
 static struct {
     unsigned flags;
     uint32_t clk_v, rst_v, clk_w, rst_w;
-    uint32_t security, config, crypto, rng, rng_src, last, in_ll, out_ll, status, ints, err, wrque;
+    uint32_t security, config, crypto, rng, rng_src, last, in_ll, out_ll, status, ints, err, wrque, hidrev;
     uint32_t modes[4];
     unsigned starts, se_accesses, drains, busy_reads;
     uint64_t counter;
@@ -76,7 +81,7 @@ static void start(void)
     }
     m.ints |= 1u << 4;
     m.status = 4;       /* memory interface busy for a while */
-    m.wrque = 1u << 13; /* and the AHB write queue */
+    m.wrque = m.hidrev == HIDREV_B01 ? 1u << 13 : 1u << 14; /* and the AHB write queue */
     m.drains = 3;
 }
 
@@ -99,13 +104,16 @@ uint32_t switch_seed_read32(uint64_t pa)
         if (m.wrque && !(m.flags & NEVER_DRAIN) && !--m.drains)
             m.wrque = 0;
         return m.wrque;
+    case APB_MISC + 4:
+        return m.hidrev;
     default:
         break;
     }
-    CHECK(pa >= SE2 && pa < SE2 + 0x1000);
+    const uint32_t se = m.hidrev == HIDREV_B01 ? SE2 : SE1; /* the T210 has no SE2 */
+    CHECK(pa >= se && pa < se + 0x1000);
     CHECK((m.clk_v & (1u << 31)) && !(m.rst_v & (1u << 31))); /* never with the clock off or in reset */
     ++m.se_accesses;
-    switch ((uint32_t)pa - SE2) {
+    switch ((uint32_t)pa - se) {
     case 0x000:
         return m.security;
     case 0x010:
@@ -155,13 +163,14 @@ void switch_seed_write32(uint64_t pa, uint32_t value)
         m.rst_w &= ~value;
         return;
     } /* RST_DEV_W_CLR */
-    CHECK(pa >= SE2 && pa < SE2 + 0x1000);
+    const uint32_t se = m.hidrev == HIDREV_B01 ? SE2 : SE1;
+    CHECK(pa >= se && pa < se + 0x1000);
     CHECK((m.clk_v & (1u << 31)) && !(m.rst_v & (1u << 31)));
     CHECK(m.security & (1u << 16)); /* nothing written to a secure-only engine */
     ++m.se_accesses;
     if (m.flags & DROP_WRITES)
         return;
-    switch ((uint32_t)pa - SE2) {
+    switch ((uint32_t)pa - se) {
     case 0x008:
         CHECK(value == 1);
         start();
@@ -213,6 +222,7 @@ static uint32_t run(unsigned flags)
 {
     memset(&m, 0, sizeof(m));
     m.flags = flags;
+    m.hidrev = (flags & T210) ? HIDREV_T210 : HIDREV_B01;
     m.clk_v = (flags & SE_CLOCK_OFF) ? 0 : 1u << 31;
     m.clk_w = (flags & (ENTROPY_OFF | ENTROPY_STUCK)) ? 0 : 1u << 21;
     m.rst_w = (flags & ENTROPY_OFF) ? 1u << 21 : 0;
@@ -252,6 +262,11 @@ unsigned seed_scenarios(void)
     for (unsigned i = 0; i < WORDS; ++i)
         fold ^= m.drbg[i];
     CHECK(w >> 16 == ((fold ^ fold >> 16) & 0xffffu));
+    ++scenarios;
+
+    w = run(T210); /* the 2017 Switch: the same run on SE1 */
+    CHECK((w & 0xffffu) == SWITCH_SEED_STATUS_MIXED && m.starts == 1 && m.se_accesses > 0);
+    check_seed(1);
     ++scenarios;
 
     w = run(ENTROPY_OFF); /* BL31 left the entropy clock off (SC7): the loader turns it on first */

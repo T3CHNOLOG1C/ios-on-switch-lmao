@@ -22,7 +22,7 @@ enum {
 #define SE_OP_START                1u
 #define SE_INT_OP_DONE             (1u << 4)
 #define SE_INT_ERROR               (1u << 16)
-#define SE_STATUS_BUSY             7u /* STATE (bits 1:0) not idle, or MEM_IF_BUSY (bit 2, T210B01) */
+#define SE_STATUS_BUSY             7u /* STATE (bits 1:0) not idle, or MEM_IF_BUSY (bit 2, T210B01; never set on T210) */
 /* ENC_ALG RNG (2 << 12), ENC_MODE KEY192 (1 << 24), DEC_ALG NOP, DST MEMORY. */
 #define SE_CONFIG_RNG 0x01002000u
 /* INPUT_SEL RANDOM (1 << 3), XOR_BYPASS, CORE_SEL ENCRYPT (1 << 8), key index 0, original IV, AHB memory interface. */
@@ -44,7 +44,9 @@ enum {
 #define CAR_SE               (1u << 31) /* CLK_V_SE, shared by SE1, SE2 and PKA1 */
 #define CAR_ENTROPY          (1u << 21) /* CLK_W_ENTROPY */
 #define AHB_MEM_WRQUE_MST_ID 0x0fc
-#define AHB_MASTER_SE2       (1u << 13) /* nvidia,ahb-master-id of se@70412000 (SE1 is 14) */
+#define AHB_MASTER_SE1       (1u << 14) /* nvidia,ahb-master-id of se@70012000 */
+#define AHB_MASTER_SE2       (1u << 13) /* and of se@70412000 */
+#define HIDREV_MAJOR_T210B01 2u         /* APB_MISC_GP_HIDREV bits 7:4 */
 
 #define SEED_WORDS  (SWITCH_SEED_BYTES / 4u)
 #define SEED_BLOCKS (SWITCH_SEED_BYTES / 16u)
@@ -58,6 +60,9 @@ enum {
 #define SEED_DATA
 #endif
 static volatile uint32_t seed_dma[SEED_OUT + SEED_WORDS] __attribute__((aligned(64))) SEED_DATA;
+/* SE2 on a T210B01 (BL31 regenerates its SRK too; TegraSE shares it), SE1 on a T210, which has no SE2. */
+static uint64_t se_pa SEED_DATA = SWITCH_SEED_SE2_PA;
+static uint32_t ahb_master SEED_DATA = AHB_MASTER_SE2;
 
 #ifndef SWITCH_SEED_HOST_TEST
 uint32_t switch_seed_read32(uint64_t pa)
@@ -86,12 +91,12 @@ static void barrier(void)
 
 static uint32_t se_read(uint32_t offset)
 {
-    return switch_seed_read32(SWITCH_SEED_SE2_PA + offset);
+    return switch_seed_read32(se_pa + offset);
 }
 
 static void se_write(uint32_t offset, uint32_t value)
 {
-    switch_seed_write32(SWITCH_SEED_SE2_PA + offset, value);
+    switch_seed_write32(se_pa + offset, value);
 }
 
 static uint32_t car_read(uint32_t offset)
@@ -156,7 +161,7 @@ static uint32_t generate(uint32_t mode, uint64_t (*ticks)(void), uint64_t timeou
     /* T210B01: the output is in memory once the engine is idle, its memory interface quiet and the AHB write queue
      * drained (hekate _se_op_wait, L4T tegra_se_start_operation ahb_ack). */
     while (((value = se_read(SE_STATUS)) & SE_STATUS_BUSY) ||
-           (switch_seed_read32(SWITCH_SEED_AHB_ARB_PA + AHB_MEM_WRQUE_MST_ID) & AHB_MASTER_SE2)) {
+           (switch_seed_read32(SWITCH_SEED_AHB_ARB_PA + AHB_MEM_WRQUE_MST_ID) & ahb_master)) {
         if (ticks() - start > timeout) {
             *detail = value;
             return SWITCH_SEED_STATUS_DRAIN;
@@ -220,6 +225,9 @@ static uint32_t engine_seed(uint64_t (*ticks)(void), uint64_t timeout, uint32_t 
 uint32_t switch_seed_mix(uint64_t seed_pa, uint64_t source_pa, uint64_t (*ticks)(void), uint64_t timeout)
 {
     uint32_t detail = 0, flags = 0;
+    const int t210b01 = ((switch_seed_read32(SWITCH_SEED_APB_MISC_PA + 4) >> 4) & 0xfu) == HIDREV_MAJOR_T210B01;
+    se_pa = t210b01 ? SWITCH_SEED_SE2_PA : SWITCH_SEED_SE1_PA;
+    ahb_master = t210b01 ? AHB_MASTER_SE2 : AHB_MASTER_SE1;
     const uint32_t status = engine_seed(ticks, timeout, &detail, &flags);
     const uint64_t now = ticks();
     if (status == SWITCH_SEED_STATUS_MIXED) {

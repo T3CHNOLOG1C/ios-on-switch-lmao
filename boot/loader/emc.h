@@ -26,6 +26,7 @@ enum loader_emc_result {
     LOADER_EMC_I2C,         /* MAX77620 SD0 could not be read */
     LOADER_EMC_LOW_CORE,    /* VDD_CORE below what L4T requires for the rate */
     LOADER_EMC_REFUSED,     /* the BPMP refused ENABLE / ROUND_RATE / SET_RATE */
+    LOADER_EMC_NOT_T210B01, /* a T210: hekate's Minerva set the EMC rate, no BPMP EMC clock to ask */
 };
 
 struct loader_emc_report {

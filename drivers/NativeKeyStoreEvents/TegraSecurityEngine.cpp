@@ -31,6 +31,7 @@
 #include <string.h>
 #include "AKSCmac.h"
 #include "../TegraSE/TegraSE.h"
+#include "../../kits/SwitchChip/SwitchChip.h"
 #include "../../kits/SwitchDMA/SwitchDcache.h"
 #include "../../kits/SwitchDMA/SwitchDMABuffer.h"
 #include "../../kits/SwitchMMIO/SwitchMMIO.h"
@@ -317,13 +318,15 @@ extern "C" void native_aks_se_probe(void)
     const volatile uint8_t *mc = mapRegisters(kMcPA, &mcMap);
     Engine se1{"SE1", 0x70012000, 1u << 14, nullptr};
     Engine se2{"SE2", 0x70412000, 1u << 13, nullptr};
+    const bool hasSe2 = switch_chip_is_t210b01();
     se1.regs = mapRegisters(se1.physical, &se1Map);
-    se2.regs = mapRegisters(se2.physical, &se2Map);
+    if (hasSe2)
+        se2.regs = mapRegisters(se2.physical, &se2Map);
     Dma dma{};
     Result r14;
     Result r15;
     Result r2;
-    if (!car || !ahb || !fuse || !mc || !se1.regs || !se2.regs) {
+    if (!car || !ahb || !fuse || !mc || !se1.regs || (hasSe2 && !se2.regs)) {
         IOLog("AppleKeyStore: SE probe: cannot map CAR/AHB/FUSE/MC/SE\n");
         goto out;
     }
@@ -346,8 +349,9 @@ extern "C" void native_aks_se_probe(void)
             "AppleKeyStore: SE probe: SE1 security %#x perkey %#x access14 %#x access15 %#x status %#x err %#x; SE2 "
             "security %#x perkey %#x access14 %#x status %#x err %#x; fuse pkdisable %#x; MC smmu %#x ppcs-asid %#x\n",
             se1.r(kSecurity), se1.r(kPerKey), se1.r(kKeyAccess + 4 * 14), se1.r(kKeyAccess + 4 * 15), se1.r(kStatus),
-            se1.r(kErrStatus), se2.r(kSecurity), se2.r(kPerKey), se2.r(kKeyAccess + 4 * 14), se2.r(kStatus),
-            se2.r(kErrStatus), privateKey, smmu, ppcs);
+            se1.r(kErrStatus), hasSe2 ? se2.r(kSecurity) : 0u, hasSe2 ? se2.r(kPerKey) : 0u,
+            hasSe2 ? se2.r(kKeyAccess + 4 * 14) : 0u, hasSe2 ? se2.r(kStatus) : 0u, hasSe2 ? se2.r(kErrStatus) : 0u,
+            privateKey, smmu, ppcs);
         if ((smmu & kSmmuEnable) && (ppcs & kAsidEnable)) {
             IOLog("AppleKeyStore: SE probe: SMMU translates the SE's AHB DMA (PPCS), no operation run\n");
             goto out;
@@ -364,7 +368,9 @@ extern "C" void native_aks_se_probe(void)
         } else {
             r14.refusal = r15.refusal = "SE1 held by TegraSE";
         }
-        if (tegra_se_claim(2, TEGRA_SE_OWNER_AKS_PROBE, 1000)) {
+        if (!hasSe2) {
+            r2.refusal = "no SE2 on a T210";
+        } else if (tegra_se_claim(2, TEGRA_SE_OWNER_AKS_PROBE, 1000)) {
             probeSlot(se2, dma, ahb, 14, r2);
             tegra_se_release(2, TEGRA_SE_OWNER_AKS_PROBE);
         } else {

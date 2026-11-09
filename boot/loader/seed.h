@@ -32,7 +32,7 @@
 
 enum switch_seed_status {
     SWITCH_SEED_STATUS_NONE = 0,        /* the loader never ran this (an older loader) */
-    SWITCH_SEED_STATUS_MIXED = 1,       /* SE2 DRBG output mixed in */
+    SWITCH_SEED_STATUS_MIXED = 1,       /* the engine's DRBG output mixed in (SE2 on a T210B01, SE1 on a T210) */
     SWITCH_SEED_STATUS_SE_CLOCK = 0x10, /* SE clock off or the engine in reset: not touched */
     SWITCH_SEED_STATUS_SECURE = 0x11,   /* SE_SECURITY: secure-only or engine disabled (detail: SE_SECURITY) */
     SWITCH_SEED_STATUS_BUSY = 0x12,     /* engine not idle before start (detail: SE_STATUS) */
@@ -48,9 +48,11 @@ enum switch_seed_status {
 #define SWITCH_SEED_FLAG_ENTROPY_ENABLED 0x100u
 
 /* Hardware the module touches (physical; MMU off). */
-#define SWITCH_SEED_CAR_PA     UINT64_C(0x60006000)
-#define SWITCH_SEED_AHB_ARB_PA UINT64_C(0x6000c000)
-#define SWITCH_SEED_SE2_PA     UINT64_C(0x70412000)
+#define SWITCH_SEED_CAR_PA      UINT64_C(0x60006000)
+#define SWITCH_SEED_AHB_ARB_PA  UINT64_C(0x6000c000)
+#define SWITCH_SEED_APB_MISC_PA UINT64_C(0x70000800) /* GP_HIDREV at +4: T210 or T210B01 */
+#define SWITCH_SEED_SE1_PA      UINT64_C(0x70012000)
+#define SWITCH_SEED_SE2_PA      UINT64_C(0x70412000)
 
 /* Mixes the engine's output and `counter` into the SWITCH_SEED_BYTES seed at seed_pa (4-byte aligned, 32-bit
  * accesses) and writes the two status words at source_pa. `ticks` reads the counter; `timeout` is in its units. Returns
