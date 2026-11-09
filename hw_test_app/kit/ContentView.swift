@@ -20,17 +20,11 @@ public struct ContentView: View {
                     StageView(stage: stage).frame(height: 240)
                 }
                 List {
-                    ForEach(Subsystem.allCases, id: \.self) { subsystem in
-                        let rows = suite.rows.filter { $0.test.subsystem == subsystem }
-                        if !rows.isEmpty {
-                            Section(subsystem.rawValue) {
-                                ForEach(rows) { row in
-                                    TestRow(row: row).contentShape(Rectangle()).onTapGesture {
-                                        if !suite.running { suite.rerun(row.id) }
-                                    }
-                                }
-                            }
-                        }
+                    RunHeader(suite: suite)
+                    if suite.running {
+                        RunSections(suite: suite)
+                    } else {
+                        bySubsystem
                     }
                 }
                 .listStyle(.insetGrouped)
@@ -38,10 +32,10 @@ public struct ContentView: View {
             .navigationTitle("Hardware tests")
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Text(suite.running ? "Running…" : counts).font(.footnote).foregroundStyle(.secondary)
+                    Button("Interactive") { suite.runInteractive() }.disabled(suite.running)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Run All") { suite.runAll() }.disabled(suite.running)
+                    Button("Run All") { suite.runAll() }.disabled(suite.running).bold()
                 }
             }
         }
@@ -55,13 +49,23 @@ public struct ContentView: View {
                 PromptCard(message: message) { prompter.skipTapped() }.padding()
             }
         }
-        .onAppear { suite.autoRunOnce() }
+        .onAppear { suite.launch() }
     }
 
-    var counts: String {
-        let records = suite.rows.compactMap(\.record)
-        let count = { (verdict: Verdict) in records.filter { $0.outcome.verdict == verdict }.count }
-        return "\(count(.pass)) pass · \(count(.fail)) fail · \(count(.skip)) skip"
+    /// Every test by subsystem, between runs; tapping one reruns it.
+    @ViewBuilder var bySubsystem: some View {
+        ForEach(Subsystem.allCases, id: \.self) { subsystem in
+            let rows = suite.rows.filter { $0.test.subsystem == subsystem }
+            if !rows.isEmpty {
+                Section(subsystem.rawValue) {
+                    ForEach(rows) { row in
+                        TestRow(row: row).contentShape(Rectangle()).onTapGesture {
+                            if !suite.running { suite.rerun(row.id) }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

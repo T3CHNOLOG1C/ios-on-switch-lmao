@@ -132,5 +132,51 @@ class AppSources(unittest.TestCase):
             self.assertFalse(set(declared) & set(hwtest.TESTS), ios)
 
 
+# A literal first argument of Metrics.set: "key", prefix + "key" or an interpolated "\\(label)_key".
+METRIC_SET = re.compile(r'\.set\(\s*(?:[A-Za-z_][\w.]*\s*\+\s*)?"')
+
+
+def swift_string(text: str, start: int) -> tuple[str, bool, int]:
+    """Return a literal's text outside interpolations (it opens at text[start]), whether it interpolates, its end."""
+    parts, at, interpolated = [], start + 1, False
+    while text[at] != '"':
+        if text.startswith('\\(', at):
+            interpolated, depth, at = True, 1, at + 2
+            while depth:
+                if text[at] == '"':
+                    at = swift_string(text, at)[2]
+                    continue
+                depth += {'(': 1, ')': -1}.get(text[at], 0)
+                at += 1
+        elif text[at] == '\\':
+            parts.append(text[at + 1])
+            at += 2
+        else:
+            parts.append(text[at])
+            at += 1
+    return ''.join(parts), interpolated, at + 1
+
+
+class MetricKeys(unittest.TestCase):
+    def test_no_literal_metric_key_is_reserved_or_malformed(self):
+        reserved = {'hw', 'ms', 'why'}  # LogLine.reservedKeys
+        bad = []
+        for source in sorted(APP.rglob('*.swift')):
+            if source.relative_to(APP).parts[0].startswith('host_'):
+                continue
+            text = source.read_text()
+            for match in METRIC_SET.finditer(text):
+                key, interpolated, _ = swift_string(text, match.end() - 1)
+                whole = not interpolated and '+' not in match.group(0)
+                if (whole and key in reserved) or not re.fullmatch(r'[a-z0-9_]*', key):
+                    bad.append(f'{source.relative_to(APP)}:{text.count(chr(10), 0, match.start()) + 1} {key!r}')
+        self.assertEqual(bad, [], 'metric keys the log line cannot carry (LogLine.isValidKey, reservedKeys)')
+
+    def test_the_scan_sees_through_interpolations(self):
+        text = 'm.set("err_\\(e < 0 ? "neg" : "pos")_ms", 1); m.set(prefix + "frames", 2); m.set("ms", 3)'
+        found = [swift_string(text, match.end() - 1)[:2] for match in METRIC_SET.finditer(text)]
+        self.assertEqual(found, [('err__ms', True), ('frames', False), ('ms', False)])
+
+
 if __name__ == '__main__':
     unittest.main()

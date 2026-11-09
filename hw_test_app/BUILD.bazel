@@ -168,13 +168,16 @@ apple_resource_group(
 )
 
 # --- The apps --------------------------------------------------------------------------------------------------
-# tools/devicerun:hwtest_test reads the test IDs out of these.
+# tools/devicerun:hwtest_test reads the test IDs out of these, and checks every literal metric key in them.
 filegroup(
     name = "test_sources",
     srcs = glob([
         "app17/*.swift",
         "app27/*.swift",
+        "core/*.swift",
+        "gpu/*.swift",
         "gpu/scenes/*.swift",
+        "kit/*.swift",
         "tests/*.swift",
     ]),
 )
@@ -195,7 +198,7 @@ cc_library(
     target_compatible_with = ["@platforms//os:ios"],
 )
 
-# Every test every iOS version runs, the runner, the list, the log lines and report.json. UIKit: built only under an
+# Every test every iOS version runs, the runner, the list, the log lines and the run reports. UIKit: built only under an
 # ios_application's transition, never for the host by `bazel build //hw_test_app/...`.
 swift_library(
     name = "kit",

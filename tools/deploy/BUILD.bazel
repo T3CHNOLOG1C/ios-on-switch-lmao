@@ -14,6 +14,7 @@ exports_files([
 py_library(
     name = "lib",
     srcs = [
+        "deployed.py",
         "joycon_pairing.py",
         "mkarchive.py",
         "poster_snapshots.py",
@@ -24,6 +25,7 @@ py_library(
     deps = [
         "//tools/common:files",
         "//tools/common:paths",
+        "//tools/hwtest:lib",
         "//tools/install:lib",
     ],
 )
@@ -42,6 +44,13 @@ py_test(
         ":deploy",
         ":lib",
     ],
+)
+
+py_test(
+    name = "deployed_test",
+    size = "small",
+    srcs = ["deployed_test.py"],
+    deps = [":lib"],
 )
 
 py_test(
