@@ -53,6 +53,11 @@ int tegra_backlight_pwm_duty(void);
 // Ramps the duty to `duty`, a step a millisecond, as hekate does; 0, or -1 when the PWM is not running. Thread
 // context; sleeps up to 255 ms.
 int tegra_backlight_pwm_set(unsigned duty);
+
+// hekate display_backlight_pwm_init without the pinmux (SwitchSuspend restores it): the PWM clock (CLK_M / 3) on and
+// out of reset, CSR_0 enabled at duty 0. For the display's cold power-up, when SC7 has reset the block; a running PWM is
+// left alone. Thread context.
+void tegra_backlight_pwm_start(void);
 #ifdef __cplusplus
 }
 #endif

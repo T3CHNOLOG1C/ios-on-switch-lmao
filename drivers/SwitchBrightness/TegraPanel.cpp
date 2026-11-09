@@ -407,6 +407,8 @@ extern "C" int tegra_panel_power_on(int level)
     return locked([level] {
         if (!displayRunning())
             return -1;
+        if (!oled())
+            tegra_backlight_pwm_start();  // after SC7 the PWM block is at reset
         play(nullptr, 0, "scanout restart");
         int result = sendCommand(kExitSleep, "sleep out");
         if (result)

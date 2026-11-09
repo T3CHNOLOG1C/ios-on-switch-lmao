@@ -1,14 +1,16 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// Cold power-up and power-down of the Switch OLED display pipeline around SC7; see TegraDisplayPower.h.
+// Cold power-up and power-down of the Switch's display pipeline around SC7; see TegraDisplayPower.h.
 // Register indices are 32-bit word indices as in hekate bdk/display/di.h (DISPLAY_A, DSI and MIPI_CAL are base + index * 4);
 // CAR, PMC and APB_MISC offsets are bytes (hekate bdk/soc/clock.h, pmc_t210.h, t210.h, pinmux.h). Tables are hekate's
-// bdk/display/di.inl, T210B01 variants, in the same order.
+// bdk/display/di.inl in the same order; where hekate's display_init branches on the chip (PLLD, DSI pad trimmers and
+// calibration) or the panel (the LCD Switches' init commands and WLED/AVDD pins) so does this.
 #include <IOKit/IOLib.h>
 #include "TegraDisplayPower.h"
 #include "../SwitchSuspend/SwitchSleepSteps.h"
 #include "../TegraGPIO/TegraGPIO.h"
 #include "../../kits/SwitchCAR/SwitchCAR.h"
 #include "../../kits/SwitchCAR/SwitchPMC.h"
+#include "../../kits/SwitchChip/SwitchChip.h"
 #include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
 #include "../../kits/SwitchMMIO/SwitchMMIOWords.h"
 
@@ -60,6 +62,9 @@ constexpr unsigned kDpdDsiPad = 2, kDpdDsibPad = 32 + 7;  // Linux tegra210 io_p
 // APB_MISC (bytes): GP_DSI_PAD_CONTROL (T210B01 only), PINMUX_AUX_LCD_RST (pull-down, function 0).
 constexpr uint32_t kGpDsiPadControl = 0xAC0, kPinmuxLcdRst = 0x3000 + 0x204, kPinmuxPullDown = 1u << 2;
 constexpr unsigned kPanelReset = TEGRA_GPIO(V, 2);
+// The LCD Switches' panel supplies (hekate display_init, !_nx_aula): the LCD driver's +-5.4 V AVDD channels and the
+// WLED driver's enable. The OLED has none of these.
+constexpr unsigned kLcdAvddPositive = TEGRA_GPIO(I, 0), kLcdAvddNegative = TEGRA_GPIO(I, 1), kWledEnable = TEGRA_GPIO(V, 1);
 
 // Display controller A (words).
 enum : uint32_t {
@@ -132,6 +137,7 @@ enum : uint32_t {
     DSI_PAD_CONTROL_CD = 0x4C,
     DSI_VIDEO_MODE_CONTROL = 0x4E,
     DSI_PAD_CONTROL_1 = 0x4F,
+    DSI_INIT_SEQ_DATA_15 = 0x5F,
     DSI_INIT_SEQ_DATA_15_B01 = 0x62,
 };
 
@@ -189,7 +195,7 @@ constexpr Reg kDcInit[] = {
     {DC_CMD_STATE_CONTROL, kAllUpdate},
     {DC_CMD_STATE_CONTROL, kAllActReq},
 };
-// _di_dsi_seq_pkt_reset_config0, then DSI_INIT_SEQ_DATA_15_B01 = 0, then _di_dsi_seq_pkt_reset_config1.
+// _di_dsi_seq_pkt_reset_config0, then the chip's DSI_INIT_SEQ_DATA_15 = 0, then _di_dsi_seq_pkt_reset_config1.
 constexpr Reg kDsiReset0[] = {
     {DSI_WR_DATA, 0},
     {DSI_INT_ENABLE, 0},
@@ -199,7 +205,6 @@ constexpr Reg kDsiReset0[] = {
     {DSI_INIT_SEQ_DATA_0 + 1, 0},
     {DSI_INIT_SEQ_DATA_0 + 2, 0},
     {DSI_INIT_SEQ_DATA_0 + 3, 0},
-    {DSI_INIT_SEQ_DATA_15_B01, 0},
 };
 constexpr Reg kDsiReset1[] = {
     {DSI_DCS_CMDS, 0},
@@ -216,7 +221,9 @@ constexpr Reg kDsiReset1[] = {
     {DSI_PKT_SEQ_0_LO + 9, 0},
     {DSI_PKT_SEQ_0_LO + 11, 0},
     {DSI_CONTROL, 0},
-    // _di_dsi_init_pads_t210b01: DSI_PAD_CONTROL_1..4, 5_B01..7_B01.
+};
+// _di_dsi_init_pads_t210b01: DSI_PAD_CONTROL_1..4, 5_B01..7_B01 (the T210 has no pad trimmers to reset).
+constexpr Reg kDsiInitPadsB01[] = {
     {DSI_PAD_CONTROL_1 + 0, 0},
     {DSI_PAD_CONTROL_1 + 1, 0},
     {DSI_PAD_CONTROL_1 + 2, 0},
@@ -302,17 +309,45 @@ constexpr Reg kMipiPadCal[] = {
     {MIPI_CAL_BIAS_PAD_CFG0, 0},
     {MIPI_CAL_BIAS_PAD_CFG2, 0},
 };
-// _di_dsi_pad_cal_config_t210b01 (DSI words).
-constexpr Reg kDsiPadCal[] = {
+// _di_dsi_pad_cal_config_t210b01 (DSI words), and _di_dsi_pad_cal_config_t210: pre-emphasis 3 on clock and data pads.
+constexpr Reg kDsiPadCalB01[] = {
     {DSI_PAD_CONTROL_1 + 0, 0},       {DSI_PAD_CONTROL_1 + 1, 0},       {DSI_PAD_CONTROL_1 + 2, 0},
     {DSI_PAD_CONTROL_1 + 3, 0x77777}, {DSI_PAD_CONTROL_1 + 4, 0x77777}, {DSI_PAD_CONTROL_1 + 5, 0x1111},
     {DSI_PAD_CONTROL_1 + 6, 0},
 };
-// _di_mipi_dsi_cal_prod_config_t210b01, then _di_mipi_dsi_cal_unused_config (which clears DSIB_CONFIG_2 again, as hekate does).
-constexpr Reg kMipiDsiCal[] = {
+constexpr Reg kDsiPadCalT210[] = {
+    {DSI_PAD_CONTROL_1 + 0, 0}, {DSI_PAD_CONTROL_1 + 1, 0}, {DSI_PAD_CONTROL_1 + 2, 0x3333}, {DSI_PAD_CONTROL_1 + 3, 0},
+};
+// _di_mipi_dsi_cal_prod_config_t210b01 / _t210, each followed by _di_mipi_dsi_cal_unused_config (which clears DSIB_CONFIG_2
+// again, as hekate does).
+constexpr Reg kMipiDsiCalB01[] = {
     {0x38 / 4, 0x200006}, {0x3C / 4, 0x200006}, {0x64 / 4, 0x260000}, {0x68 / 4, 0x260000}, {0x14 / 4, 0},
     {0x18 / 4, 0},        {0x1C / 4, 0},        {0x20 / 4, 0},        {0x24 / 4, 0},        {0x28 / 4, 0},
     {0x40 / 4, 0},        {0x44 / 4, 0},        {0x68 / 4, 0},        {0x70 / 4, 0},        {0x74 / 4, 0},
+};
+constexpr Reg kMipiDsiCalT210[] = {
+    {0x38 / 4, 0x200200}, {0x3C / 4, 0x200200}, {0x64 / 4, 0x200002}, {0x68 / 4, 0x200002}, {0x14 / 4, 0},
+    {0x18 / 4, 0},        {0x1C / 4, 0},        {0x20 / 4, 0},        {0x24 / 4, 0},        {0x28 / 4, 0},
+    {0x40 / 4, 0},        {0x44 / 4, 0},        {0x68 / 4, 0},        {0x70 / 4, 0},        {0x74 / 4, 0},
+};
+// _di_dsi_panel_init_config_jdi: the JDI panels' level-2 registers (EXTC unlock, 0xBD pages of 0xD8, 0xD9, lock), LP
+// host-triggered writes before sleep out.
+constexpr Reg kJdiPanelInit[] = {
+    {DSI_WR_DATA, 0x0439},     {DSI_WR_DATA, 0x9483FFB9}, {DSI_TRIGGER, kDsiTriggerHost},
+    {DSI_WR_DATA, 0xBD15},     {DSI_TRIGGER, kDsiTriggerHost},
+    {DSI_WR_DATA, 0x1939},     {DSI_WR_DATA, 0xAAAAAAD8}, {DSI_WR_DATA, 0xAAAAAAEB}, {DSI_WR_DATA, 0xAAEBAAAA},
+    {DSI_WR_DATA, 0xAAAAAAAA}, {DSI_WR_DATA, 0xAAAAAAEB}, {DSI_WR_DATA, 0xAAEBAAAA}, {DSI_WR_DATA, 0xAA},
+    {DSI_TRIGGER, kDsiTriggerHost},
+    {DSI_WR_DATA, 0x01BD15},   {DSI_TRIGGER, kDsiTriggerHost},
+    {DSI_WR_DATA, 0x2739},     {DSI_WR_DATA, 0xFFFFFFD8}, {DSI_WR_DATA, 0xFFFFFFFF}, {DSI_WR_DATA, 0xFFFFFFFF},
+    {DSI_WR_DATA, 0xFFFFFFFF}, {DSI_WR_DATA, 0xFFFFFFFF}, {DSI_WR_DATA, 0xFFFFFFFF}, {DSI_WR_DATA, 0xFFFFFFFF},
+    {DSI_WR_DATA, 0xFFFFFFFF}, {DSI_WR_DATA, 0xFFFFFFFF}, {DSI_WR_DATA, 0xFFFFFF},   {DSI_TRIGGER, kDsiTriggerHost},
+    {DSI_WR_DATA, 0x02BD15},   {DSI_TRIGGER, kDsiTriggerHost},
+    {DSI_WR_DATA, 0xF39},      {DSI_WR_DATA, 0xFFFFFFD8}, {DSI_WR_DATA, 0xFFFFFFFF}, {DSI_WR_DATA, 0xFFFFFFFF},
+    {DSI_WR_DATA, 0xFFFFFF},   {DSI_TRIGGER, kDsiTriggerHost},
+    {DSI_WR_DATA, 0x00BD15},   {DSI_TRIGGER, kDsiTriggerHost},
+    {DSI_WR_DATA, 0x06D915},   {DSI_TRIGGER, kDsiTriggerHost},
+    {DSI_WR_DATA, 0x439},      {DSI_WR_DATA, 0x000000B9}, {DSI_TRIGGER, kDsiTriggerHost},
 };
 // _di_dc_video_mode_config up to (not including) the start of continuous display: 720x1280 timings, DSI data enable.
 constexpr Reg kDcTimings[] = {
@@ -338,6 +373,19 @@ constexpr Reg kDcDisable[] = {
 };
 
 SwitchMMIOWords gCar, gDc, gDsi, gMipiCal, gApbMisc, gPmc;
+int gT210B01 = -1;
+
+bool t210b01()
+{
+    if (gT210B01 < 0)
+        gT210B01 = switch_chip_is_t210b01() ? 1 : 0;
+    return gT210B01 == 1;
+}
+
+bool oled()
+{
+    return tegra_display_panel_id() == TEGRA_DISPLAY_PANEL_AMS699VC01;
+}
 
 template <size_t N> void write(SwitchMMIOWords base, const Reg (&table)[N])
 {
@@ -369,13 +417,15 @@ void map()
         panic("TegraDisplay: cannot map the display registers");
 }
 
-// hekate clock_enable_plld (T210B01: no PLLD_MISC1 setup, SDM_DIN -1024): DISP1 from PLLD_OUT0, then wait up to 1 ms for lock.
-void setPlld(uint32_t divp, uint32_t divn)
+// hekate clock_enable_plld: DISP1 from PLLD_OUT0, then wait up to 1 ms for lock. The T210 keeps PLLD_SETUP (MISC1 0x20)
+// and, for the low-power command-mode clock, SDM_DIN 2730 (N + 0.833) where the B01 uses -1024 (N + 0.375) throughout.
+void setPlld(uint32_t divp, uint32_t divn, bool lowpower)
 {
+    const uint32_t sdm = lowpower && !t210b01() ? 0x0AAA : 0xFC00;
     car(CLK_SOURCE_DISP1) = 2u << 29;
     car(PLLD_BASE) = kPllEnable | kPllLock | (divp << 20) | (divn << 11) | 1;
-    car(PLLD_MISC1) = 0;
-    car(PLLD_MISC) = (1u << 21) | (1u << 19) | (1u << 18) | (1u << 16) | 0xFC00;
+    car(PLLD_MISC1) = t210b01() ? 0 : 0x20;
+    car(PLLD_MISC) = (1u << 21) | (1u << 19) | (1u << 18) | (1u << 16) | sdm;
     if (!switch_car_wait(PLLD_BASE, kPllLock, kPllLock, 1000)) {
         panic("TegraDisplay: PLLD (P %u N %u) did not lock: BASE %#x MISC %#x", divp, divn,
               static_cast<uint32_t>(car(PLLD_BASE)), static_cast<uint32_t>(car(PLLD_MISC)));
@@ -418,6 +468,11 @@ extern "C" void tegra_display_power_down(void)
     gDsi[DSI_PAD_CONTROL_0] = kDsiPadsDown;
     tegra_gpio_output(kPanelReset, 0);
     IOSleep(10);
+    if (!oled()) {  // _display_panel_and_hw_end, !_nx_aula: the LCD driver's AVDD channels off
+        tegra_gpio_output(kLcdAvddPositive, 0);
+        tegra_gpio_output(kLcdAvddNegative, 0);
+        IOSleep(10);
+    }
     switch_sleep_mark(SWITCH_STEP_DISPLAY_DSI_OFF);
     car(RST_DEV_H_SET) = kMipiCal | kDsi;
     car(CLK_ENB_H_CLR) = kMipiCal | kDsi;
@@ -453,17 +508,29 @@ extern "C" void tegra_display_power_up(void)
         panic("TegraDisplay: DSI pads stay in deep power down: DPD_STATUS %#x DPD2_STATUS %#x",
               static_cast<uint32_t>(pmc(IO_DPD_STATUS)), static_cast<uint32_t>(pmc(IO_DPD2_STATUS)));
     }
-    // Panel reset held (the OLED has no LCD AVDD/WLED pins), pad regulators up, T210B01 DSI pad control cleared.
+    // The LCD Switches' panel supplies (display_init, !_nx_aula): AVDD +-5.4 V, 10 ms to stabilize, the WLED driver enabled.
+    // Its PWM pin is left as the pinmux restore put it (PWM0); TegraPanel's power-on restarts the PWM itself.
+    if (!oled()) {
+        tegra_gpio_output(kLcdAvddPositive, 1);
+        tegra_gpio_output(kLcdAvddNegative, 1);
+        IOSleep(10);
+        tegra_gpio_output(kWledEnable, 1);
+    }
+    // Panel reset held, pad regulators up, T210B01 DSI pad control cleared.
     gApbMisc[kPinmuxLcdRst / 4] = kPinmuxPullDown;
     tegra_gpio_output(kPanelReset, 0);
     gMipiCal[MIPI_CAL_BIAS_PAD_CFG2] = 0;
     gMipiCal[MIPI_CAL_BIAS_PAD_CFG0] = 0;
-    gApbMisc[kGpDsiPadControl / 4] = 0;
-    // PLLD for command mode (97.8 MHz, DSI bit clock 48.9 MHz), DC A base configuration, DSI init in LP mode.
-    setPlld(3, 20);
+    if (t210b01())
+        gApbMisc[kGpDsiPadControl / 4] = 0;
+    // PLLD for command mode (100 / 97.8 MHz, DSI bit clock 50 / 48.9 MHz), DC A base configuration, DSI init in LP mode.
+    setPlld(3, 20, true);
     write(gDc, kDcInit);
     write(gDsi, kDsiReset0);
+    gDsi[t210b01() ? DSI_INIT_SEQ_DATA_15_B01 : DSI_INIT_SEQ_DATA_15] = 0;
     write(gDsi, kDsiReset1);
+    if (t210b01())
+        write(gDsi, kDsiInitPadsB01);
     write(gDsi, kDsiInit);
     IODelay(10);
     gDsi[DSI_POWER_CONTROL] = 0;
@@ -472,31 +539,52 @@ extern "C" void tegra_display_power_up(void)
     IOSleep(10);
     tegra_gpio_output(kPanelReset, 1);
     IOSleep(60);
-    gDsi[DSI_BTA_TIMING] = 0x40103;  // Aula device takeover timeout
-    // PANEL_SAM_AMS699VC01 (hekate display_init): sleep out, color mode basic, brightness + dimming control, level 2 unlock,
-    // PWM transition 6 frames (ELVSS at offset 7), relock, brightness 0. hekate then sends display on; here the panel goes back
-    // to sleep with these registers set, as TegraPanel's power-off leaves it, so the same tegra_panel_power_on() wakes it.
-    sendLp((0x11u << 8) | 0x05, 180);            // EXIT_SLEEP_MODE
-    sendLp(((0xA0u | 0x03u << 8) << 8) | 0x15);  // MIPI_DCS_PRIV_SM_SET_COLOR_MODE basic
-    sendLp(((0x53u | 0x28u << 8) << 8) | 0x15);  // SET_CONTROL_DISPLAY brightness control | dimming
-    {
-        const uint32_t unlock[] = {0x539, 0x5A5A5AE2, 0x5A};
-        sendLp(unlock, 3);
+    gDsi[DSI_BTA_TIMING] = oled() ? 0x40103 : 0x50204;  // device takeover timeout: Aula's, else every other board's
+    const uint32_t panel = tegra_display_panel_id();
+    if (oled()) {
+        // PANEL_SAM_AMS699VC01 (hekate display_init): sleep out, color mode basic, brightness + dimming control, level 2 unlock,
+        // PWM transition 6 frames (ELVSS at offset 7), relock, brightness 0. hekate then sends display on; here the panel goes back
+        // to sleep with these registers set, as TegraPanel's power-off leaves it, so the same tegra_panel_power_on() wakes it.
+        sendLp((0x11u << 8) | 0x05, 180);            // EXIT_SLEEP_MODE
+        sendLp(((0xA0u | 0x03u << 8) << 8) | 0x15);  // MIPI_DCS_PRIV_SM_SET_COLOR_MODE basic
+        sendLp(((0x53u | 0x28u << 8) << 8) | 0x15);  // SET_CONTROL_DISPLAY brightness control | dimming
+        {
+            const uint32_t unlock[] = {0x539, 0x5A5A5AE2, 0x5A};
+            sendLp(unlock, 3);
+        }
+        sendLp(((0xB0u | 7u << 8) << 8) | 0x15);  // MIPI_DCS_PRIV_SM_SET_REG_OFFSET 7
+        sendLp(((0xB1u | 6u << 8) << 8) | 0x15);  // MIPI_DCS_PRIV_SM_SET_ELVSS 6
+        {
+            const uint32_t lock[] = {0x539, 0xA55A5AE2, 0xA5};
+            sendLp(lock, 3);
+        }
+        {
+            const uint32_t brightness[] = {0x339, 0x000051};
+            sendLp(brightness, 2);
+        }
+        IOSleep(5);
+        sendLp((0x10u << 8) | 0x05, 120);  // ENTER_SLEEP_MODE
+    } else {
+        // hekate display_init's LCD branches, then (as for the OLED) sleep in instead of display on, so TegraPanel's
+        // power-on wakes it the same way; the sleep-out settle is 180 ms on the 6.2" panels, 120 ms on the 5.5" ones.
+        if (panel == TEGRA_DISPLAY_PANEL_JDI_XXX062M)
+            write(gDsi, kJdiPanelInit);
+        sendLp((0x11u << 8) | 0x05, (panel & 0xff00u) == 0x1000u ? 120 : 180);  // EXIT_SLEEP_MODE
+        if (panel == TEGRA_DISPLAY_PANEL_INL_P062CCA_AZ1 || panel == TEGRA_DISPLAY_PANEL_AUO_A062TAN01) {
+            const uint32_t extc[] = {0x439, 0x9483FFB9};  // MIPI_DCS_PRIV_SET_EXTC, pass FF 83 94
+            sendLp(extc, 2);
+            IOSleep(5);
+            // MIPI_DCS_PRIV_SET_POWER_CONTROL: not deep standby, BT5 (InnoLux) / BT1 (AUO), VRH gamma volt adj, then NVRH
+            // gamma volt adj 9, small amplifier current, FS0 Fosc/80, FS1 Fosc/32.
+            const uint32_t power[] = {0x739, panel == TEGRA_DISPLAY_PANEL_INL_P062CCA_AZ1 ? 0x751548B1u : 0x711148B1u,
+                                      0x143209};
+            sendLp(power, 3);
+            IOSleep(5);
+        }
+        sendLp((0x10u << 8) | 0x05, 50);  // ENTER_SLEEP_MODE
     }
-    sendLp(((0xB0u | 7u << 8) << 8) | 0x15);  // MIPI_DCS_PRIV_SM_SET_REG_OFFSET 7
-    sendLp(((0xB1u | 6u << 8) << 8) | 0x15);  // MIPI_DCS_PRIV_SM_SET_ELVSS 6
-    {
-        const uint32_t lock[] = {0x539, 0xA55A5AE2, 0xA5};
-        sendLp(lock, 3);
-    }
-    {
-        const uint32_t brightness[] = {0x339, 0x000051};
-        sendLp(brightness, 2);
-    }
-    IOSleep(5);
-    sendLp((0x10u << 8) | 0x05, 120);  // ENTER_SLEEP_MODE
     // HS: PLLD 468 MHz (DSI bit clock 234 MHz, pixel clock 78 MHz for 60 Hz), video packet sequence, host mode.
-    setPlld(1, 24);
+    setPlld(1, 24, false);
     write(gDsi, kDsiVideo);
     gDc[DC_DISP_DISP_CLOCK_CONTROL] = 4;  // PIXEL_CLK_DIVIDER_PCD1 | SHIFT_CLK_DIVIDER(4)
     write(gDsi, kDsiHostMode);
@@ -505,9 +593,14 @@ extern "C" void tegra_display_power_up(void)
     write(gMipiCal, kMipiPadCal);
     for (unsigned pass = 0; pass < 2; ++pass) {
         gMipiCal[MIPI_CAL_BIAS_PAD_CFG2] = 0x10010;
-        gMipiCal[MIPI_CAL_BIAS_PAD_CFG1] = 0;
-        write(gDsi, kDsiPadCal);
-        write(gMipiCal, kMipiDsiCal);
+        gMipiCal[MIPI_CAL_BIAS_PAD_CFG1] = t210b01() ? 0 : 0x300;
+        if (t210b01()) {
+            write(gDsi, kDsiPadCalB01);
+            write(gMipiCal, kMipiDsiCalB01);
+        } else {
+            write(gDsi, kDsiPadCalT210);
+            write(gMipiCal, kMipiDsiCalT210);
+        }
         gMipiCal[MIPI_CAL_CTRL] = 0x2A000001;
     }
     IOSleep(10);

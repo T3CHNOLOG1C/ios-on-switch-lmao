@@ -5505,10 +5505,8 @@ static NativeLegacyDisplay *sc7Display(const char *step)
     if (!display || !display->getWorkLoop())
         panic("SwitchDisplay: %s before the display started", step);
     const uint32_t panel = tegra_display_panel_id();
-    if (panel != TEGRA_DISPLAY_PANEL_AMS699VC01) {
-        panic("SwitchDisplay: %s: panel %#x has no cold init here (only the OLED's AMS699VC01, %#x)", step, panel,
-              TEGRA_DISPLAY_PANEL_AMS699VC01);
-    }
+    if (!tegra_display_panel_supported(panel))
+        panic("SwitchDisplay: %s: panel %#x has no cold init here (not one of hekate's panel IDs)", step, panel);
     return display;
 }
 

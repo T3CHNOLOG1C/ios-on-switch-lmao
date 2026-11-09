@@ -63,6 +63,7 @@ kernel_driver(
         # TegraVICConfig.h: the traits the detach gate reads (r18-planes).
         "drivers/TegraVIC",
         "kits/SwitchCAR",
+        "kits/SwitchChip",
         "kits/SwitchDMA",
         "kits/SwitchDT",
         "kits/SwitchMMIO",

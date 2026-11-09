@@ -7,6 +7,7 @@
 
 namespace {
 constexpr unsigned kClockPwm = 17;  // CLK_L bit 17 (hekate CLK_L_PWM)
+constexpr uint32_t kClockSourcePwm = 0x110, kPwmSource = (6u << 29) | 4u;  // CLK_M, 7.1 divider 4 (/3): 6.4 MHz
 
 volatile uint8_t *gPwm;
 
@@ -20,6 +21,26 @@ bool running()
     return tegra_backlight_pwm_csr_enabled(switch_mmio_read32(gPwm, TEGRA_BACKLIGHT_PWM_CSR_0)) != 0;
 }
 }  // namespace
+
+extern "C" void tegra_backlight_pwm_start(void)
+{
+    if (running())
+        return;
+    if (!switch_car_clock_enabled(kClockPwm) || switch_car_reset_asserted(kClockPwm)) {
+        switch_car_reset_assert(kClockPwm);
+        switch_car_clock_disable(kClockPwm);
+        switch_car_write(kClockSourcePwm, kPwmSource);
+        switch_car_clock_enable(kClockPwm);
+        IODelay(2);
+        switch_car_reset_deassert(kClockPwm);
+    }
+    if (!gPwm)
+        gPwm = switch_mmio_map(TEGRA_BACKLIGHT_PWM_PA, 0x100);
+    if (gPwm) {
+        switch_mmio_write32(gPwm, TEGRA_BACKLIGHT_PWM_CSR_0, tegra_backlight_pwm_csr(0));
+        (void)switch_mmio_read32(gPwm, TEGRA_BACKLIGHT_PWM_CSR_0);
+    }
+}
 
 extern "C" int tegra_backlight_pwm_duty(void)
 {
