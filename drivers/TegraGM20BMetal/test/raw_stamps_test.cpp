@@ -74,6 +74,38 @@ TEST(RawStamps, StampsAreNeverZeroAndShareNoSlotInFlight)
     EXPECT_LE(stampOffset(stampOf(kStampSlots - 1)) + sizeof(StampSlot), 0x1000u);
 }
 
+void expectMetalsOrder(const CommandBufferTimes &t)
+{
+    EXPECT_LE(t.kernelStart, t.kernelEnd);
+    EXPECT_LE(t.kernelEnd, t.gpuStart);
+    EXPECT_LE(t.gpuStart, t.gpuEnd);
+}
+
+TEST(RawStamps, TimesKeepMetalsOrderAndTheGpusDuration)
+{
+    const CommandBufferTimes inside = orderedTimes(1.0, 1.001, 1.010, true, 5'000'000);
+    expectMetalsOrder(inside);
+    EXPECT_DOUBLE_EQ(inside.kernelStart, 1.0);
+    EXPECT_DOUBLE_EQ(inside.kernelEnd, 1.001);
+    EXPECT_NEAR(inside.gpuEnd - inside.gpuStart, 0.005, 1e-12);
+    // the GPU started before the submitting thread saw its submission return, or (late completion) before the commit
+    for (const uint64_t ns : {9'500'000ull, 20'000'000ull}) {
+        const CommandBufferTimes early = orderedTimes(1.0, 1.002, 1.010, true, ns);
+        expectMetalsOrder(early);
+        EXPECT_NEAR(early.gpuEnd - early.gpuStart, double(ns) * 1e-9, 1e-12);
+    }
+}
+
+TEST(RawStamps, UnstampedTimesAreTheHostsWindow)
+{
+    const CommandBufferTimes window = orderedTimes(1.0, 1.001, 1.010, false, 0);
+    expectMetalsOrder(window);
+    EXPECT_DOUBLE_EQ(window.gpuStart, 1.001);
+    EXPECT_DOUBLE_EQ(window.gpuEnd, 1.010);
+    // scheduled by its completion (its fence passed first, or it never reached a GPU)
+    expectMetalsOrder(orderedTimes(1.0, 1.010, 1.010, false, 0));
+}
+
 // The last release waits for idle (RELEASE_WFI EN). It adds no wait while the kernel follows every user push with its own wait
 // for idle and a fence release that waits too, and it is the command buffer's last method, after the tiled cache's flush
 TEST(RawStamps, TheEndReleaseWaitsNoLongerThanTheKernelsFence)

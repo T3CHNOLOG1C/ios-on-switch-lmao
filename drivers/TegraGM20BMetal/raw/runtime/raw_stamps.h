@@ -8,6 +8,7 @@
 // 31.25 MHz, so one unit is 31.25 / 19.2 = 625/384 ns. GK20A-family PTIMERs have no rate registers to set it right (nouveau's
 // gk20a timer has no init; nvgpu scales by ptimer_src_freq), which is why the conversion lives with every reader.
 #pragma once
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include "raw_push.h"
@@ -67,6 +68,24 @@ inline bool stampedNanoseconds(const volatile StampSlot &slot, uint32_t stamp, u
         return false;
     ns = ptimerNanoseconds(end - start);
     return true;
+}
+
+// Metal's times of a command buffer, in its order: kernelStart <= kernelEnd <= GPUStart <= GPUEnd. The end is where the
+// completion was seen and a stamped start the GPU's time before it, so a start can fall before the host saw the submission
+// return: the kernel times give way to it.
+struct CommandBufferTimes {
+    double kernelStart, kernelEnd, gpuStart, gpuEnd;
+};
+
+inline CommandBufferTimes orderedTimes(double committed, double submitted, double completed, bool stamped,
+                                       uint64_t gpuNs)
+{
+    CommandBufferTimes t;
+    t.gpuEnd = completed;
+    t.gpuStart = stamped ? completed - double(gpuNs) * 1e-9 : std::min(submitted, completed);
+    t.kernelEnd = std::min(submitted, t.gpuStart);
+    t.kernelStart = std::min(committed, t.kernelEnd);
+    return t;
 }
 
 }  // namespace raw

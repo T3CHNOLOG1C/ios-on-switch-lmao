@@ -207,12 +207,12 @@ static void giveRecording(RMCommandBuffer *b)
 
 - (CFTimeInterval)kernelStartTime
 {
-    return _gpuStart;
+    return _kernelStart;
 }
 
 - (CFTimeInterval)kernelEndTime
 {
-    return _gpuEnd;
+    return _kernelEnd;
 }
 
 // SPI Core Animation calls on every command buffer: content protection does not exist on this device (no protected surfaces,
@@ -323,6 +323,7 @@ static void giveRecording(RMCommandBuffer *b)
             return;
         _committed = true;
         _status = MTLCommandBufferStatusCommitted;
+        _kernelStart = hostSeconds();
     }
 #if SWITCH_FRAME_TIMELINE
     static thread_local switch_frame::Since since;
