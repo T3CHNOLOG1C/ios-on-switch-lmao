@@ -92,6 +92,10 @@ enum {
 		<< 0, /* CPU map is write-combined (Normal non-cacheable); else Normal cacheable */
 	TegraGM20BBoContiguous = 1u
 		<< 1, /* one physically contiguous span (scanout, firmware-adjacent use) */
+	/* Memory for compressible binds (TegraGM20BInfoCompression), alone of the flags: bytes a 128 KiB multiple, 128 KiB-aligned
+	 * physically contiguous runs of the kernel's GPU pool under its tiers (kIOReturnNoMemory while they refuse it or no run
+	 * is free), never mapped for the CPU (Map refuses its token) */
+	TegraGM20BBoCompressible = 1u << 2,
 };
 
 /* Method 2. Zero-filled pages below 4 GiB. map_token is the clientMemoryForType type for IOConnectMapMemory64. */
@@ -182,8 +186,8 @@ enum {
 /* Compression (TegraGM20BInfoCompression): a Map with a compressible kind (one the GMMU kind table maps to another, e.g.
  * C32_2C 0xdb, Z24S8_2CZ) compresses through the GPU's L2; every GPU engine reading or writing through such a mapping
  * sees plain data, the CPU and the display read the compressed bytes. It needs a BO from BoAlloc (never an import)
- * whose memory is in physically contiguous, 128 KiB-aligned runs (Contiguous, Coherent or not, with align_log2 >= 17
- * and bytes a 128 KiB multiple), and va, bo_offset and range 128 KiB multiples; else kIOReturnBadArgument. The BO's
+ * whose memory is in physically contiguous, 128 KiB-aligned runs (Compressible, or Contiguous, Coherent or not, with
+ * align_log2 >= 17 and bytes a 128 KiB multiple), and va, bo_offset and range 128 KiB multiples; else kIOReturnBadArgument. The BO's
  * compression lines are its own from its first compressed Map until it is freed, shared by every Map of it: map it with
  * one compressible kind only, since an uncompressed alias reads compressed bytes. kIOReturnNoResources: none were left
  * when it first needed them, and no Map of that BO will compress; bind it uncompressed. */

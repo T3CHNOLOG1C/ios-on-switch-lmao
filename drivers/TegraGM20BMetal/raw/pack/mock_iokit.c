@@ -11,7 +11,8 @@
 // MOCK_IMPORT_US=<n>: BoImport takes n us per 16 MiB (the kext's wiring; selcheck's pool test).
 // MOCK_COMPRESSION=1: GetInfo says compressible kinds bind (TegraGM20BInfoCompression), and they do as the kext binds them
 // (mock_comp.h: which binds, the contract's violations counted, MOCK_COMP_LINES=<n> comptag lines). Off by default.
-// MOCK_CONTIG_US=<n>: a Contiguous BoAlloc takes n us (the kext's contiguous search).
+// MOCK_CONTIG_US=<n>: a Contiguous or Compressible BoAlloc takes n us (the kext's contiguous search, or its zeroing).
+// MOCK_COMP_REFUSE=<n>: the first n Compressible BoAllocs are refused with kIOReturnNoMemory (the pool short).
 // MOCK_TILED_CACHE=1: GetInfo says every GR context holds the tiled cache's table (TegraGM20BInfoTiledCache), as the kext
 // does unless booted with switch-no-tiled-cache. Off by default while NVK host builds without the bit stay in use.
 // Each IOServiceOpen is a connection of its own, as another task's would be (Order stays among its channels; MOCK_TASK_WINDOWS=1:
@@ -521,8 +522,11 @@ static kern_return_t mock_call(mach_port_t c, uint32_t sel, const void *in, size
     }
     case TegraGM20BMethodBoAlloc: {
         const struct TegraGM20BAbiBoAlloc *a = in;
-        if ((a->flags & TegraGM20BBoContiguous) && getenv("MOCK_CONTIG_US"))
+        if ((a->flags & (TegraGM20BBoContiguous | TegraGM20BBoCompressible)) && getenv("MOCK_CONTIG_US"))
             usleep((useconds_t)atoi(getenv("MOCK_CONTIG_US")));
+        const kern_return_t refused = comp_alloc(a);
+        if (refused != KERN_SUCCESS)
+            return refused;
         static atomic_uint names;
         char name[64];
         snprintf(name, sizeof(name), "/nvkmock.%d.%u", getpid(), atomic_fetch_add(&names, 1));
@@ -831,8 +835,8 @@ static kern_return_t mock_map(io_connect_t c, uint32_t type, task_port_t t, mach
         *size = 4096;
         return KERN_SUCCESS;
     }
-    if (type < kMaxBo)
-        comp_cpu_map(type, &bos[type]);
+    if (type < kMaxBo && comp_cpu_map(type, &bos[type]))
+        return kIOReturnBadArgument;
     void *at = (opt & kIOMapAnywhere) ? NULL : (void *)*addr;
     void *m = mmap(at, bytes, PROT_READ | PROT_WRITE, MAP_SHARED | (at ? MAP_FIXED : 0), fd, 0);
     if (m == MAP_FAILED)

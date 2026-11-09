@@ -577,12 +577,29 @@ TEST_F(Coherency, AFailedTilingMoveLeavesItPitch)
 {
 	const auto p = pages(0x87000000, 5);
 	tgm_coh *c = add(p[0], 51, p.data(), 5, 1);
+	gRefusals.clear();
 	gMoveFails = true;
 	EXPECT_EQ(tgm_coherency_layout(c, kW, kH, kBpp, kRow, 1), 0);
 	gMoveFails = false;
 	EXPECT_FALSE(tegra_gm20b_surface_tiled(p[0]));
 	EXPECT_EQ(tgm_coherency_layout(c, kW, kH, kBpp, kRow, 1), 0);
 	EXPECT_EQ(gMoves.size(), 1u);
+	EXPECT_EQ(gRefusals, decltype(gRefusals)({{"iosurface-layout", "tile-move-failed"}}));
+	tgm_coherency_put(c);
+}
+
+// No scratch: no move is tried, the refusal names why, and the surface is pitch for good
+TEST_F(Coherency, NoScratchForTheTilingMoveLeavesItPitch)
+{
+	const auto p = pages(0x87100000, 5);
+	tgm_coh *c = add(p[0], 52, p.data(), 5, 1);
+	gRefusals.clear();
+	gScratchFails = true;
+	EXPECT_EQ(tgm_coherency_layout(c, kW, kH, kBpp, kRow, 1), 0);
+	gScratchFails = false;
+	EXPECT_FALSE(tegra_gm20b_surface_tiled(p[0]));
+	EXPECT_TRUE(gMoves.empty());
+	EXPECT_EQ(gRefusals, decltype(gRefusals)({{"iosurface-layout", "tile-no-scratch"}}));
 	tgm_coherency_put(c);
 }
 
