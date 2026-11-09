@@ -5,7 +5,7 @@ import HWTestKit
 /// has and the Switch lacks.
 enum Tests27 {
     static let all: [any HWTest] = [
-        GPUSceneTest(scene: CAGlassScene()), Metal4Test(), UIGlassTest(), GlassPacing.over, GlassPacing.under,
-        FrameProcessorTest(),
+        GPUSceneTest(scene: CAGlassScene()), Metal4Test(), UIGlassTest(), PocketStripTest(), GlassPacing.over,
+        GlassPacing.under, FrameProcessorTest(),
     ]
 }
