@@ -516,7 +516,7 @@ public:
                     uint32_t dy, uint32_t dz, uint32_t w, uint32_t h);
     // `w` x `h` texels between rows `pitch` bytes apart at `va` (both multiples of the texel's component, at most 4 bytes) and
     // (x, y) of plane z of `t`, pitch or block-linear: into `t` where `toTexture`, else out of it (vkCmdCopyBufferToImage,
-    // vkCmdCopyImageToBuffer)
+    // vkCmdCopyImageToBuffer); the buffer's texels bufferTexelBytes each (raw_xr.h)
     void copyBufferTexels(uint64_t va, uint32_t pitch, const Texture &t, uint32_t x, uint32_t y, uint32_t z, uint32_t w,
                           uint32_t h, bool toTexture);
     // A planar texture's image from its surface's planes (Texture::planar): two remapped copies, the luma codes into green

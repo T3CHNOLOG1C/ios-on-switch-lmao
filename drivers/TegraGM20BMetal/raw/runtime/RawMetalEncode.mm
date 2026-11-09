@@ -15,8 +15,8 @@ static void copyRows(raw::BlitEncoder *be, uint64_t bufferVa, const BufferRows &
         return;
     }
     for (uint32_t k = 0; k < h; k++)
-        be->copyBufferTexels(bufferVa + bufferRow(r, offset, bytesPerRow, k), w * t.bpp, t, x, y + k, z, w, 1,
-                             intoTexture);
+        be->copyBufferTexels(bufferVa + bufferRow(r, offset, bytesPerRow, k),
+                             w * raw::bufferTexelBytes(t.format, t.bpp), t, x, y + k, z, w, 1, intoTexture);
 }
 
 // A copy side's z (raw::BlitEncoder): an array's or cube's layer, else a 3D texture's plane
@@ -31,13 +31,14 @@ static void copyPlanes(raw::BlitEncoder *be, raw::CommandBuffer *rc, const raw::
                        uint64_t row, uint64_t image, const raw::Texture &t, uint32_t x, uint32_t y, uint32_t z,
                        uint32_t w, uint32_t h, uint32_t planes, bool intoTexture)
 {
+    const uint32_t unit = raw::bufferTexelBytes(t.format, t.bpp);
     for (uint32_t k = 0; k < std::max(planes, 1u); k++) {
         const uint64_t at = offset + k * image;
         BufferRows rows;
-        bufferRows(at, row, h, w * t.bpp, t.bpp, intoTexture, rows);
+        bufferRows(at, row, h, w * unit, unit, intoTexture, rows);
         const uint64_t first = bufferRow(rows, at, row, 0);
         if (!b.wc)
-            rc->clean(b.cpu + first, bufferRow(rows, at, row, h - 1) - first + w * t.bpp, !intoTexture);
+            rc->clean(b.cpu + first, bufferRow(rows, at, row, h - 1) - first + w * unit, !intoTexture);
         copyRows(be, b.va, rows, at, row, t, x, y, z + k, w, h, intoTexture);
     }
 }
