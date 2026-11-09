@@ -16,7 +16,10 @@
 //!
 //! A linked function's own function constants are bound in its import: each value it was
 //! specialized with becomes the initializer of the constant's imported global, as the entry's own
-//! constants are bound, and SCCP folds its loads and definedness queries alike.
+//! constants are bound, and SCCP folds its loads and definedness queries alike. A linked module's
+//! static initializers (program-scope copies of its constants) run first, over a copy of the
+//! module with those values bound, as Metal runs them for the function it links: what they store
+//! is the imported globals' initializers.
 //!
 //! Nothing here refuses: a call to a stub may be dead once constants are bound, and Metal links
 //! what the specialized function calls. Each stub that is not resolved keeps a [`Stub`] state,
@@ -24,7 +27,7 @@
 //! no linked function has its name, and otherwise the reason the named function cannot resolve
 //! it (another function type, a function that is not visible, two linked functions of that name,
 //! another data layout, or a module feature linking does not implement yet: a function constant it
-//! was not given a value for, a static initializer, a linkage signature, or a global it only declares and does not import).
+//! was not given a value for, a static initializer that does not evaluate, a linkage signature, or a global it only declares and does not import).
 //!
 //! When the entry takes a visible-function table, every function the pipeline can place in one (a
 //! [`LinkedName`] with a table word) is imported the same way, after the stubs, as a [`Candidate`]
@@ -62,6 +65,7 @@ use crate::ir::{TypeId, TypeTable, Visibility};
 use super::fc;
 use super::renumber::{bodies, inst_refs, isomorphism, Bodies, Renumber, Syms};
 use super::rewrite::{filled, invariant, scoped};
+use super::static_init;
 use super::ConstValue;
 
 /// One module the pipeline links functions from, as canonicalization takes it: the functions
@@ -763,6 +767,18 @@ fn import_linked(
         Err(e) => return Ok((Err(e.clone()), tables)),
         Ok(code) => code,
     };
+    let initialized;
+    let code = if static_initializer(code) {
+        match initialize(code, f, m)? {
+            Ok(c) => {
+                initialized = c;
+                &initialized
+            }
+            Err(refusal) => return Ok((Err(refusal), tables)),
+        }
+    } else {
+        code
+    };
     let src_imports = imports(code.module.parts(), m)?;
     *held += src_imports.len() * std::mem::size_of::<Item>();
     let plan = match plan(code, f, &src_imports, brought.layout, m, held)? {
@@ -851,6 +867,66 @@ fn plan(
         return Ok(Err(link_problem(name, LinkProblem::NotVisible)));
     }
     Ok(reach(l, Item::Func(func), imports, m, held)?.map(|plan| Plan { bind, ..plan }))
+}
+
+/// A copy of the module `l` with the function constants `f` was specialized with bound and its
+/// static initializers run (their stores are their globals' initializers, and they are no longer
+/// initializers): `Ok(Err(refusal))` for constants it was not given or initializers that do not
+/// evaluate (not implemented, as before they ran), an outer error for a budget stop.
+fn initialize(
+    l: &LinkedCode,
+    f: &LinkedName,
+    m: &mut Meter,
+) -> Result<Result<LinkedCode, Error>, Error> {
+    let constants = match &f.constants {
+        Ok(c) => c,
+        Err(e) => return Ok(Err(e.clone())),
+    };
+    if l.abi
+        .function_constants
+        .iter()
+        .any(|d| !constants.contains_key(&d.index))
+    {
+        return Ok(Err(not_implemented(&f.name, "air.function_constants")));
+    }
+    let refusal = |e: Error| match e {
+        Error::Budget(_) | Error::Cancelled | Error::Internal(_) => Err(e),
+        e => Ok(Err(e)),
+    };
+    let (pending, fcs) = match fc::check(&l.module, &l.abi, constants, m) {
+        Ok(checked) => checked,
+        Err(e) => return refusal(e),
+    };
+    let mut parts = l.module.clone().into_parts();
+    if let Err(e) = fc::bind(
+        &parts.types,
+        &mut parts.consts,
+        &mut parts.globals,
+        &pending,
+        m,
+    ) {
+        return refusal(e);
+    }
+    // An initializer the interpreter cannot run (one taking arguments reads out of its frame) leaves
+    // the module refused as before; only a budget stop ends the compile.
+    match static_init::evaluate(&mut parts, &fcs, static_init::Unevaluable::Refuse, m) {
+        Ok(_) => {}
+        Err(e @ (Error::Budget(_) | Error::Cancelled)) => return Err(e),
+        Err(_) => return Ok(Err(not_implemented(&f.name, "air.static_init"))),
+    }
+    for func in parts.funcs.values_mut() {
+        m.tick(1)?;
+        if func.section == Some(Section::StaticInit) {
+            func.section = None;
+        }
+    }
+    match Module::new(parts, m) {
+        Ok(module) => Ok(Ok(LinkedCode {
+            module,
+            abi: l.abi.clone(),
+        })),
+        Err(e) => refusal(e),
+    }
 }
 
 /// Whether `l` defines a static initializer, which linking does not run.

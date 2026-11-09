@@ -530,6 +530,93 @@ fn a_linked_function_s_own_constant_is_bound_to_its_value() {
     }
 }
 
+/// `constant_callee` whose function reads a program-scope copy of `k` that the module's static
+/// initializer stores (RenderBox's `displacementMap_v1`: `constant uint shaderVariant =
+/// RB::shaderVariant;`).
+fn initialized_callee(name: &str) -> LinkedModule {
+    let mut m = ModuleBuilder::new();
+    let void = m.void();
+    let i32t = m.int(32);
+    let fty = m.fn_ty(i32t, &[i32t]);
+    let undef = m.constant(i32t, Const::Undef);
+    let zero = m.constant(i32t, Const::Int(0));
+    let global = |m: &mut ModuleBuilder, name: &str, init, fc: bool| {
+        let sym = m.sym(name);
+        m.global(Global {
+            name: sym,
+            value_ty: i32t,
+            space: AddrSpace::Constant,
+            constant: fc,
+            init: Some(init),
+            externally_initialized: fc,
+            visibility: Default::default(),
+            unnamed_addr: Default::default(),
+            linkage: Linkage::Internal,
+            align: None,
+            section: fc.then_some(Section::FcInitializer),
+        })
+    };
+    let k = global(&mut m, "k", undef, true);
+    let copy = global(&mut m, "copy", zero, false);
+    let (k_addr, copy_addr) = (m.global_addr(k), m.global_addr(copy));
+    let load = |f: &mut FunctionBuilder<'_>, ptr| {
+        f.push(
+            i32t,
+            InstKind::Load {
+                ptr,
+                align: Align::from_bytes(4),
+                volatile: false,
+                atomic: None,
+                range: None,
+            },
+        )
+    };
+    let init_ty = m.fn_ty(void, &[]);
+    let mut init = m.define("init", init_ty);
+    let value = load(&mut init, k_addr);
+    store(&mut init, value, copy_addr);
+    init.ret(None);
+    let init = init.finish();
+    let mut f = m.define(name, fty);
+    let value = load(&mut f, copy_addr);
+    let product = f.bin(BinOp::Mul, arg(0), value);
+    f.ret(Some(product));
+    let func = f.finish();
+    let mut parts = m.finish().unwrap().into_parts();
+    parts.funcs.get_mut(init).expect("the initializer").section = Some(Section::StaticInit);
+    let module = Module::new(parts, &mut meter()).unwrap();
+    let mut abi = abi();
+    abi.visible_functions = vec![visible(func, name)];
+    abi.function_constants = vec![FunctionConstantDecl {
+        index: 1,
+        global: k,
+        ty: i32t,
+        flag: None,
+        data_type: None,
+        name: DiagName::new("k"),
+        type_name: DiagName::new("uint"),
+    }];
+    linked(name, module, abi)
+}
+
+/// A linked module's static initializer runs with the linked function's constant values before
+/// the function is imported: what it stored is the copy's value.
+#[test]
+fn a_linked_module_s_static_initializer_runs_with_its_constants() {
+    let mut valued = initialized_callee("f");
+    valued.functions[0].constants.as_mut().unwrap().insert(
+        1,
+        ConstValue {
+            ty: DataType::UInt,
+            bytes: 2u32.to_le_bytes().into(),
+        },
+    );
+    let e = link(&[valued]).unwrap_or_else(|e| panic!("{e}"));
+    let t = text(&e);
+    assert!(!t.contains("call "), "{t}");
+    assert!(t.contains("mul i32 %a1, i32 2"), "{t}");
+}
+
 /// A call to a declaration no reference names is still a function to link from a dynamic
 /// library, whatever is linked.
 #[test]
