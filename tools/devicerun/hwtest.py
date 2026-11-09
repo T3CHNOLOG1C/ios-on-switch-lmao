@@ -27,6 +27,7 @@ TESTS: dict[str, bool] = {
         [
             'gpu.ca.first_tiled_surface',
             'gpu.ca.blur_chain',
+            'gpu.blur_chain_nan',
             'gpu.ca.draw_then_copy',
             'gpu.ca.hot_states',
             'gpu.upload.glyph_atlas',
@@ -124,6 +125,7 @@ BY_IOS: dict[str, dict[str, bool]] = {
         'gpu.ca.glass': False,
         'metal4.device': False,
         'ui.glass': False,
+        'display.pocket_strip': False,
         'pacing.glass_over': False,
         'pacing.glass_under': False,
         'video.frame_processor': False,
