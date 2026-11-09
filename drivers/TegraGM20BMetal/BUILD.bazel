@@ -124,6 +124,7 @@ py_library(
     data = [
         "raw/pack/ca/qc-21H461.json",
         "raw/pack/ca/qc-24B119.json",
+        "raw/runtime/raw_srgb_table.h",  # pack/layouts.py reads it at import
     ],
 )
 
