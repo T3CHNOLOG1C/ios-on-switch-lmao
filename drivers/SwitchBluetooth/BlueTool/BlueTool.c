@@ -31,6 +31,7 @@
 #include <os/log.h>
 #include <signal.h>
 #include <spawn.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
 #include <sys/sysctl.h>
@@ -50,11 +51,16 @@ extern char **environ;
 
 // The pairing agent, after a chip-boot request has been answered (see the file comment): at every one, so a bluetoothd
 // restart (which ends the agent's session) gets a new agent; one already running keeps its lock and the new one exits.
-// Without the overlay's binary there is nothing to start.
+// The overlay shows the agent whenever it shows this stand-in (one boot-arg gates both), so a failed access is an error.
 static void startPairingAgent(void)
 {
-    if (access(kPairingAgent, X_OK))
+    if (access(kPairingAgent, X_OK)) {
+        static bool reported;
+        if (!reported)
+            os_log_error(OS_LOG_DEFAULT, "BlueTool: %{public}s not started: access: %{errno}d", kPairingAgent, errno);
+        reported = true;
         return;
+    }
     char *argv[] = {(char *)kPairingAgent, NULL};
     pid_t pid;
     const int error = posix_spawn(&pid, kPairingAgent, NULL, NULL, argv, environ);
