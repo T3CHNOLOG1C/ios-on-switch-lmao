@@ -10,15 +10,26 @@ public struct Signature: Equatable, Sendable {
     public let hash: UInt64
     public let means: [Float]
 
-    /// The texel format of a Metal pixel format number among those Core Animation renders to (550 is QuartzCore's
-    /// private 64-bit extended-range format, laid out as BGRA10_XR); nil for the rest, which compare by hash alone.
+    /// QuartzCore's private two-plane extended-range format: a BGR10_XR word in plane 0 and alpha in plane 1.
+    public static let twoPlaneXR: UInt = 550
+
+    /// The texel format of a Metal pixel format number among those Core Animation renders to (550's plane 0 as
+    /// BGR10_XR); nil for the rest, which compare by hash alone.
     public static func format(metal: UInt) -> TexelFormat? {
         let formats: [UInt: TexelFormat] = [
             1: .a8Unorm, 10: .r8Unorm, 30: .rg8Unorm, 70: .rgba8Unorm, 71: .rgba8Srgb, 80: .bgra8Unorm, 81: .bgra8Srgb,
             25: .r16Float, 65: .rg16Float, 115: .rgba16Float, 55: .r32Float, 125: .rgba32Float, 90: .rgb10a2Unorm,
-            550: .bgra10XR, 552: .bgra10XR, 553: .bgra10XR, 554: .bgr10XR, 555: .bgr10XR,
+            twoPlaneXR: .bgr10XR, 552: .bgra10XR, 553: .bgra10XR, 554: .bgr10XR, 555: .bgr10XR,
         ]
         return formats[metal]
+    }
+
+    /// The bytes a blit readback of `metalFormat` defines. A 550 texture read into rows of 8 bytes a texel gets plane
+    /// 0 alone, a 4-byte word a texel at the front of each row, as Apple's GPUs blit it; the rest of each row is
+    /// whatever the buffer held.
+    public static func blitted(_ bytes: [UInt8], metalFormat: UInt, width: Int, height: Int) -> [UInt8] {
+        guard metalFormat == twoPlaneXR, bytes.count == width * height * 8 else { return bytes }
+        return (0..<height).flatMap { row in bytes[(row * width * 8)..<(row * width * 8 + width * 4)] }
     }
 
     public init(hash: UInt64, means: [Float]) {
@@ -26,7 +37,8 @@ public struct Signature: Equatable, Sendable {
         self.means = means
     }
 
-    public init(bytes: [UInt8], metalFormat: UInt, width: Int, height: Int) {
+    public init(bytes readBack: [UInt8], metalFormat: UInt, width: Int, height: Int) {
+        let bytes = Self.blitted(readBack, metalFormat: metalFormat, width: width, height: height)
         hash = Self.fnv1a(bytes)
         guard let format = Self.format(metal: metalFormat), bytes.count == width * height * format.bytesPerTexel else {
             means = []

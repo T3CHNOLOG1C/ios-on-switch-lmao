@@ -59,7 +59,8 @@ public struct CAStateSweepTest: HWTest {
         if checked == 0 { return .fail("no state was drawn by the raw path against a reference", metrics) }
         if !wrongStates.isEmpty || counts["failed", default: 0] > 0 {
             let failed = counts["failed", default: 0]
-            return .fail("\(wrongStates.count) states drew other pixels than the Mac's, \(failed) failed", metrics, proof: proof)
+            return .fail(
+                "\(wrongStates.count) states drew other pixels than the Mac's, \(failed) failed", metrics, proof: proof)
         }
         return .pass(metrics, proof: proof)
     }
@@ -96,8 +97,12 @@ public struct CAStateSweepTest: HWTest {
     /// The raw path's attachment, as a PNG where its format decodes, else its bytes.
     func save(_ line: PipelineLine, color: PipelineLine.Color, bytes: [UInt8], directory: URL) {
         let url = directory.appendingPathComponent("\(line.shortLabel)-c\(color.index)-raw")
+        let (width, height) = (CAStateSweep.width, CAStateSweep.height)
         if let format = Signature.format(metal: color.format),
-            let png = format.raster(bytes, width: CAStateSweep.width, height: CAStateSweep.height).png()
+            let png = format.raster(
+                Signature.blitted(bytes, metalFormat: color.format, width: width, height: height), width: width,
+                height: height
+            ).png()
         {
             try? png.write(to: url.appendingPathExtension("png"))
         } else {

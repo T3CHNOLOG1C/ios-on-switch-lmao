@@ -49,13 +49,23 @@ final class SignatureTests: XCTestCase {
         XCTAssertNil(Signature(text: "xyz"))
     }
 
+    func testTheTwoPlaneXRFormatIsJudgedByPlaneZeroAlone() {
+        let word: [UInt8] = [0x80, 0x01, 0x06, 0x18]
+        let rows = { (pad: UInt8) in (0..<2).flatMap { _ in word + word + [UInt8](repeating: pad, count: 8) } }
+        let clean = Signature(bytes: rows(0), metalFormat: Signature.twoPlaneXR, width: 2, height: 2)
+        let stale = Signature(bytes: rows(0xEE), metalFormat: Signature.twoPlaneXR, width: 2, height: 2)
+        XCTAssertEqual(clean, stale, "the pad after plane 0 is not part of the picture")
+        XCTAssertEqual(clean.means.count, 3)
+    }
+
     func testAnUnknownFormatComparesByHashAlone() {
         XCTAssertEqual(Signature(bytes: [1, 2, 3, 4], metalFormat: 92, width: 1, height: 1).means, [])
     }
 
     func testGoldensParseByStateKeyAndAttachment() throws {
         let signature = Signature(bytes: bgra(), metalFormat: 80, width: 16, height: 8)
-        let text = "# QuartzCore 24B119 on Apple M4 Max\n"
+        let text =
+            "# QuartzCore 24B119 on Apple M4 Max\n"
             + CAGoldens.line(key: "c00c", label: "PBGRAXm_A2Xhf", [(index: 1, signature: signature)]) + "\nbad line\n"
         let goldens = CAGoldens(text)
         XCTAssertEqual(goldens.header, "QuartzCore 24B119 on Apple M4 Max")

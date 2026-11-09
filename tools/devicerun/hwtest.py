@@ -124,6 +124,7 @@ TESTS: dict[str, bool] = {
     'gpu.latency': False,
     'gpu.raw_share': False,
     'input.controllers': False,
+    'gpu.texture.kinds': False,
 }
 
 # The tests only one iOS version's app runs (hw_test_app/app<version>), by that version.
