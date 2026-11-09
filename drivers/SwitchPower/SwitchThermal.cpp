@@ -267,7 +267,6 @@ constexpr unsigned kLevels = 10;
 
 // CPU operating point (see the top of the file).
 constexpr unsigned kPerfMilliVolts = 1120;  // L4T's T210B01 CPU max_millivolts
-constexpr uint8_t kPerfVout = (kPerfMilliVolts - 250) / 5;
 constexpr unsigned kPllMarginPct = 20;  // over the per-chip DFLL CVB voltage, for a fixed clock
 constexpr int kPerfTripMilliC = 64000;
 constexpr int kPerfHysteresisMilliC = 1000;               // L4T dfll-cap-trip0 hysteresis = <1000>
@@ -315,7 +314,11 @@ static_assert(kDfllSafeHz + kDfllStepHz < kDfllRateHz, "one step over the safe r
 constexpr uint32_t kDfllSettleMS = 10;  // a request's closed-loop settle, tune transition included (enable waits this)
 constexpr uint32_t kDfllCeilingCheckMS = 10;  // after a governor move to its ceiling, before it is measured
 constexpr int kDfllFloorWarmMilliC = 20000, kDfllCap1MilliC = 64000, kDfllCap2MilliC = 84000;
-constexpr int kDfllBoundaries[] = {kDfllFloorWarmMilliC, kDfllCap1MilliC, kDfllCap2MilliC};
+// A T210's (dt-bindings/thermal/tegra210-dfll-trips.h, tegra210_thermal_*_table: floor 950 mV below 15 C, caps 1170
+// and 1132 mV from 66 and 86 C). Its VDD_CPU is a MAX77621 (SwitchClocks.h), which hekate configures at boot, so the
+// PMIC steps below are the MAX77812's alone; the PLL ladder's CVB coefficients are the B01's, so on a T210 only the
+// DFLL raises the CPU.
+constexpr int kT210DfllFloorWarmMilliC = 15000, kT210DfllCap1MilliC = 66000, kT210DfllCap2MilliC = 86000;
 
 struct Profile {
     const char *name;
@@ -443,7 +446,9 @@ class SwitchThermal : public IOService {
     unsigned perfTop = 0, perfRung = 0;  // rungs this chip may use; the rung running now (0: boot clock)
     int cpuSpeedo = 0, cpuSpeedoId = 0, cpuProcess = 0;
     uint64_t perfHoldUntil = 0;         // mach_absolute_time() before which no raise happens
-    uint8_t cpuRail = 0, keptVout = 0;  // MAX77812 address; VDD_CPU code as the boot chain left it
+    uint8_t cpuRail = 0, keptVout = 0;  // VDD_CPU PMIC address; its code as the boot chain left it
+    bool t210 = false;                  // a MAX77621 instead of the MAX77812, the T210 DFLL trips, no PLL ladder
+    int dfllFloorWarmMilliC = kDfllFloorWarmMilliC, dfllCap1MilliC = kDfllCap1MilliC, dfllCap2MilliC = kDfllCap2MilliC;
     uint8_t m4Cfg = 0, m4CfgBoot = 0, glbCfg2 = 0, pmicVersion = 0;  // M4_CFG now, and as first read this boot
     bool m4CfgKept = false;
     char clockState[256] = "";              // CCLKG, divider, PLLP and its CPU branch as found, for the log
@@ -466,6 +471,9 @@ class SwitchThermal : public IOService {
     bool evaluate();
     bool raiseCpu(int soc);
     bool preparePerf();
+    unsigned railMilliVolts(uint8_t code) const;
+    uint8_t railCode(unsigned milliVolts) const;
+    uint8_t railRegister() const;
     bool setCurrentLimit();
     bool raiseRail();
     bool raiseDfll(int soc);
@@ -684,7 +692,8 @@ bool SwitchThermal::armAlert(int soc, int pcb)
     int socDown = level ? sensorFor(profile->soc, down) : -1000;
     if (perfRaised && dfllMode) {
         // The next DFLL floor/cap boundary either way, so each index change comes by interrupt.
-        for (const int boundary : kDfllBoundaries) {
+        const int boundaries[] = {dfllFloorWarmMilliC, dfllCap1MilliC, dfllCap2MilliC};
+        for (const int boundary : boundaries) {
             if (boundary > soc && socUp > boundary)
                 socUp = boundary;
             if (boundary <= soc && socDown < boundary - kPerfHysteresisMilliC)
@@ -837,6 +846,7 @@ bool SwitchThermal::preparePerf()
         cpuSpeedo = static_cast<int>(switch_mmio_read32(fuse, FUSE_CACHE + FUSE_CPU_SPEEDO_0));
         cpuSpeedoId = sku == 0x87 ? 3 : 0;
         cpuProcess = cpuSpeedo < static_cast<int>(kB01ProcessSpeedo) ? 0 : 1;
+        t210 = ((hidrev >> 8) & 0xff) == 0x21 && ((hidrev >> 4) & 0xf) == 1;
         // An ordered refusal chain: each read runs only once every check before it has passed.
         // NOLINTBEGIN(bugprone-assignment-in-if-condition,bugprone-assignment-in-selection-statement)
         if (policy != cpu.policy || divider != cpu.divider) {
@@ -853,20 +863,25 @@ bool SwitchThermal::preparePerf()
             refusal = "pll_ref is not 38.4 MHz";
         } else if ((outb & kOut4Running) != kOut4Running) {
             refusal = "PLLP_OUT4, the cluster's backup clock, is off";
-        } else if (((hidrev >> 8) & 0xff) != 0x21 || ((hidrev >> 4) & 0xf) != 2) {
-            refusal = "not a T210B01 (HIDREV)";
+        } else if (((hidrev >> 8) & 0xff) != 0x21 || (((hidrev >> 4) & 0xf) != 2 && ((hidrev >> 4) & 0xf) != 1)) {
+            refusal = "neither a T210B01 nor a T210 (HIDREV)";
         } else if (cpuSpeedo <= 0 || cpuSpeedo > 4000) {
             refusal = "the CPU speedo is not fused";
         } else if ((err = readCpuRail(&cpuRail, &keptVout))) {
-            refusal = "VDD_CPU (MAX77812) does not answer on I2C5";
-        } else if (voutMilliVolts(keptVout) > kPerfMilliVolts) {
+            refusal = t210 ? "VDD_CPU (MAX77621) does not answer on I2C5" : "VDD_CPU (MAX77812) does not answer on I2C5";
+        } else if (railMilliVolts(keptVout) > kPerfMilliVolts) {
             refusal = "VDD_CPU is already above 1120 mV";
-        } else if ((err = tegra_i2c_read(kPmicBus, cpuRail, kMax77812Version, &pmicVersion, 1)) ||
-                   (err = tegra_i2c_read(kPmicBus, cpuRail, kMax77812M4Cfg, &m4Cfg, 1)) ||
-                   (err = tegra_i2c_read(kPmicBus, cpuRail, kMax77812GlbCfg2, &glbCfg2, 1))) {
+        } else if (!t210 && ((err = tegra_i2c_read(kPmicBus, cpuRail, kMax77812Version, &pmicVersion, 1)) ||
+                             (err = tegra_i2c_read(kPmicBus, cpuRail, kMax77812M4Cfg, &m4Cfg, 1)) ||
+                             (err = tegra_i2c_read(kPmicBus, cpuRail, kMax77812GlbCfg2, &glbCfg2, 1)))) {
             refusal = "MAX77812 configuration read failed on I2C5";
-        } else if ((pmicVersion & 7) == kVersionEs2) {
+        } else if (!t210 && (pmicVersion & 7) == kVersionEs2) {
             refusal = "the MAX77812 is ES2 silicon, which L4T trims first";
+        }
+        if (t210) {
+            dfllFloorWarmMilliC = kT210DfllFloorWarmMilliC;
+            dfllCap1MilliC = kT210DfllCap1MilliC;
+            dfllCap2MilliC = kT210DfllCap2MilliC;
         }
         // NOLINTEND(bugprone-assignment-in-if-condition,bugprone-assignment-in-selection-statement)
     }
@@ -882,7 +897,8 @@ bool SwitchThermal::preparePerf()
         m4CfgBoot = m4Cfg;
     }
     perfTop = 0;
-    while (perfTop < kRungCount && cvbMilliVolts(kRungs[perfTop], cpuSpeedo, kPllMarginPct) <= kPerfMilliVolts)
+    while (!t210 && perfTop < kRungCount &&
+           cvbMilliVolts(kRungs[perfTop], cpuSpeedo, kPllMarginPct) <= kPerfMilliVolts)
         ++perfTop;
     keptPolicy = policy;
     keptPllx = cpu.pllx;
@@ -895,6 +911,10 @@ bool SwitchThermal::preparePerf()
 bool SwitchThermal::setCurrentLimit()
 {
     using namespace switchclk;
+    if (t210) {  // the MAX77621's limits are hekate's (max77621_config_default at CPU power-up)
+        perfLimited = true;
+        return true;
+    }
     const uint8_t want = static_cast<uint8_t>((m4Cfg & ~static_cast<unsigned>(kPeakCurrentMask)) | kPeakCurrent7200mA);
     uint8_t check = 0;
     int err = 0;
@@ -918,20 +938,38 @@ bool SwitchThermal::raiseRail()
 {
     using namespace switchclk;
     uint8_t check = 0;
-    trace("step %u: VDD_CPU %u -> %u mV (M4_VOUT 0x%02x)", kStepRail, voutMilliVolts(keptVout), kPerfMilliVolts,
-          kPerfVout);
-    int err = tegra_i2c_write(kPmicBus, cpuRail, kM4Vout, &kPerfVout, 1);
+    const uint8_t want = railCode(kPerfMilliVolts);
+    trace("step %u: VDD_CPU %u -> %u mV (VOUT 0x%02x)", kStepRail, railMilliVolts(keptVout), kPerfMilliVolts, want);
+    int err = tegra_i2c_write(kPmicBus, cpuRail, railRegister(), &want, 1);
     if (!err)
-        err = tegra_i2c_read(kPmicBus, cpuRail, kM4Vout, &check, 1);
-    if (err || check != kPerfVout) {
-        (void)tegra_i2c_write(kPmicBus, cpuRail, kM4Vout, &keptVout, 1);
+        err = tegra_i2c_read(kPmicBus, cpuRail, railRegister(), &check, 1);
+    if (err || check != want) {
+        (void)tegra_i2c_write(kPmicBus, cpuRail, railRegister(), &keptVout, 1);
         IOLog("SwitchPerf: CPU raise stopped at step %u: VDD_CPU write failed (I2C5 %d, reads back %u mV)\n", kStepRail,
-              err, voutMilliVolts(check));
+              err, railMilliVolts(check));
         return false;
     }
     IOSleep(kRailSettleMS);
     perfRaised = true;
     return true;
+}
+
+unsigned SwitchThermal::railMilliVolts(uint8_t code) const
+{
+    return t210 ? switchclk::max77621MilliVolts(code) : switchclk::voutMilliVolts(code);
+}
+
+// The MAX77621's enable bit 7 stays as the boot chain left it (the EN pin overrides it, hekate sets it).
+uint8_t SwitchThermal::railCode(unsigned milliVolts) const
+{
+    if (!t210)
+        return static_cast<uint8_t>((milliVolts - 250) / 5);
+    return static_cast<uint8_t>(((milliVolts * 1000u - 606250u) / 6250u) | (keptVout & 0x80u));
+}
+
+uint8_t SwitchThermal::railRegister() const
+{
+    return t210 ? switchclk::kMax77621Vout : switchclk::kM4Vout;
 }
 
 uint32_t SwitchThermal::rungBase(unsigned rung) const
@@ -989,10 +1027,15 @@ bool SwitchThermal::raiseCpu(int soc)
     const char *failed = nullptr;
     if (!perfTop) {
         perfSettled = true;
-        IOLog("SwitchPerf: CPU raise not applied for this boot: CPU speedo %d needs %u mV at %u MHz (L4T CVB + %u %%), "
-              "above %u mV\n",
-              cpuSpeedo, cvbMilliVolts(kRungs[0], cpuSpeedo, kPllMarginPct), kRungs[0].rowMHz, kPllMarginPct,
-              kPerfMilliVolts);
+        if (t210) {
+            IOLog("SwitchPerf: CPU raise not applied for this boot: the PLL ladder has the T210B01's CVB coefficients, "
+                  "a T210 raises its CPU on the DFLL only\n");
+        } else {
+            IOLog("SwitchPerf: CPU raise not applied for this boot: CPU speedo %d needs %u mV at %u MHz (L4T CVB + %u %%), "
+                  "above %u mV\n",
+                  cpuSpeedo, cvbMilliVolts(kRungs[0], cpuSpeedo, kPllMarginPct), kRungs[0].rowMHz, kPllMarginPct,
+                  kPerfMilliVolts);
+        }
         return false;
     }
     for (unsigned step = perfRelocked ? kStepRail : kStepRelock; step <= stop && !failed; ++step) {
@@ -1065,31 +1108,31 @@ bool SwitchThermal::raiseCpu(int soc)
 // change. Work loop only.
 void SwitchThermal::updateDfllThermal(int soc)
 {
-    unsigned floorIndex = soc >= kDfllFloorWarmMilliC ? TEGRA_DFLL_FLOOR_WARM : TEGRA_DFLL_FLOOR_COLD;
-    if (dfllFloor == TEGRA_DFLL_FLOOR_WARM && soc >= kDfllFloorWarmMilliC - kPerfHysteresisMilliC) {
+    unsigned floorIndex = soc >= dfllFloorWarmMilliC ? TEGRA_DFLL_FLOOR_WARM : TEGRA_DFLL_FLOOR_COLD;
+    if (dfllFloor == TEGRA_DFLL_FLOOR_WARM && soc >= dfllFloorWarmMilliC - kPerfHysteresisMilliC) {
         floorIndex = TEGRA_DFLL_FLOOR_WARM;
     }
     unsigned capIndex = TEGRA_DFLL_CAP_NONE;
-    if (soc >= kDfllCap2MilliC) {
+    if (soc >= dfllCap2MilliC) {
         capIndex = TEGRA_DFLL_CAP_1010MV;
-    } else if (soc >= kDfllCap1MilliC) {
+    } else if (soc >= dfllCap1MilliC) {
         capIndex = TEGRA_DFLL_CAP_1060MV;
     }
-    if (dfllCap == TEGRA_DFLL_CAP_1010MV && soc >= kDfllCap2MilliC - kPerfHysteresisMilliC)
+    if (dfllCap == TEGRA_DFLL_CAP_1010MV && soc >= dfllCap2MilliC - kPerfHysteresisMilliC)
         capIndex = TEGRA_DFLL_CAP_1010MV;
     if (dfllCap == TEGRA_DFLL_CAP_1060MV && capIndex == TEGRA_DFLL_CAP_NONE &&
-        soc >= kDfllCap1MilliC - kPerfHysteresisMilliC) {
+        soc >= dfllCap1MilliC - kPerfHysteresisMilliC) {
         capIndex = TEGRA_DFLL_CAP_1060MV;
     }
     if (floorIndex == dfllFloor && capIndex == dfllCap)
         return;
     const int err = tegra_dfll_cpu_set_thermal(floorIndex, capIndex);
     if (capIndex != dfllCap) {
-        const char *cap = "1010 mV";
+        const char *cap = t210 ? "1132 mV" : "1010 mV";
         if (capIndex == TEGRA_DFLL_CAP_NONE) {
             cap = "off";
         } else if (capIndex == TEGRA_DFLL_CAP_1060MV) {
-            cap = "1060 mV";
+            cap = t210 ? "1170 mV" : "1060 mV";
         }
         IOLog("SwitchPerf: SoC %d.%d C: DFLL voltage cap %s (%d)\n", soc / 1000, soc % 1000 / 100, cap, err);
     }
@@ -1550,7 +1593,7 @@ void SwitchThermal::restoreCpu(const char *why, bool forGood, bool keepDfll)
         return;
     }
     perfRung = 0;
-    const int err = tegra_i2c_write(kPmicBus, cpuRail, kM4Vout, &keptVout, 1);
+    const int err = tegra_i2c_write(kPmicBus, cpuRail, railRegister(), &keptVout, 1);
     if (!err)
         IOSleep(kRailSettleMS);
     const unsigned mhz = readCpu(car).kHz / 1000;
@@ -1562,7 +1605,8 @@ void SwitchThermal::restoreCpu(const char *why, bool forGood, bool keepDfll)
         snprintf(again, sizeof(again), "up again below %d C, not before %u s",
                  (kPerfTripMilliC - kPerfHysteresisMilliC) / 1000, kPerfHoldMS / 1000);
     }
-    IOLog("SwitchPerf: %s: CPU back to %u MHz at %u mV%s, %s\n", why, mhz, voutMilliVolts(err ? kPerfVout : keptVout),
+    IOLog("SwitchPerf: %s: CPU back to %u MHz at %u mV%s, %s\n", why, mhz,
+          railMilliVolts(err ? railCode(kPerfMilliVolts) : keptVout),
           err ? " (VDD_CPU write failed, it stays raised)" : "", again);
 }
 
