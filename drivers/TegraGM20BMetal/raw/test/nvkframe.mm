@@ -570,15 +570,15 @@ int main(int argc, char **argv)
             mipTarget = [dev newTextureWithDescriptor:md];
         }
         // FRAME_MSAA=<text>: every frame ends with a command buffer of one pass (NVK's resolve leaves its meta state to the draws
-        // after it in its command buffer) drawing, three times, the first corpus state whose line holds <text> (a multisampled
-        // one: iOS 17's Pride poster lightsMesh, samples=2 RG11B10Float; FRAME_MSAA_CORPUS: the corpus, else the frame's) from
-        // the library at FRAME_MSAA_LIB into memoryless multisampled targets of its count (FRAME_MSAA_SAMPLES: of that many
-        // instead) and formats (FRAME_MSAA_FORMAT: target 0 of that MTLPixelFormat instead), its depth/stencil one too
-        // (FRAME_MSAA_DEPTH: of that MTLPixelFormat instead), cleared and
-        // not stored, the colors neither loaded nor stored (FRAME_MSAA_STORE: its first target resolved into a texture of its size)
+        // after it in its command buffer) drawing, three times, the first corpus state whose line holds <text> (iOS 17's Pride
+        // poster lightsMesh, samples=2 RG11B10Float; FRAME_MSAA_CORPUS: the corpus, else the frame's) from the library at
+        // FRAME_MSAA_LIB, into targets of its count (FRAME_MSAA_SAMPLES: of that many) and formats (FRAME_MSAA_FORMAT: target 0
+        // of that MTLPixelFormat; FRAME_MSAA_DEPTH: the depth/stencil one), the colors cleared and not stored (FRAME_MSAA_STORE:
+        // the first resolved into a texture of its size), the depth/stencil cleared. Every target is memoryless but a one-sample
+        // state's colors, which are private, and that state's fragment textures are BLUR0.
         id<MTLRenderPipelineState> msaa = nil;
         id<MTLTexture> msaaTargets[8] = {}, msaaResolved = nil, msaaDepth = nil;
-        bool msaaStencil = false;
+        bool msaaStencil = false, msaaMultisampled = false;
         if (const char *pick = getenv("FRAME_MSAA")) {
             NSError *libError = nil;
             id<MTLLibrary> lib = [dev newLibraryWithURL:[NSURL fileURLWithPath:@(getenv("FRAME_MSAA_LIB") ?: "")]
@@ -615,7 +615,7 @@ int main(int argc, char **argv)
                         libError ? libError.localizedDescription.UTF8String : "no line or library");
                 return 1;
             }
-            auto msTarget = [&](MTLPixelFormat f) {
+            auto msTarget = [&](MTLPixelFormat f, bool memoryless) {
                 MTLTextureDescriptor *td = [MTLTextureDescriptor new];
                 td.textureType = md.rasterSampleCount > 1 ? MTLTextureType2DMultisample : MTLTextureType2D;
                 td.sampleCount = std::max<NSUInteger>(md.rasterSampleCount, 1);
@@ -623,15 +623,16 @@ int main(int argc, char **argv)
                 td.width = 640;
                 td.height = 360;
                 td.usage = MTLTextureUsageRenderTarget;
-                td.storageMode = MTLStorageModeMemoryless;
+                td.storageMode = memoryless ? MTLStorageModeMemoryless : MTLStorageModePrivate;
                 return [dev newTextureWithDescriptor:td];
             };
             for (int c = 0; c < 8; c++)
                 if (md.colorAttachments[c].pixelFormat != MTLPixelFormatInvalid)
-                    msaaTargets[c] = msTarget(md.colorAttachments[c].pixelFormat);
+                    msaaTargets[c] = msTarget(md.colorAttachments[c].pixelFormat, md.rasterSampleCount > 1);
             if (md.depthAttachmentPixelFormat != MTLPixelFormatInvalid)
-                msaaDepth = msTarget(md.depthAttachmentPixelFormat);
+                msaaDepth = msTarget(md.depthAttachmentPixelFormat, true);
             msaaStencil = md.stencilAttachmentPixelFormat != MTLPixelFormatInvalid;
+            msaaMultisampled = md.rasterSampleCount > 1;
             if (getenv("FRAME_MSAA_STORE") && msaaTargets[0]) {
                 MTLTextureDescriptor *rd =
                     [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:msaaTargets[0].pixelFormat
@@ -675,6 +676,9 @@ int main(int argc, char **argv)
                 [e setVertexBytes:bytes.data() length:u.length atIndex:slot];
                 [e setFragmentBytes:bytes.data() length:u.length atIndex:slot];
             }
+            if (!msaaMultisampled)
+                for (int slot = 0; slot < 16; slot++)
+                    [e setFragmentTexture:tex[frame::BLUR0] atIndex:slot];
             for (int k = 0; k < 3; k++)
                 [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4 + k];
             [e endEncoding];

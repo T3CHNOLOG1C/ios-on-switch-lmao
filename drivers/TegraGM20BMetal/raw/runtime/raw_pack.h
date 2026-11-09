@@ -65,7 +65,10 @@ enum PackEntryKind : uint8_t {
     EntryFetch = 3,
     // A texture3d argument (Core Animation's colour cubes): m2v binds its own 3D view there, so the record knows no Metal
     // index (slot kNoSlot); the state draws on raw while it samples nothing there (RenderEncoder::prepare)
-    EntryTexture3d = 4
+    EntryTexture3d = 4,
+    // The colour table m2v's program reads to write an 8-bit sRGB colour target as Metal does (raw_srgb_table.h): a storage
+    // buffer descriptor of the device's own copy
+    EntryColorTable = 5
 };
 
 constexpr uint8_t kNoSlot = 0xFF;

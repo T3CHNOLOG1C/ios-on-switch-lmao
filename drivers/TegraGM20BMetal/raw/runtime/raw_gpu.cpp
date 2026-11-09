@@ -11,6 +11,7 @@
 #include "raw_owned.h"
 #include "raw_samples.h"
 #include "raw_slm.h"
+#include "raw_srgb_table.h"
 #include "raw_target.h"
 #include "raw_tiled_cache.h"
 #include "TegraGM20BLayout.h"
@@ -419,7 +420,8 @@ bool Device::open(const char *packPath, uint64_t stack, std::string &err, Role r
 bool Device::init(std::string &err)
 {
     if (!k_.alloc(kTicCount * 32, true, tic_) || !k_.alloc(kTscCount * 32, true, tsc_) ||
-        !k_.alloc(0x1000, true, root_) || !k_.alloc(0x10000, true, zero_) || !k_.alloc(0x1000, true, tickets_)) {
+        !k_.alloc(0x1000, true, root_) || !k_.alloc(0x10000, true, zero_) || !k_.alloc(0x1000, true, tickets_) ||
+        !k_.alloc(kColorTableBytes, true, colorTable_)) {
         err = k_.error();
         return false;
     }
@@ -434,6 +436,7 @@ bool Device::init(std::string &err)
     memset(root_.cpu, 0, root_.bytes);
     memset(zero_.cpu, 0, zero_.bytes);
     memset(tickets_.cpu, 0, tickets_.bytes);
+    colorTableWords(reinterpret_cast<uint32_t *>(colorTable_.cpu));
     // texture header 0: NIL's null descriptor (block linear over the zero page), what NVK keeps at index 0
     uint32_t *t0 = reinterpret_cast<uint32_t *>(tic_.cpu);
     t0[0] = 0x2491d;
@@ -2326,7 +2329,8 @@ std::string Device::vaOwner(uint64_t va)
         in(push_.bo, push_.bo.bytes, "the push ring") || in(upload_.bo, upload_.bo.bytes, "the upload ring") ||
         in(root_, root_.bytes, "the root table") || in(tic_, tic_.bytes, "the texture headers") ||
         in(tsc_, tsc_.bytes, "the sampler headers") || in(zero_, zero_.bytes, "the zero page") ||
-        in(tickets_, tickets_.bytes, "the interlock tickets") || chunk(chunks_, "a pool chunk") ||
+        in(tickets_, tickets_.bytes, "the interlock tickets") ||
+        in(colorTable_, colorTable_.bytes, "the colour table") || chunk(chunks_, "a pool chunk") ||
         chunk(blChunks_, "a block-linear chunk") ||
         std::any_of(std::begin(zChunks_), std::end(zChunks_),
                     [&](const std::vector<Chunk> &z) {
@@ -3171,6 +3175,13 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     for (uint32_t i = 0; i < r.entries; i++) {
         const PackEntry &e = r.entry[i];
         uint32_t *at = set + e.offset / 4;
+        if (e.kind == EntryColorTable) {
+            at[0] = uint32_t(d.colorTable_.va);
+            at[1] = uint32_t(d.colorTable_.va >> 32);
+            at[2] = kColorTableBytes;
+            at[3] = 0;
+            continue;
+        }
         if (e.kind == EntryUbo) {
             // m2v's descriptor range (bind/instantiate.rs descriptor_range): the function's window, clamped to the bytes padded to
             // 16; NVK then rounds a uniform buffer's range up to the 256-byte cbuf alignment (nvk_ubo_descriptor)
