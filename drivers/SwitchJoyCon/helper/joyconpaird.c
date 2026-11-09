@@ -24,8 +24,9 @@
 // bits, and stores the 16 bytes as they come as an authenticated combination key (type 5; FUN_100555d1c(key, 5),
 // FUN_10056a990), so importing the same key again changes nothing.
 //
-// Started by the BlueTool stand-in at each of bluetoothd's chip boots (../../SwitchBluetooth/BlueTool/BlueTool.c: launchd
-// does not load LaunchDaemons plists from the Data overlay), so it runs as mobile, outside any sandbox, with
+// Started by iOS 17's BlueTool stand-in at each of bluetoothd's chip boots (../../SwitchBluetooth/BlueTool/BlueTool.c:
+// launchd does not load LaunchDaemons plists from the Data overlay; iOS 27's stand-in is sandboxed and starts nothing),
+// so it runs as mobile, outside any sandbox, with
 // com.apple.bluetooth.system/.internal (what sharingd holds for MobileBluetooth's accessory calls). One instance runs
 // (kLockPath); it imports the dump and every rail record present, then waits for new rail records for the boot, or until
 // bluetoothd's session ends (the next chip boot starts it again). MobileBluetooth is private: it is loaded with dlopen,
@@ -49,6 +50,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <xpc/xpc.h>
+
+#include "joycon_pairing_import.h"
 
 typedef void *BTSession;
 typedef void *BTAccessoryManager;
@@ -222,44 +225,48 @@ static void importStaged(void)
     CFDataRef staged = readFile(kStagedPath);
     if (!staged)
         return;
-    CFDataRef imported = readFile(kImportedPath);
-    const bool done = imported && CFEqual(staged, imported);
-    if (imported)
-        CFRelease(imported);
+    CFDataRef copy = readFile(kImportedPath);
+    const bool imported = copy && CFEqual(staged, copy);
+    if (copy)
+        CFRelease(copy);
     CFPropertyListRef plist =
-        done ? NULL : CFPropertyListCreateWithData(kCFAllocatorDefault, staged, kCFPropertyListImmutable, NULL, NULL);
+        imported ? NULL
+                 : CFPropertyListCreateWithData(kCFAllocatorDefault, staged, kCFPropertyListImmutable, NULL, NULL);
     CFArrayRef controllers = plist && CFGetTypeID(plist) == CFDictionaryGetTypeID()
                                  ? CFDictionaryGetValue((CFDictionaryRef)plist, CFSTR("Controllers"))
                                  : NULL;
-    if (!done && (!controllers || CFGetTypeID(controllers) != CFArrayGetTypeID())) {
-        os_log_error(logger, "joyconpaird: %{public}s is not a pairing dump", kStagedPath);
+    if (controllers && CFGetTypeID(controllers) != CFArrayGetTypeID())
         controllers = NULL;
-    }
-    int failures = controllers ? 0 : !done;
-    for (CFIndex i = 0; controllers && i < CFArrayGetCount(controllers); ++i) {
+    struct switch_joycon_dump_import import = switch_joycon_dump_begin(imported, controllers != NULL);
+    if (switch_joycon_dump_unreadable(&import))
+        os_log_error(logger, "joyconpaird: %{public}s is not a pairing dump", kStagedPath);
+    for (CFIndex i = 0; switch_joycon_dump_pending(&import) && i < CFArrayGetCount(controllers); ++i) {
         CFDictionaryRef entry = CFArrayGetValueAtIndex(controllers, i);
         CFStringRef addressString =
             CFGetTypeID(entry) == CFDictionaryGetTypeID() ? CFDictionaryGetValue(entry, CFSTR("Address")) : NULL;
         CFStringRef nameString = addressString ? CFDictionaryGetValue(entry, CFSTR("Name")) : NULL;
         CFDataRef key = addressString ? CFDictionaryGetValue(entry, CFSTR("LinkKey")) : NULL;
         char address[18] = "", name[32] = "Joy-Con";
-        if (!addressString || CFGetTypeID(addressString) != CFStringGetTypeID() || !key ||
-            CFGetTypeID(key) != CFDataGetTypeID() || CFDataGetLength(key) != 16 ||
-            !CFStringGetCString(addressString, address, sizeof(address), kCFStringEncodingUTF8)) {
-            os_log_error(logger, "joyconpaird: entry %ld of %{public}s is malformed", (long)i, kStagedPath);
-            ++failures;
-            continue;
-        }
-        if (nameString && CFGetTypeID(nameString) == CFStringGetTypeID())
+        const bool wellFormed = addressString && CFGetTypeID(addressString) == CFStringGetTypeID() && key &&
+                                CFGetTypeID(key) == CFDataGetTypeID() && CFDataGetLength(key) == 16 &&
+                                CFStringGetCString(addressString, address, sizeof(address), kCFStringEncodingUTF8);
+        if (wellFormed && nameString && CFGetTypeID(nameString) == CFStringGetTypeID())
             CFStringGetCString(nameString, name, sizeof(name), kCFStringEncodingUTF8);
-        if (railHas(address)) {
+        switch (switch_joycon_dump_classify(&import, wellFormed, wellFormed && railHas(address))) {
+        case SWITCH_JOYCON_DUMP_MALFORMED:
+            os_log_error(logger, "joyconpaird: entry %ld of %{public}s is malformed", (long)i, kStagedPath);
+            break;
+        case SWITCH_JOYCON_DUMP_RAIL_NEWER:
             os_log(logger, "joyconpaird: %{public}s (%{public}s): the rail's pairing is newer than the dump's", name,
                    address);
-            continue;
+            break;
+        case SWITCH_JOYCON_DUMP_PAIR:
+            switch_joycon_dump_paired(&import,
+                                      pair(address, name, 0x000508, CFDataGetBytePtr(key), "Horizon, staged dump"));
+            break;
         }
-        failures += pair(address, name, 0x000508, CFDataGetBytePtr(key), "Horizon, staged dump") != 0;
     }
-    if (!failures && !done && !writeFile(kImportedPath, staged))
+    if (switch_joycon_dump_mark_imported(&import) && !writeFile(kImportedPath, staged))
         os_log_error(logger, "joyconpaird: cannot write %{public}s: %{errno}d", kImportedPath, errno);
     if (plist)
         CFRelease(plist);
